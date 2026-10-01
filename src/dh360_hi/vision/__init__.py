@@ -29,6 +29,13 @@ from dh360_hi.vision.embedder import (
     compute_cosine_similarity,
     normalize_l2,
 )
+from dh360_hi.vision.embedding_worker import (
+    BaseEmbeddingWorker,
+    BoundedEmbeddingWorker,
+    EmbeddingTask,
+    EmbeddingWorkerConfig,
+    EmbeddingWorkerResult,
+)
 from dh360_hi.vision.enrollment import (
     BaseFaceEnrollment,
     EnrollmentConfig,
@@ -62,14 +69,23 @@ from dh360_hi.vision.identity_state import (
     IdentityStateManager,
     TrackIdentityState,
 )
+from dh360_hi.vision.presence_debouncer import (
+    PresenceDebounceConfig,
+    PresenceDebouncer,
+    PresenceEvent,
+    PresenceState,
+    PresenceTransition,
+)
 from dh360_hi.vision.quality_gate import (
     BaseFaceQualityGate,
     FaceQualityGate,
     FaceQualityMetrics,
     FaceQualityResult,
     FaceQualityThresholds,
+    FaceQualityTier,
     FaceRejectionReason,
     compute_pose_metrics,
+    compute_quality_tier,
     compute_sharpness,
 )
 from dh360_hi.vision.recognition import (
@@ -82,6 +98,13 @@ from dh360_hi.vision.recognition import (
     RecognitionOutcome,
     RecognitionResult,
 )
+from dh360_hi.vision.target_selector import (
+    BaseTargetSelector,
+    InteractionTargetSelector,
+    TargetCandidate,
+    TargetSelectionConfig,
+    TargetSelectionResult,
+)
 from dh360_hi.vision.tracker import (
     BaseFaceTracker,
     FaceTracker,
@@ -91,10 +114,15 @@ from dh360_hi.vision.tracker import (
     compute_center_distance,
     compute_iou,
 )
+from dh360_hi.vision.two_rate_pipeline import (
+    TwoRateFrameResult,
+    TwoRatePerceptionPipeline,
+)
 
 __all__ = [
     "CANONICAL_5_PTS_112",
     "AlignmentResult",
+    "BaseEmbeddingWorker",
     "BaseFaceAligner",
     "BaseFaceDetector",
     "BaseFaceEmbedder",
@@ -102,9 +130,14 @@ __all__ = [
     "BaseFaceQualityGate",
     "BaseFaceRecognizer",
     "BaseFaceTracker",
+    "BaseTargetSelector",
+    "BoundedEmbeddingWorker",
     "ConfidenceStats",
     "DetectionResult",
     "EmbeddingResult",
+    "EmbeddingTask",
+    "EmbeddingWorkerConfig",
+    "EmbeddingWorkerResult",
     "EnrollmentConfig",
     "EnrollmentMode",
     "EnrollmentProgress",
@@ -120,6 +153,7 @@ __all__ = [
     "FaceQualityMetrics",
     "FaceQualityResult",
     "FaceQualityThresholds",
+    "FaceQualityTier",
     "FaceRecognizer",
     "FaceRejectionReason",
     "FaceTracker",
@@ -130,10 +164,16 @@ __all__ = [
     "IdentityStateConfig",
     "IdentityStateManager",
     "InMemoryGallery",
+    "InteractionTargetSelector",
     "LatencyStats",
     "MatchCandidate",
     "PairComparison",
     "PipelineBenchmark",
+    "PresenceDebounceConfig",
+    "PresenceDebouncer",
+    "PresenceEvent",
+    "PresenceState",
+    "PresenceTransition",
     "RecognitionConfig",
     "RecognitionOutcome",
     "RecognitionResult",
@@ -142,11 +182,16 @@ __all__ = [
     "ScoreDistribution",
     "StageTimer",
     "SyntheticFrameSource",
+    "TargetCandidate",
+    "TargetSelectionConfig",
+    "TargetSelectionResult",
     "ThresholdPoint",
     "TrackIdentityState",
     "TrackState",
     "TrackedFace",
     "TrackingResult",
+    "TwoRateFrameResult",
+    "TwoRatePerceptionPipeline",
     "VideoFileFrameSource",
     "WebcamFrameSource",
     "YuNetFaceDetector",
@@ -156,6 +201,7 @@ __all__ = [
     "compute_distribution",
     "compute_iou",
     "compute_pose_metrics",
+    "compute_quality_tier",
     "compute_sharpness",
     "evaluate_pairs",
     "format_evaluation_report",

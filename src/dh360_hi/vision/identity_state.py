@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from collections import Counter, deque
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 import numpy as np
 
+from dh360_hi.vision.quality_gate import FaceQualityTier
 from dh360_hi.vision.recognition import RecognitionOutcome, RecognitionResult
+from dh360_hi.vision.tracker import TrackedFace, compute_iou
 
 
 class IdentityState(StrEnum):
@@ -32,6 +35,8 @@ class IdentityStateConfig:
     hysteresis_patience_observations: int = 4
     max_missed_frames_to_lost: int = 30
     reverification_interval_frames: int = 90
+    spatial_proximity_distance_px: float = 80.0
+    spatial_proximity_min_iou: float = 0.08
 
 
 @dataclass
@@ -48,6 +53,9 @@ class TrackIdentityState:
     last_seen_frame_id: int = 0
     state_change_frame_id: int = 0
     last_verification_frame_id: int = 0
+    last_embedding_request_frame_id: int = 0
+    is_spatial_ambiguous: bool = False
+    last_spatial_ambiguity_frame_id: int = 0
     recent_observations: deque[RecognitionResult] = field(default_factory=lambda: deque(maxlen=7))
 
     @property
@@ -232,6 +240,121 @@ class IdentityStateManager:
             del self._tracks[track_id]
 
         return pruned
+
+    def check_track_crossings(
+        self,
+        active_tracks: Sequence[TrackedFace],
+        current_frame_id: int,
+    ) -> set[int]:
+        """Detect spatial crossings/proximity among active tracks to protect against ID swaps.
+
+        When two tracks come into close proximity (low centroid distance or bounding box overlap),
+        both tracks are flagged with spatial ambiguity so identity stability requires fresh
+        independent recognition evidence rather than momentum.
+
+        Args:
+            active_tracks: Currently visible active tracks.
+            current_frame_id: Current frame index.
+
+        Returns:
+            Set of track IDs that are in spatial crossing/proximity.
+        """
+        ambiguous_tracks: set[int] = set()
+        n_tracks = len(active_tracks)
+        if n_tracks < 2:
+            return ambiguous_tracks
+
+        for i in range(n_tracks):
+            t1 = active_tracks[i]
+            c1_x, c1_y = t1.center
+            for j in range(i + 1, n_tracks):
+                t2 = active_tracks[j]
+                c2_x, c2_y = t2.center
+
+                # Calculate spatial centroid distance
+                dist = float(np.hypot(c1_x - c2_x, c1_y - c2_y))
+                iou = compute_iou(t1.bbox, t2.bbox)
+
+                if (
+                    dist <= self._config.spatial_proximity_distance_px
+                    or iou >= self._config.spatial_proximity_min_iou
+                ):
+                    ambiguous_tracks.add(t1.track_id)
+                    ambiguous_tracks.add(t2.track_id)
+
+        # Mark ambiguity on track identity states
+        for track_id in ambiguous_tracks:
+            state = self._tracks.get(track_id)
+            if state is not None:
+                state.is_spatial_ambiguous = True
+                state.last_spatial_ambiguity_frame_id = current_frame_id
+
+        return ambiguous_tracks
+
+    def should_request_embedding(
+        self,
+        track_id: int,
+        frame_id: int,
+        quality_tier: FaceQualityTier,
+    ) -> bool:
+        """Evaluate whether a face crop from a track should be submitted for embedding/recognition.
+
+        Decision rules:
+        - Rejected / Low quality: do not submit (saves worker/CPU budget).
+        - NEW / COLLECTING / UNCERTAIN: submit on MEDIUM or HIGH to gather evidence.
+        - UNREGISTERED: submit periodically (every ~30 frames) on MEDIUM or HIGH.
+        - IDENTIFIED: submit on HIGH or MEDIUM if spatial ambiguity occurred recently,
+          or if reverification interval has elapsed.
+
+        Args:
+            track_id: Target track ID.
+            frame_id: Current frame index.
+            quality_tier: Assessed quality tier from FaceQualityGate.
+
+        Returns:
+            True if an embedding task should be queued, False otherwise.
+        """
+        if quality_tier in (FaceQualityTier.REJECTED, FaceQualityTier.LOW):
+            return False
+
+        track_state = self._tracks.get(track_id)
+        if track_state is None:
+            return True  # New track, needs embedding
+
+        if track_state.state in (
+            IdentityState.NEW,
+            IdentityState.COLLECTING,
+            IdentityState.UNCERTAIN,
+        ):
+            return True
+
+        if track_state.state == IdentityState.UNREGISTERED:
+            # Periodic check for newly enrolled persons
+            return frame_id - track_state.last_embedding_request_frame_id >= (
+                self._config.reverification_interval_frames // 3
+            )
+
+        if track_state.state == IdentityState.IDENTIFIED:
+            # Re-verify if spatial crossing/proximity occurred within last 30 frames
+            if (
+                track_state.is_spatial_ambiguous
+                and (frame_id - track_state.last_spatial_ambiguity_frame_id) <= 30
+            ):
+                return True
+
+            # Periodic re-verification
+            return (
+                frame_id - track_state.last_verification_frame_id
+                >= self._config.reverification_interval_frames
+            )
+
+        return False
+
+    def mark_embedding_requested(self, track_id: int, frame_id: int) -> None:
+        """Record timestamp/frame_id of an embedding submission."""
+        track_state = self._tracks.get(track_id)
+        if track_state is not None:
+            track_state.last_embedding_request_frame_id = frame_id
 
     def invalidate_person(self, person_id: str, frame_id: int = 0) -> list[int]:
         """Invalidate identity state for any active tracks currently associated with person_id.

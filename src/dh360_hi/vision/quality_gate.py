@@ -27,6 +27,15 @@ class FaceRejectionReason(StrEnum):
     MISSING_LANDMARKS = "missing_landmarks"
 
 
+class FaceQualityTier(StrEnum):
+    """Quality tiers for categorizing face suitability for downstream embedding."""
+
+    REJECTED = "rejected"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 @dataclass(frozen=True)
 class FaceQualityThresholds:
     """Configurable thresholds for face quality evaluation.
@@ -66,6 +75,7 @@ class FaceQualityResult:
     metrics: FaceQualityMetrics
     rejection_reasons: list[FaceRejectionReason]
     thresholds: FaceQualityThresholds
+    tier: FaceQualityTier = FaceQualityTier.MEDIUM
 
     @property
     def has_rejection_reason(self) -> bool:
@@ -259,10 +269,51 @@ class FaceQualityGate(BaseFaceQualityGate):
         )
 
         is_acceptable = len(rejection_reasons) == 0
+        tier = compute_quality_tier(is_acceptable, metrics, self._thresholds)
 
         return FaceQualityResult(
             is_acceptable=is_acceptable,
             metrics=metrics,
             rejection_reasons=rejection_reasons,
             thresholds=self._thresholds,
+            tier=tier,
         )
+
+
+def compute_quality_tier(
+    is_acceptable: bool,
+    metrics: FaceQualityMetrics,
+    thresholds: FaceQualityThresholds,
+) -> FaceQualityTier:
+    """Classify face quality metrics into discrete operational tiers."""
+    if not is_acceptable or not metrics.crop_valid:
+        return FaceQualityTier.REJECTED
+
+    # High tier: superior confidence, sharpness, resolution, and near-perfect frontality
+    is_high_conf = metrics.confidence >= max(0.90, thresholds.min_confidence + 0.05)
+    is_high_sharpness = metrics.sharpness >= max(80.0, thresholds.min_sharpness * 1.5)
+    is_high_size = metrics.face_width >= max(
+        60.0, thresholds.min_face_width * 1.5
+    ) and metrics.face_height >= max(60.0, thresholds.min_face_height * 1.5)
+    is_high_pose = (metrics.roll_angle_deg is None or metrics.roll_angle_deg <= 12.0) and (
+        metrics.yaw_asymmetry is None or metrics.yaw_asymmetry <= 1.6
+    )
+
+    if is_high_conf and is_high_sharpness and is_high_size and is_high_pose:
+        return FaceQualityTier.HIGH
+
+    # Medium tier: satisfies standard quality thresholds
+    is_med_conf = metrics.confidence >= thresholds.min_confidence
+    is_med_sharpness = metrics.sharpness >= thresholds.min_sharpness
+    is_med_size = (
+        metrics.face_width >= thresholds.min_face_width
+        and metrics.face_height >= thresholds.min_face_height
+    )
+    is_med_pose = (
+        metrics.roll_angle_deg is None or metrics.roll_angle_deg <= thresholds.max_roll_angle_deg
+    ) and (metrics.yaw_asymmetry is None or metrics.yaw_asymmetry <= thresholds.max_yaw_asymmetry)
+
+    if is_med_conf and is_med_sharpness and is_med_size and is_med_pose:
+        return FaceQualityTier.MEDIUM
+
+    return FaceQualityTier.LOW

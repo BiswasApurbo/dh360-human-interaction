@@ -211,6 +211,72 @@ The enrollment subsystem (`FaceEnrollmentController`, `BaseFaceEnrollment`) prov
 - **Transactional Batch Persistence**: On commit, all collected samples are persisted within a single transaction with a shared `enrollment_batch_id`. If the session is cancelled or aborted prior to reaching `minimum_samples` (default: 5), zero partial records are committed to the database.
 - **Atomic Gallery Synchronization**: Immediately upon successful transactional commit, the controller triggers `PersonService.load_recognition_gallery()`, atomically swapping the active `InMemoryGallery` in `FaceRecognizer` so the newly enrolled user is recognized instantly without service restarts.
 
+#### 5.1.4 Two-Rate Processing Model & Bounded Embedding Worker
+
+To achieve sustained high frame rates (`> 15 FPS` Pi target, `~56 FPS` measured on Mac) without dropping camera frames during expensive neural network embedding inference, the system implements a **Two-Rate Architecture**:
+
+```
+[ Camera Frame (30+ FPS) ]
+        │
+        ▼
+[ Face Detection (YuNet) ] ──► [ Tracker ] ──► [ Quality Gate & Tiers ] ──► [ Crossing Detection ]
+                                                                                   │
+        ┌──────────────────────────────────────────────────────────────────────────┘
+        │ (Policy: should_request_embedding)
+        ▼
+┌──────────────────────────────────────────────┐
+│  Bounded Asynchronous Embedding Worker       │
+│  • Latest-Wins Queueing per Track ID         │
+│  • Max Bounded Capacity (e.g. 8 tasks)       │
+│  • Dedicated Background Worker Thread        │
+└──────────────────────┬───────────────────────┘
+                       │ (Non-blocking Result Polling)
+                       ▼
+[ Identity State Machine ] ──► [ Target Selector ] ──► [ Presence Debouncer ]
+```
+
+- **Fast-Rate Path (Per-Frame Synchronous, ~5ms)**:
+  - Frame acquisition $\rightarrow$ YuNet face detection $\rightarrow$ Multi-face tracking $\rightarrow$ Face quality gating with discrete operational tiers (`FaceQualityTier`: `REJECTED`, `LOW`, `MEDIUM`, `HIGH`) $\rightarrow$ Spatial crossing & proximity checks $\rightarrow$ Non-blocking result polling $\rightarrow$ Target selection $\rightarrow$ Presence debouncing.
+- **Slow-Path / Event-Driven Path (Asynchronous Background Thread)**:
+  - Alignment (5-point affine transform) $\rightarrow$ 128-D SFace feature embedding $\rightarrow$ Gallery cosine similarity matching.
+- **Latest-Wins Bounded Queue**:
+  - `BoundedEmbeddingWorker` manages a bounded queue with latest-wins replacement per `track_id`. If a track produces a newer, higher-quality frame while an earlier request is pending, the older request is updated in-place, eliminating stale backlogs.
+  - If queue capacity is exceeded, oldest pending tracks are evicted so camera loop execution never blocks.
+- **Decoupled Backend/LLM**: Backend REST, WebSocket, and LLM dialogues operate strictly out-of-band and never sit on the real-time vision loop.
+
+#### 5.1.5 Per-Track Identity Stability & Track-ID Swap Protection
+
+- **Identity Associated with Track State, Not Raw Track ID**:
+  - Identity state is managed by `IdentityStateManager` over a sliding temporal evidence window (`TrackIdentityState`), preventing raw tracker ID mutations from immediately corrupting recognition decisions.
+- **Spatial Crossing & ID Swap Protection**:
+  - `check_track_crossings()` measures pairwise bounding box IoU and centroid Euclidean distance across all active tracks.
+  - When two subjects cross or enter close proximity ($\le 80\text{px}$ or $\text{IoU} \ge 0.08$), both tracks are marked `is_spatial_ambiguous = True`.
+  - Spatially ambiguous tracks require fresh, high-quality recognition evidence and cannot blindly inherit prior momentum.
+- **Track Disappearance and Reappearance**:
+  - When an old track disappears and is pruned, any newly spawned track begins strictly in `NEW` state and must gather independent evidence across the sliding observation window before achieving `IDENTIFIED` state.
+- **Hysteresis Protection**:
+  - A confirmed `IDENTIFIED` subject is resilient to temporary occlusions, blur, or noisy matches. Sustained conflicting evidence (`hysteresis_patience_observations >= 4`) is required before demoting to `UNCERTAIN`.
+
+#### 5.1.6 Multi-Person Interaction Target Selection
+
+The `InteractionTargetSelector` (`BaseTargetSelector`) deterministically selects a single primary interaction target when multiple people are present:
+
+- **Composite Scoring Function**:
+  $$\text{Score} = w_{\text{central}} \cdot S_{\text{central}} + w_{\text{size}} \cdot S_{\text{size}} + w_{\text{id}} \cdot S_{\text{id}} + w_{\text{dwell}} \cdot S_{\text{dwell}}$$
+  - **Centrality ($w=0.35$)**: Normalized Euclidean proximity of face center to camera frame center.
+  - **Size / Proximity ($w=0.35$)**: Relative bounding box area ratio (closer people score higher).
+  - **Identity State ($w=0.20$)**: Bonus for `IDENTIFIED` registered users ($1.0$) vs `COLLECTING`/`UNREGISTERED` ($0.5$) vs `UNCERTAIN` ($0.2$).
+  - **Dwell Time ($w=0.10$)**: Continuous track persistence in scene.
+- **Deterministic Ordering**: Sort key uses `(-score, track_id)` to eliminate dictionary iteration nondeterminism.
+- **Stickiness Hysteresis**: To prevent rapid gaze/target flickering between two equidistant people, an existing target is retained unless a rival candidate exceeds its score by at least `hysteresis_switch_margin` (default `0.15`).
+
+#### 5.1.7 Temporal Presence Debouncing
+
+The `PresenceDebouncer` eliminates boundary flicker and brief 1-2 frame detection dropouts:
+- **Entry Debounce**: Requires `enter_patience_frames` (default: 3) consecutive visible frames before emitting `PERSON_ENTERED`.
+- **Leave Debounce**: Requires `leave_patience_frames` (default: 10) consecutive missed frames before emitting `PERSON_LEFT`.
+- **Transient Recovery**: Brief detection dropouts recover back to `PRESENT` without emitting spurious departure/re-entry events.
+
 ### 5.2 Backend Components
 
 | Component | Responsibility |
