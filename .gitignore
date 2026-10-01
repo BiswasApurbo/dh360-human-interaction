@@ -216,3 +216,44 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ==============================================================================
+# Digital Health 360 Human Interaction - Specific Ignores
+# ==============================================================================
+
+# OS & Editor files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+
+# Runtime Data, Captures, & Logs
+data/
+captures/
+logs/
+*.log
+
+# Model Weights & Pretrained Binaries (Biometric / CV models)
+*.onnx
+*.pt
+*.pth
+*.safetensors
+*.bin
+*.engine
+*.weights
+.models/
+models/weights/
+models/cache/
+models/downloads/
