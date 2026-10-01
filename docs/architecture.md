@@ -406,6 +406,49 @@ The `PersonService` provides complete lifecycle operations ensuring strict priva
 - **Biometric Reset**: `delete_person_embeddings()` permits clearing biometric data (face vectors) without deleting the user's demographic record.
 - **Cascade Deletion & Active Track Invalidation**: Calling `delete_person(person_id, recognizer, identity_manager)` transactionally removes the person from SQLite (which cascades to all associated embeddings), reloads `FaceRecognizer` gallery, and invokes `IdentityStateManager.invalidate_person(person_id)`, transitioning any matching active camera tracks immediately to `UNREGISTERED` and resetting their observation history.
 
+#### 5.2.4 Historical Interaction Query Layer & SQL-Side Analytics
+
+Milestone M2.12 extends the persistent session store with structured filtering, pagination, and database-side analytics:
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                             HumanInteractionService                              │
+│  • query_sessions(filter)                 • count_query_sessions(filter)         │
+│  • get_aggregate_analytics(filter)        • get_person_engagement_stats(pid)     │
+└────────────────────────────────────────┬─────────────────────────────────────────┘
+                                         │ Delegated to BaseSessionRepository
+                                         ▼
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                            SQLiteSessionRepository                               │
+│  • Parameterized SQL queries ("?") with indexed columns                          │
+│  • SQL-side aggregations: COUNT, SUM, AVG, MIN, MAX, CASE WHEN                   │
+│  • Zero full-table in-memory Python materialization                              │
+└────────────────────────────────────────┬─────────────────────────────────────────┘
+                                         │ PRAGMA foreign_keys = ON;
+                                         ▼
+                             ┌───────────────────────┐
+                             │ interaction_sessions  │
+                             │ (Schema v2, SQLite)   │
+                             └───────────────────────┘
+```
+
+1. **Structured Query Filtering (`SessionQueryFilter`)**:
+   - Provides optional filtering across `person_id`, `is_identified` (boolean), `started_after`, `started_before`, `ended_after`, `ended_before`, `min_duration_seconds`, and `max_duration_seconds`.
+   - Includes built-in boundary validation (`limit > 0`, `offset >= 0`, `min_duration <= max_duration`, chronological timestamp ordering).
+   - Dynamically compiles into parameterized SQL (`?`) with zero raw string interpolation or injection hazards.
+2. **SQL-Side Aggregate Analytics (`SessionAggregateAnalytics`)**:
+   - Computes summary metrics entirely inside SQLite using `COUNT(*)`, `COALESCE(SUM(duration_seconds), 0.0)`, `COALESCE(AVG(duration_seconds), 0.0)`, `COALESCE(MIN(duration_seconds), 0.0)`, `COALESCE(MAX(duration_seconds), 0.0)`, and `COUNT(CASE WHEN identity_was_known = 1 THEN 1 END)`.
+   - On empty result sets, cleanly returns zero counts/durations with `None` timestamps without throwing errors.
+3. **Person Engagement Summaries (`PersonEngagementStats`)**:
+   - Aggregates interaction history for an individual (`total_sessions`, `total_duration_seconds`, `average_duration_seconds`, `first_interaction_at`, `last_interaction_at`, `display_name`).
+   - Returns `None` if the person has zero recorded sessions or if the person record was deleted.
+4. **Referential Integrity & Historical Retention**:
+   - When a person is removed (`delete_person`), SQLite's `ON DELETE SET NULL` clears `person_id` in `interaction_sessions` while permanently retaining the historical record, `display_name`, and `identity_was_known=True`.
+   - Global queries and aggregate analytics continue to account for historical interactions accurately while person-specific queries (`get_person_engagement_stats`) return `None`.
+5. **Real-Time Decoupling & Zero Biometric Leakage**:
+   - Historical querying is completely isolated from the real-time frame-processing path and executes out-of-band.
+   - Query models and analytics contain zero biometric vectors, face crops, landmark arrays, or medical data.
+
 ### 5.3 Edge Session Supervision & Structured Event Bus (M2.7)
 
 Milestone M2.7 introduces a clean domain boundary that converts raw perception outputs (`TwoRateFrameResult`) into stable, typed interaction events, decoupling computer vision internals from downstream dialogue and robotic behavior controllers.
@@ -599,6 +642,8 @@ The `HumanInteractionService` and its composition root `create_interaction_servi
 │       • Lifecycle: start(), stop(), pause(), resume(), step_once()               │
 │       • Context Queries: get_interaction_context(), get_last_summary()           │
 │       • Session History: get_session(), list_sessions(), count_sessions()        │
+│       • Query & Analytics: query_sessions(), count_query_sessions(),             │
+│                            get_aggregate_analytics(), get_person_engagement_stats()│
 │       • Person Queries: get_person(), list_persons()                             │
 │       • Metrics & State: get_runtime_metrics(), get_runtime_state()              │
 │       • Management: reload_gallery(), add_context_listener(), add_event_listener()│

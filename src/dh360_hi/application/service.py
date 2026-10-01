@@ -22,7 +22,15 @@ from dh360_hi.edge.runtime import EdgeInteractionRuntime, RuntimeMetrics, Runtim
 
 if TYPE_CHECKING:
     from dh360_hi.backend.database import DatabaseManager
-    from dh360_hi.backend.models import ConsentStatus, PersonProfile, PersonStatus, SessionRecord
+    from dh360_hi.backend.models import (
+        ConsentStatus,
+        PersonEngagementStats,
+        PersonProfile,
+        PersonStatus,
+        SessionAggregateAnalytics,
+        SessionQueryFilter,
+        SessionRecord,
+    )
     from dh360_hi.backend.person_service import BasePersonService
     from dh360_hi.backend.repository import BasePersonRepository
     from dh360_hi.backend.session_repository import (
@@ -238,6 +246,88 @@ class HumanInteractionService:
         if self._session_repository is None:
             return 0
         return self._session_repository.count_sessions(person_id=person_id)
+
+    def query_sessions(
+        self,
+        filter: SessionQueryFilter | None = None,
+    ) -> list[SessionRecord]:
+        """Query historical interaction sessions with rich filtering and pagination.
+
+        Args:
+            filter: Filter criteria model (defaults to default SessionQueryFilter()).
+
+        Returns:
+            List of matching SessionRecord entries ordered chronologically descending.
+        """
+        if self._session_repository is None:
+            return []
+        from dh360_hi.backend.models import SessionQueryFilter
+
+        criteria = filter if filter is not None else SessionQueryFilter()
+        return self._session_repository.query_sessions(criteria)
+
+    def count_query_sessions(
+        self,
+        filter: SessionQueryFilter | None = None,
+    ) -> int:
+        """Count historical interaction sessions matching structured criteria.
+
+        Args:
+            filter: Filter criteria model (defaults to default SessionQueryFilter()).
+
+        Returns:
+            Total count of matching session records.
+        """
+        if self._session_repository is None:
+            return 0
+        from dh360_hi.backend.models import SessionQueryFilter
+
+        criteria = filter if filter is not None else SessionQueryFilter()
+        return self._session_repository.count_query_sessions(criteria)
+
+    def get_aggregate_analytics(
+        self,
+        filter: SessionQueryFilter | None = None,
+    ) -> SessionAggregateAnalytics:
+        """Compute aggregate statistics directly in SQLite across filtered sessions.
+
+        Args:
+            filter: Optional filter criteria to restrict the analytical scope.
+
+        Returns:
+            SessionAggregateAnalytics model with aggregate metrics.
+        """
+        if self._session_repository is None:
+            from dh360_hi.backend.models import SessionAggregateAnalytics
+
+            return SessionAggregateAnalytics(
+                total_sessions=0,
+                total_duration_seconds=0.0,
+                average_duration_seconds=0.0,
+                min_duration_seconds=0.0,
+                max_duration_seconds=0.0,
+                identified_sessions_count=0,
+                anonymous_sessions_count=0,
+                earliest_session_started_at=None,
+                latest_session_ended_at=None,
+            )
+        return self._session_repository.get_aggregate_analytics(filter=filter)
+
+    def get_person_engagement_stats(
+        self,
+        person_id: str,
+    ) -> PersonEngagementStats | None:
+        """Retrieve historical interaction metrics for a specific person.
+
+        Args:
+            person_id: UUID of the target person.
+
+        Returns:
+            PersonEngagementStats if sessions exist for this person, otherwise None.
+        """
+        if self._session_repository is None:
+            return None
+        return self._session_repository.get_person_engagement_stats(person_id)
 
     def flush_session_persistence(self, timeout: float = 2.0) -> bool:
         """Flush pending session persistence writes to storage.

@@ -9,7 +9,7 @@ import sqlite3
 import threading
 import time
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from dh360_hi.backend.database import DatabaseManager
 from dh360_hi.backend.exceptions import (
@@ -17,7 +17,13 @@ from dh360_hi.backend.exceptions import (
     ForeignKeyViolationError,
     ValidationError,
 )
-from dh360_hi.backend.models import SessionRecord, validate_uuid
+from dh360_hi.backend.models import (
+    PersonEngagementStats,
+    SessionAggregateAnalytics,
+    SessionQueryFilter,
+    SessionRecord,
+    validate_uuid,
+)
 
 if TYPE_CHECKING:
     from dh360_hi.contracts.interaction import InteractionSummary
@@ -77,6 +83,56 @@ class BaseSessionRepository(ABC):
 
         Returns:
             Total count of matching session records.
+        """
+
+    @abstractmethod
+    def query_sessions(self, filter: SessionQueryFilter) -> list[SessionRecord]:
+        """Query interaction sessions matching filter criteria with pagination.
+
+        Args:
+            filter: SessionQueryFilter containing criteria and pagination parameters.
+
+        Returns:
+            List of matching SessionRecord instances ordered chronologically descending.
+        """
+
+    @abstractmethod
+    def count_query_sessions(self, filter: SessionQueryFilter) -> int:
+        """Count total interaction sessions matching filter criteria.
+
+        Args:
+            filter: SessionQueryFilter containing criteria parameters.
+
+        Returns:
+            Total count of matching session records.
+        """
+
+    @abstractmethod
+    def get_aggregate_analytics(
+        self,
+        filter: SessionQueryFilter | None = None,
+    ) -> SessionAggregateAnalytics:
+        """Compute aggregate statistics directly via SQL over filtered sessions.
+
+        Args:
+            filter: Optional SessionQueryFilter criteria.
+
+        Returns:
+            SessionAggregateAnalytics with computed metrics.
+        """
+
+    @abstractmethod
+    def get_person_engagement_stats(
+        self,
+        person_id: str,
+    ) -> PersonEngagementStats | None:
+        """Compute historical engagement metrics for a specific enrolled person.
+
+        Args:
+            person_id: UUID of the target person.
+
+        Returns:
+            PersonEngagementStats if sessions exist for this person, otherwise None.
         """
 
     @abstractmethod
@@ -265,6 +321,210 @@ class SQLiteSessionRepository(BaseSessionRepository):
         with self._db.transaction() as cur:
             cur.execute("DELETE FROM interaction_sessions WHERE session_id = ?;", (session_id,))
             return cur.rowcount > 0
+
+    @staticmethod
+    def _build_filter_clause(
+        filter_criteria: SessionQueryFilter | None,
+    ) -> tuple[str, list[Any]]:
+        """Build dynamic parameterized WHERE clause and parameter list from SessionQueryFilter."""
+        if filter_criteria is None:
+            return "", []
+
+        conditions: list[str] = []
+        params: list[Any] = []
+
+        if filter_criteria.person_id is not None:
+            validate_uuid(filter_criteria.person_id, "person_id")
+            conditions.append("person_id = ?")
+            params.append(filter_criteria.person_id)
+
+        if filter_criteria.is_identified is not None:
+            conditions.append("identity_was_known = ?")
+            params.append(1 if filter_criteria.is_identified else 0)
+
+        if filter_criteria.final_state is not None:
+            state_str = (
+                filter_criteria.final_state.value
+                if hasattr(filter_criteria.final_state, "value")
+                else str(filter_criteria.final_state)
+            )
+            conditions.append("final_state = ?")
+            params.append(state_str)
+
+        if filter_criteria.started_after is not None:
+            conditions.append("started_at >= ?")
+            params.append(filter_criteria.started_after)
+
+        if filter_criteria.started_before is not None:
+            conditions.append("started_at <= ?")
+            params.append(filter_criteria.started_before)
+
+        if filter_criteria.ended_after is not None:
+            conditions.append("ended_at >= ?")
+            params.append(filter_criteria.ended_after)
+
+        if filter_criteria.ended_before is not None:
+            conditions.append("ended_at <= ?")
+            params.append(filter_criteria.ended_before)
+
+        if filter_criteria.min_duration_seconds is not None:
+            conditions.append("duration_seconds >= ?")
+            params.append(filter_criteria.min_duration_seconds)
+
+        if filter_criteria.max_duration_seconds is not None:
+            conditions.append("duration_seconds <= ?")
+            params.append(filter_criteria.max_duration_seconds)
+
+        where_clause = " WHERE " + " AND ".join(conditions) if conditions else ""
+        return where_clause, params
+
+    def query_sessions(self, filter: SessionQueryFilter) -> list[SessionRecord]:
+        """Query interaction sessions matching filter criteria with pagination."""
+        where_clause, params = self._build_filter_clause(filter)
+        sql = f"""
+        SELECT
+            session_id,
+            person_id,
+            display_name,
+            started_at,
+            ended_at,
+            duration_seconds,
+            final_state,
+            identity_was_known,
+            identity_transitions_count,
+            created_at
+        FROM interaction_sessions
+        {where_clause}
+        ORDER BY ended_at DESC, created_at DESC, session_id ASC
+        LIMIT ? OFFSET ?;
+        """
+        exec_params = [*params, filter.limit, filter.offset]
+        with self._db.readonly_cursor() as cur:
+            cur.execute(sql, tuple(exec_params))
+            rows = cur.fetchall()
+            return [self._row_to_record(r) for r in rows]
+
+    def count_query_sessions(self, filter: SessionQueryFilter) -> int:
+        """Count total interaction sessions matching filter criteria."""
+        where_clause, params = self._build_filter_clause(filter)
+        sql = f"SELECT COUNT(*) FROM interaction_sessions{where_clause};"
+        with self._db.readonly_cursor() as cur:
+            cur.execute(sql, tuple(params))
+            row = cur.fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+
+    def get_aggregate_analytics(
+        self,
+        filter: SessionQueryFilter | None = None,
+    ) -> SessionAggregateAnalytics:
+        """Compute aggregate statistics directly via SQL over filtered sessions."""
+        where_clause, params = self._build_filter_clause(filter)
+        sql = f"""
+        SELECT
+            COUNT(*) AS total_sessions,
+            COALESCE(SUM(duration_seconds), 0.0) AS total_duration,
+            COALESCE(AVG(duration_seconds), 0.0) AS avg_duration,
+            COALESCE(MIN(duration_seconds), 0.0) AS min_duration,
+            COALESCE(MAX(duration_seconds), 0.0) AS max_duration,
+            COALESCE(
+                SUM(CASE WHEN identity_was_known = 1 THEN 1 ELSE 0 END), 0
+            ) AS identified_count,
+            COALESCE(
+                SUM(CASE WHEN identity_was_known = 0 THEN 1 ELSE 0 END), 0
+            ) AS anonymous_count,
+            MIN(started_at) AS earliest_started_at,
+            MAX(ended_at) AS latest_ended_at
+        FROM interaction_sessions
+        {where_clause};
+        """
+        with self._db.readonly_cursor() as cur:
+            cur.execute(sql, tuple(params))
+            row = cur.fetchone()
+            if row is None or row["total_sessions"] == 0:
+                return SessionAggregateAnalytics(
+                    total_sessions=0,
+                    total_duration_seconds=0.0,
+                    average_duration_seconds=0.0,
+                    min_duration_seconds=0.0,
+                    max_duration_seconds=0.0,
+                    identified_sessions_count=0,
+                    anonymous_sessions_count=0,
+                    earliest_session_started_at=None,
+                    latest_session_ended_at=None,
+                )
+            return SessionAggregateAnalytics(
+                total_sessions=int(row["total_sessions"]),
+                total_duration_seconds=float(row["total_duration"]),
+                average_duration_seconds=float(row["avg_duration"]),
+                min_duration_seconds=float(row["min_duration"]),
+                max_duration_seconds=float(row["max_duration"]),
+                identified_sessions_count=int(row["identified_count"]),
+                anonymous_sessions_count=int(row["anonymous_count"]),
+                earliest_session_started_at=float(row["earliest_started_at"])
+                if row["earliest_started_at"] is not None
+                else None,
+                latest_session_ended_at=float(row["latest_ended_at"])
+                if row["latest_ended_at"] is not None
+                else None,
+            )
+
+    def get_person_engagement_stats(
+        self,
+        person_id: str,
+    ) -> PersonEngagementStats | None:
+        """Compute historical engagement metrics for a specific enrolled person."""
+        validate_uuid(person_id, "person_id")
+
+        with self._db.readonly_cursor() as cur:
+            # A. Aggregate statistics across all sessions for this person
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_sessions,
+                    COALESCE(SUM(duration_seconds), 0.0) AS total_duration,
+                    COALESCE(AVG(duration_seconds), 0.0) AS avg_duration,
+                    MIN(started_at) AS first_interaction_at,
+                    MAX(ended_at) AS last_interaction_at
+                FROM interaction_sessions
+                WHERE person_id = ?;
+                """,
+                (person_id,),
+            )
+            stats_row = cur.fetchone()
+            if stats_row is None or stats_row["total_sessions"] == 0:
+                return None
+
+            # B. Deterministic query for latest display_name from most recent session
+            cur.execute(
+                """
+                SELECT display_name
+                FROM interaction_sessions
+                WHERE person_id = ?
+                ORDER BY ended_at DESC, created_at DESC, session_id ASC
+                LIMIT 1;
+                """,
+                (person_id,),
+            )
+            name_row = cur.fetchone()
+            latest_display_name = (
+                str(name_row["display_name"])
+                if (name_row is not None and name_row["display_name"] is not None)
+                else None
+            )
+
+            return PersonEngagementStats(
+                person_id=person_id,
+                display_name=latest_display_name,
+                total_sessions=int(stats_row["total_sessions"]),
+                total_duration_seconds=float(stats_row["total_duration"]),
+                average_duration_seconds=float(stats_row["avg_duration"]),
+                first_interaction_at=float(stats_row["first_interaction_at"])
+                if stats_row["first_interaction_at"] is not None
+                else None,
+                last_interaction_at=float(stats_row["last_interaction_at"])
+                if stats_row["last_interaction_at"] is not None
+                else None,
+            )
 
     @staticmethod
     def _row_to_record(row: sqlite3.Row) -> SessionRecord:

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from dh360_hi.backend.exceptions import ValidationError
+from dh360_hi.contracts.interaction import InteractionState
 
 if TYPE_CHECKING:
     from dh360_hi.contracts.interaction import InteractionSummary
@@ -253,3 +254,145 @@ class SessionRecord:
             identity_was_known=self.identity_was_known,
             identity_transitions_count=self.identity_transitions_count,
         )
+
+
+@dataclass(frozen=True)
+class SessionQueryFilter:
+    """Structured query filter criteria for historical interaction sessions."""
+
+    person_id: str | None = None
+    is_identified: bool | None = None
+    final_state: InteractionState | None = None
+    started_after: float | None = None
+    started_before: float | None = None
+    ended_after: float | None = None
+    ended_before: float | None = None
+    min_duration_seconds: float | None = None
+    max_duration_seconds: float | None = None
+    limit: int = 50
+    offset: int = 0
+
+    def __post_init__(self) -> None:
+        if self.limit <= 0:
+            msg = f"limit must be greater than 0, got {self.limit}"
+            raise ValidationError(msg)
+        if self.offset < 0:
+            msg = f"offset cannot be negative, got {self.offset}"
+            raise ValidationError(msg)
+        if self.person_id is not None:
+            validate_uuid(self.person_id, "person_id")
+        if (
+            self.started_after is not None
+            and self.started_before is not None
+            and self.started_after > self.started_before
+        ):
+            msg = (
+                f"started_after ({self.started_after}) cannot be greater than "
+                f"started_before ({self.started_before})"
+            )
+            raise ValidationError(msg)
+        if (
+            self.ended_after is not None
+            and self.ended_before is not None
+            and self.ended_after > self.ended_before
+        ):
+            msg = (
+                f"ended_after ({self.ended_after}) cannot be greater than "
+                f"ended_before ({self.ended_before})"
+            )
+            raise ValidationError(msg)
+        if (
+            self.started_after is not None
+            and self.ended_before is not None
+            and self.started_after > self.ended_before
+        ):
+            msg = (
+                f"started_after ({self.started_after}) cannot be greater than "
+                f"ended_before ({self.ended_before})"
+            )
+            raise ValidationError(msg)
+        if self.min_duration_seconds is not None and self.min_duration_seconds < 0.0:
+            msg = f"min_duration_seconds cannot be negative, got {self.min_duration_seconds}"
+            raise ValidationError(msg)
+        if self.max_duration_seconds is not None and self.max_duration_seconds < 0.0:
+            msg = f"max_duration_seconds cannot be negative, got {self.max_duration_seconds}"
+            raise ValidationError(msg)
+        if (
+            self.min_duration_seconds is not None
+            and self.max_duration_seconds is not None
+            and self.min_duration_seconds > self.max_duration_seconds
+        ):
+            msg = (
+                f"min_duration_seconds ({self.min_duration_seconds}) cannot be greater than "
+                f"max_duration_seconds ({self.max_duration_seconds})"
+            )
+            raise ValidationError(msg)
+        if self.final_state is not None and not isinstance(self.final_state, InteractionState):
+            try:
+                object.__setattr__(self, "final_state", InteractionState(self.final_state))
+            except (ValueError, TypeError) as exc:
+                msg = f"Invalid final_state: '{self.final_state}'"
+                raise ValidationError(msg) from exc
+
+
+@dataclass(frozen=True)
+class SessionAggregateAnalytics:
+    """Aggregate statistics computed directly via SQL over interaction sessions."""
+
+    total_sessions: int
+    total_duration_seconds: float
+    average_duration_seconds: float
+    min_duration_seconds: float
+    max_duration_seconds: float
+    identified_sessions_count: int
+    anonymous_sessions_count: int
+    earliest_session_started_at: float | None
+    latest_session_ended_at: float | None
+
+    def __post_init__(self) -> None:
+        if self.total_sessions < 0:
+            msg = "total_sessions cannot be negative"
+            raise ValidationError(msg)
+        if self.total_duration_seconds < 0.0:
+            msg = "total_duration_seconds cannot be negative"
+            raise ValidationError(msg)
+        if self.average_duration_seconds < 0.0:
+            msg = "average_duration_seconds cannot be negative"
+            raise ValidationError(msg)
+        if self.min_duration_seconds < 0.0:
+            msg = "min_duration_seconds cannot be negative"
+            raise ValidationError(msg)
+        if self.max_duration_seconds < 0.0:
+            msg = "max_duration_seconds cannot be negative"
+            raise ValidationError(msg)
+        if self.identified_sessions_count < 0:
+            msg = "identified_sessions_count cannot be negative"
+            raise ValidationError(msg)
+        if self.anonymous_sessions_count < 0:
+            msg = "anonymous_sessions_count cannot be negative"
+            raise ValidationError(msg)
+
+
+@dataclass(frozen=True)
+class PersonEngagementStats:
+    """Historical engagement metrics for an enrolled person entity."""
+
+    person_id: str
+    display_name: str | None
+    total_sessions: int
+    total_duration_seconds: float
+    average_duration_seconds: float
+    first_interaction_at: float | None
+    last_interaction_at: float | None
+
+    def __post_init__(self) -> None:
+        validate_uuid(self.person_id, "person_id")
+        if self.total_sessions < 0:
+            msg = "total_sessions cannot be negative"
+            raise ValidationError(msg)
+        if self.total_duration_seconds < 0.0:
+            msg = "total_duration_seconds cannot be negative"
+            raise ValidationError(msg)
+        if self.average_duration_seconds < 0.0:
+            msg = "average_duration_seconds cannot be negative"
+            raise ValidationError(msg)

@@ -15,9 +15,9 @@ The Human Interaction Module is responsible for human perception and dialogue ma
 
 ## 🚀 Current Development Status
 
-- **Current Milestone**: **`M2 — Recognition, Session Supervision & Persistent Audit History (Completed M2.1 Tracking, M2.2 Quality Gate, M2.3 Alignment & Embeddings, M2.4 Recognition & Identity State Machine, M2.5a SQLite Persistence, M2.5b Face Enrollment, M2.5c Person Lifecycle, M2.6 Identity Stability & Two-Rate Pipeline, M2.7 Session Lifecycle Manager & Structured Event Bus, M2.8 Edge Interaction Runtime & Frame Pump, M2.9 Interaction Context Coordinator & Application Event Bridge, M2.10 Unified Application Service & Composition Root, M2.11 Persistent Interaction Session Store & Historical Audit Repository)`**
+- **Current Milestone**: **`M2 — Recognition, Session Supervision & Persistent Audit History (Completed M2.1 Tracking, M2.2 Quality Gate, M2.3 Alignment & Embeddings, M2.4 Recognition & Identity State Machine, M2.5a SQLite Persistence, M2.5b Face Enrollment, M2.5c Person Lifecycle, M2.6 Identity Stability & Two-Rate Pipeline, M2.7 Session Lifecycle Manager & Structured Event Bus, M2.8 Edge Interaction Runtime & Frame Pump, M2.9 Interaction Context Coordinator & Application Event Bridge, M2.10 Unified Application Service & Composition Root, M2.11 Persistent Interaction Session Store & Historical Audit Repository, M2.12 Session Analytics & Historical Query Layer)`**
 - **Status**: Implemented & Verified
-- **Approach**: Built **incrementally** milestone by milestone. Core software foundation (M0), vision base & YuNet detection (M1), modular face tracking (M2.1), face quality gating (M2.2), face alignment + embedding evaluation (M2.3), real-time recognition + identity state machine (M2.4), SQLite persistence + Person Service (M2.5a), camera-based face enrollment (M2.5b), complete person lifecycle operations (M2.5c), two-rate perception pipeline with bounded async worker and identity stability (M2.6), session lifecycle manager with structured in-process event bus (M2.7), edge interaction runtime with continuous frame pump (M2.8), interaction context coordinator with application event bridge (M2.9), unified application service with composition root (M2.10), and persistent interaction session store with historical audit repository (M2.11) are established. Backend service endpoints and robot behavioral interfaces will follow incrementally.
+- **Approach**: Built **incrementally** milestone by milestone. Core software foundation (M0), vision base & YuNet detection (M1), modular face tracking (M2.1), face quality gating (M2.2), face alignment + embedding evaluation (M2.3), real-time recognition + identity state machine (M2.4), SQLite persistence + Person Service (M2.5a), camera-based face enrollment (M2.5b), complete person lifecycle operations (M2.5c), two-rate perception pipeline with bounded async worker and identity stability (M2.6), session lifecycle manager with structured in-process event bus (M2.7), edge interaction runtime with continuous frame pump (M2.8), interaction context coordinator with application event bridge (M2.9), unified application service with composition root (M2.10), persistent interaction session store with historical audit repository (M2.11), and session analytics with historical query layer (M2.12) are established. Backend service endpoints and robot behavioral interfaces will follow incrementally.
 
 
 ### Implemented Capabilities
@@ -45,6 +45,7 @@ The Human Interaction Module is responsible for human perception and dialogue ma
 - **Interaction Context Coordinator & Application Boundary**: `InteractionCoordinator` in `dh360_hi.application.coordinator` maintaining queryable, thread-safe application context (`InteractionContext`), profile enrichment via `PersonService`, finalized historical session records (`InteractionSummary`), and listener hooks for downstream services.
 - **Unified Application Service & Composition Root**: `HumanInteractionService` and `create_interaction_service` in `dh360_hi.application` providing a single typed entrypoint for subsystem assembly, lifecycle supervision, context/telemetry queries, and gallery hot-swapping.
 - **Persistent Interaction Session Store & Audit Repository**: `BaseSessionRepository`, `SQLiteSessionRepository`, and `SessionPersistenceWorker` in `dh360_hi.backend.session_repository` storing completed `InteractionSummary` records via Schema v2 migrations, providing non-blocking asynchronous queueing, zero record drops, and chronological querying (`get_session`, `list_sessions`, `count_sessions`).
+- **Session Analytics & Historical Interaction Query Layer**: `SessionQueryFilter`, `SessionAggregateAnalytics`, and `PersonEngagementStats` in `dh360_hi.backend` providing parameter-filtered session queries with pagination, SQL-side aggregations (`COUNT`, `SUM`, `AVG`, `MIN`, `MAX`), and person-level engagement summaries without raw biometric leakage or real-time perception loop interference.
 
 - **Reproducible Model Acquisition**: `scripts/download_models.py` with SHA-256 cryptographic verification and model cards documentation in `models/MODEL_CARDS.md`.
 - **Monotonic Benchmark Utility**: `PipelineBenchmark` measuring frame count, average/rolling FPS, and latency percentiles (mean, min, p50, p90, p95, p99, max).
@@ -103,7 +104,11 @@ python benchmarks/benchmark_detector.py --synthetic --frames 200
 
 ### 5. Application Service Usage Example
 ```python
-from dh360_hi.application import HumanInteractionConfig, create_interaction_service
+from dh360_hi.application import (
+    HumanInteractionConfig,
+    SessionQueryFilter,
+    create_interaction_service,
+)
 from dh360_hi.vision.frame import WebcamFrameSource
 
 # 1. Configure subsystem with models and SQLite persistence
@@ -125,10 +130,18 @@ service.start(async_thread=True)
 context = service.get_interaction_context()
 print(f"Current State: {context.state}, Person: {context.display_name}")
 
-# 4. Query historical interaction sessions
-sessions = service.list_sessions(limit=10)
-for s in sessions:
-    print(f"Session {s.session_id}: Duration {s.duration_seconds:.1f}s, Person: {s.display_name}")
+# 4. Filtered historical session queries & database-side analytics
+query_filter = SessionQueryFilter(is_identified=True, min_duration_seconds=5.0, limit=10)
+filtered_sessions = service.query_sessions(query_filter)
+for s in filtered_sessions:
+    print(f"Identified Session {s.session_id}: {s.duration_seconds:.1f}s ({s.display_name})")
+
+analytics = service.get_aggregate_analytics()
+print(
+    f"Total Sessions: {analytics.total_sessions}, "
+    f"Avg Duration: {analytics.average_duration_seconds:.1f}s, "
+    f"Identified Sessions: {analytics.identified_sessions}"
+)
 
 # 5. Graceful shutdown
 service.stop()

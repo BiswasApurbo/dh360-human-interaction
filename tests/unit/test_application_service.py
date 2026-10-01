@@ -185,6 +185,94 @@ class TestServicePropertiesAndQueries:
         assert flushed is True
         mocks["persistence_worker"].flush.assert_called_once_with(timeout=1.0)
 
+    def test_query_sessions_and_analytics_delegation(self) -> None:
+        """Verify query_sessions, count_query_sessions, analytics, and engagement delegation."""
+        svc, mocks = _mk_service_harness()
+        from dh360_hi.backend.models import (
+            PersonEngagementStats,
+            SessionAggregateAnalytics,
+            SessionQueryFilter,
+        )
+
+        flt = SessionQueryFilter(is_identified=True)
+        mock_rec = MagicMock()
+        mock_analytics = SessionAggregateAnalytics(
+            total_sessions=1,
+            total_duration_seconds=10.0,
+            average_duration_seconds=10.0,
+            min_duration_seconds=10.0,
+            max_duration_seconds=10.0,
+            identified_sessions_count=1,
+            anonymous_sessions_count=0,
+            earliest_session_started_at=100.0,
+            latest_session_ended_at=110.0,
+        )
+        mock_engagement = PersonEngagementStats(
+            person_id="11111111-1111-1111-1111-111111111111",
+            display_name="User",
+            total_sessions=1,
+            total_duration_seconds=10.0,
+            average_duration_seconds=10.0,
+            first_interaction_at=100.0,
+            last_interaction_at=110.0,
+        )
+
+        mocks["session_repository"].query_sessions.return_value = [mock_rec]
+        mocks["session_repository"].count_query_sessions.return_value = 1
+        mocks["session_repository"].get_aggregate_analytics.return_value = mock_analytics
+        mocks["session_repository"].get_person_engagement_stats.return_value = mock_engagement
+
+        res_sessions = svc.query_sessions(flt)
+        assert res_sessions == [mock_rec]
+        mocks["session_repository"].query_sessions.assert_called_once_with(flt)
+
+        res_count = svc.count_query_sessions(flt)
+        assert res_count == 1
+        mocks["session_repository"].count_query_sessions.assert_called_once_with(flt)
+
+        res_analytics = svc.get_aggregate_analytics(flt)
+        assert res_analytics == mock_analytics
+        mocks["session_repository"].get_aggregate_analytics.assert_called_once_with(filter=flt)
+
+        res_engagement = svc.get_person_engagement_stats("11111111-1111-1111-1111-111111111111")
+        assert res_engagement == mock_engagement
+        mocks["session_repository"].get_person_engagement_stats.assert_called_once_with(
+            "11111111-1111-1111-1111-111111111111"
+        )
+
+    def test_service_queries_with_none_repository(self) -> None:
+        """Verify service query APIs handle None repository safely without crashing."""
+        runtime = MagicMock(spec=EdgeInteractionRuntime)
+        coordinator = MagicMock(spec=InteractionCoordinator)
+        person_service = MagicMock(spec=BasePersonService)
+        repository = MagicMock(spec=BasePersonRepository)
+        recognizer = MagicMock(spec=BaseFaceRecognizer)
+        db_manager = MagicMock(spec=DatabaseManager)
+        event_bus = MagicMock(spec=EventBus)
+
+        svc = HumanInteractionService(
+            runtime=runtime,
+            coordinator=coordinator,
+            person_service=person_service,
+            repository=repository,
+            recognizer=recognizer,
+            db_manager=db_manager,
+            event_bus=event_bus,
+            session_repository=None,
+            persistence_worker=None,
+        )
+
+        assert svc.get_session("some-id") is None
+        assert svc.list_sessions() == []
+        assert svc.count_sessions() == 0
+        assert svc.query_sessions() == []
+        assert svc.count_query_sessions() == 0
+        assert svc.get_person_engagement_stats("11111111-1111-1111-1111-111111111111") is None
+        analytics = svc.get_aggregate_analytics()
+        assert analytics.total_sessions == 0
+        assert analytics.total_duration_seconds == 0.0
+        assert svc.flush_session_persistence() is True
+
 
 class TestServiceLifecycle:
     def test_start_delegation(self) -> None:
