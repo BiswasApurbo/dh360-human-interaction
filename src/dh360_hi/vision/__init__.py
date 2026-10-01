@@ -1,5 +1,13 @@
-"""Vision pipeline core modules: detection, tracking, quality gate, and embeddings."""
+"""Vision pipeline core modules: detection, tracking, quality gate, alignment, and embeddings."""
 
+from dh360_hi.vision.aligner import (
+    CANONICAL_5_PTS_112,
+    AlignmentResult,
+    BaseFaceAligner,
+    FaceAligner,
+    get_canonical_landmarks,
+    landmarks_to_array,
+)
 from dh360_hi.vision.benchmark import (
     ConfidenceStats,
     LatencyStats,
@@ -12,6 +20,23 @@ from dh360_hi.vision.detector import (
     FaceDetection,
     FaceLandmarks,
     YuNetFaceDetector,
+)
+from dh360_hi.vision.embedder import (
+    BaseFaceEmbedder,
+    EmbeddingResult,
+    SFaceEmbedder,
+    compute_cosine_distance,
+    compute_cosine_similarity,
+    normalize_l2,
+)
+from dh360_hi.vision.evaluation import (
+    EvaluationReport,
+    PairComparison,
+    ScoreDistribution,
+    ThresholdPoint,
+    compute_distribution,
+    evaluate_pairs,
+    format_evaluation_report,
 )
 from dh360_hi.vision.frame import (
     Frame,
@@ -41,11 +66,18 @@ from dh360_hi.vision.tracker import (
 )
 
 __all__ = [
+    "CANONICAL_5_PTS_112",
+    "AlignmentResult",
+    "BaseFaceAligner",
     "BaseFaceDetector",
+    "BaseFaceEmbedder",
     "BaseFaceQualityGate",
     "BaseFaceTracker",
     "ConfidenceStats",
     "DetectionResult",
+    "EmbeddingResult",
+    "EvaluationReport",
+    "FaceAligner",
     "FaceDetection",
     "FaceLandmarks",
     "FaceQualityGate",
@@ -57,9 +89,13 @@ __all__ = [
     "Frame",
     "FrameSource",
     "LatencyStats",
+    "PairComparison",
     "PipelineBenchmark",
+    "SFaceEmbedder",
+    "ScoreDistribution",
     "StageTimer",
     "SyntheticFrameSource",
+    "ThresholdPoint",
     "TrackState",
     "TrackedFace",
     "TrackingResult",
@@ -67,7 +103,15 @@ __all__ = [
     "WebcamFrameSource",
     "YuNetFaceDetector",
     "compute_center_distance",
+    "compute_cosine_distance",
+    "compute_cosine_similarity",
+    "compute_distribution",
     "compute_iou",
     "compute_pose_metrics",
     "compute_sharpness",
+    "evaluate_pairs",
+    "format_evaluation_report",
+    "get_canonical_landmarks",
+    "landmarks_to_array",
+    "normalize_l2",
 ]

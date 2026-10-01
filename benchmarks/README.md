@@ -51,7 +51,38 @@ python benchmarks/validate_quality_gate.py --frames 100
 
 ---
 
-## 4. Throughput Performance Benchmark (`benchmark_detector.py`)
+## 4. Face Alignment & Embedding Model Benchmark (`benchmark_embedder.py`)
+
+Measures 5-point similarity transform alignment latency, embedding inference latency, throughput (FPS), and percentile latency distributions across candidate face feature embedding models (SFace FP32 vs. SFace INT8).
+
+### Usage
+```bash
+# Benchmark all embedding candidate models (100 frames)
+python benchmarks/benchmark_embedder.py --model all --frames 100
+
+# Benchmark specific model
+python benchmarks/benchmark_embedder.py --model sface --frames 100
+python benchmarks/benchmark_embedder.py --model sface_int8 --frames 100
+```
+
+---
+
+## 5. Offline Face Verification & Threshold Calibration (`evaluate_embeddings_dataset.py`)
+
+Constructs paired genuine (same identity, varying conditions) and impostor (different identity) trials to evaluate cosine similarity distributions, False Accept Rate (FAR), False Reject Rate (FRR), Equal Error Rate (EER), and threshold calibration without hardcoded assumptions.
+
+### Usage
+```bash
+# Evaluate verification metrics and threshold operating points for SFace FP32
+python benchmarks/evaluate_embeddings_dataset.py --model sface
+
+# Evaluate SFace INT8 quantized
+python benchmarks/evaluate_embeddings_dataset.py --model sface_int8
+```
+
+---
+
+## 6. Throughput Performance Benchmark (`benchmark_detector.py`)
 
 Measures pipeline throughput, sliding-window rolling FPS, and latency percentiles under sustained execution on video files, synthetic streams, or webcam input.
 

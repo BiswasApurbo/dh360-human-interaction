@@ -44,6 +44,22 @@ REGISTRY: dict[str, ResourceEntry] = {
         default_dir=MODELS_DIR,
         description="Lightweight YuNet face detector from OpenCV Model Zoo (2023-Mar version)",
     ),
+    "sface": ResourceEntry(
+        name="SFace FP32 (Face Recognition)",
+        filename="face_recognition_sface_2021dec.onnx",
+        url="https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx",
+        sha256="0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+        default_dir=MODELS_DIR,
+        description="Lightweight SFace face recognition model (FP32) from OpenCV Model Zoo",
+    ),
+    "sface_int8": ResourceEntry(
+        name="SFace INT8 Quantized (Face Recognition)",
+        filename="face_recognition_sface_2021dec_int8.onnx",
+        url="https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec_int8.onnx",
+        sha256="2b0e941e6f16cc048c20aee0c8e31f569118f65d702914540f7bfdc14048d78a",
+        default_dir=MODELS_DIR,
+        description="Quantized SFace face recognition model (INT8) from OpenCV Model Zoo",
+    ),
     "sample_face": ResourceEntry(
         name="OpenCV Standard Sample Face (Fixture)",
         filename="sample_face.jpg",
