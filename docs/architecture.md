@@ -298,9 +298,10 @@ The `PresenceDebouncer` eliminates boundary flicker and brief 1-2 frame detectio
 | **WebSocket Hub** | Real-time bidirectional event streaming with edge nodes and UI dashboards. |
 | **Robot/Edge Responses** | Dispatches high-level behavioral directives and synthesized responses back to edge actuators. |
 
-#### 5.2.1 Persistence & Repository Architecture
+#### 5.2.1 Persistence & Repository Architecture (Schema v2)
 
 The persistent storage tier uses standard library `sqlite3` without external ORM overhead:
+
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -327,10 +328,21 @@ The persistent storage tier uses standard library `sqlite3` without external ORM
                                             └──────────────────┘
 ```
 
-- **Schema & Versioning**: `schema_version` table with atomic migration runner ensuring safe schema evolution.
-- **Referential Integrity**: `PRAGMA foreign_keys = ON;` strictly enforced. Deleting a person automatically cascades to remove all associated face embeddings, preventing orphaned biometric vectors.
+- **Schema & Versioning (v2)**: `schema_version` table with atomic migration runner ensuring safe schema evolution:
+  - **Schema v1**: `persons` demographic and consent table + `face_embeddings` float32 biometric vectors.
+  - **Schema v2**: `interaction_sessions` historical audit table indexed by `session_id`, `person_id`, `started_at`, `ended_at`, and `created_at`.
+- **Automatic Migration & Data Safety**: Existing v1 databases automatically upgrade to v2 preserving all registered persons and embeddings without data loss. Fresh databases initialize directly at v2.
+- **Referential Integrity & Privacy**: `PRAGMA foreign_keys = ON;` strictly enforced.
+  - Deleting a person cascades (`ON DELETE CASCADE`) to permanently wipe all associated 128-D face embeddings.
+  - Deleting a person sets session references to NULL (`ON DELETE SET NULL`), preserving historical interaction duration and timestamps while severing biometric linkage.
 - **Binary Embedding Storage**: 128-D feature vectors are stored as float32 binary `BLOB` buffers (512 bytes) with shape and finiteness validation on both read and write.
 - **Single-Writer Concurrency**: A thread-safe reentrant lock (`threading.RLock`) synchronizes write transactions with `BEGIN IMMEDIATE` and `WAL` journal mode for unhindered concurrent reads.
+- **Non-Blocking Asynchronous Persistence (`SessionPersistenceWorker`)**:
+  - `InteractionCoordinator` delegates completed `InteractionSummary` records to `SessionPersistenceWorker`.
+  - Uses a bounded queue (`max_queue_size = 128`) on a dedicated daemon thread, preventing disk write stalls from hitching real-time vision frame processing.
+  - If the queue saturates, executes a bounded wait followed by a synchronous write fallback, guaranteeing zero lost audit records.
+  - Gracefully flushes and drains all pending records on service shutdown before database connection closure.
+
 
 #### 5.2.2 Gallery Loading & Synchronization
 
@@ -586,6 +598,7 @@ The `HumanInteractionService` and its composition root `create_interaction_servi
 │                             HumanInteractionService                              │
 │       • Lifecycle: start(), stop(), pause(), resume(), step_once()               │
 │       • Context Queries: get_interaction_context(), get_last_summary()           │
+│       • Session History: get_session(), list_sessions(), count_sessions()        │
 │       • Person Queries: get_person(), list_persons()                             │
 │       • Metrics & State: get_runtime_metrics(), get_runtime_state()              │
 │       • Management: reload_gallery(), add_context_listener(), add_event_listener()│
@@ -594,21 +607,23 @@ The `HumanInteractionService` and its composition root `create_interaction_servi
         ▼              ▼              ▼              ▼              ▼
 ┌──────────────┐┌──────────────┐┌──────────────┐┌──────────────┐┌──────────────┐
 │DatabaseManager││PersonService ││  GallerySync ││ EdgeRuntime  ││Coordinator   │
-│ & Repository ││  (Profiles)  ││  (Recognizer)││(Frame Pump)  ││ (Context)    │
+│& Repositories││  (Profiles)  ││  (Recognizer)││(Frame Pump)  ││(Persist Sync)│
 └──────────────┘└──────────────┘└──────────────┘└──────────────┘└──────────────┘
 ```
 
 #### 5.6.1 Core Responsibilities & Dependency Direction
 
-1. **Thin Application Facade**: `HumanInteractionService` contains zero SQL, zero OpenCV image manipulation, and zero event-generation logic. It acts strictly as an in-process coordinator delegating to `EdgeInteractionRuntime`, `InteractionCoordinator`, `PersonService`, and `DatabaseManager`.
-2. **Composition Root (`create_interaction_service`)**: Builds and validates the entire dependency graph from a typed `HumanInteractionConfig` model in the correct architectural order (Database → Repositories → PersonService → GalleryLoader → Recognizer → Perception Pipeline → SessionManager → EventBus → Runtime → Coordinator → Service).
+1. **Thin Application Facade**: `HumanInteractionService` contains zero SQL, zero OpenCV image manipulation, and zero event-generation logic. It acts strictly as an in-process coordinator delegating to `EdgeInteractionRuntime`, `InteractionCoordinator`, `PersonService`, `BaseSessionRepository`, and `DatabaseManager`.
+2. **Composition Root (`create_interaction_service`)**: Builds and validates the entire dependency graph from a typed `HumanInteractionConfig` model in the correct architectural order (Database → Person/Session Repositories → PersonService → GalleryLoader → Recognizer → Perception Pipeline → SessionManager → EventBus → Runtime → PersistenceWorker → Coordinator → Service).
 3. **Safe, Deadlock-Free Teardown Sequence**: Enforces graceful, deterministic shutdown ordering on `service.stop()`:
    - Signals and joins the `EdgeInteractionRuntime` frame pump thread.
    - Signals and joins the background `BoundedEmbeddingWorker` thread.
+   - Drains and terminates the background `SessionPersistenceWorker`, ensuring all pending interaction summaries are safely committed to SQLite.
    - Unsubscribes coordinator listeners from the `EventBus`.
    - Closes the `DatabaseManager` SQLite connection.
 4. **Deterministic Simulation & Test Step (`step_once()`)**: Executes a single frame cycle through perception and event dispatch, returning `tuple[InteractionContext, list[BaseEvent]]` without leaking raw vision tensors.
-5. **Zero-Leakage Privacy Boundary**: All external interactions traverse pure application contracts (`InteractionContext`, `InteractionSummary`, `PersonProfile`, `RuntimeMetrics`). Raw biometric feature vectors, model weights, OpenCV arrays, and database cursors remain strictly encapsulated.
+5. **Zero-Leakage Privacy Boundary**: All external interactions traverse pure application contracts (`InteractionContext`, `InteractionSummary`, `SessionRecord`, `PersonProfile`, `RuntimeMetrics`). Raw biometric feature vectors, model weights, OpenCV arrays, and database cursors remain strictly encapsulated.
+
 
 ---
 

@@ -62,6 +62,8 @@ def _mk_service_harness(
     recognizer = MagicMock(spec=BaseFaceRecognizer)
     db_manager = MagicMock(spec=DatabaseManager)
     event_bus = MagicMock(spec=EventBus)
+    session_repository = MagicMock()
+    persistence_worker = MagicMock()
 
     config = HumanInteractionConfig()
 
@@ -73,6 +75,8 @@ def _mk_service_harness(
         recognizer=recognizer,
         db_manager=db_manager,
         event_bus=event_bus,
+        session_repository=session_repository,
+        persistence_worker=persistence_worker,
         config=config,
     )
 
@@ -84,6 +88,8 @@ def _mk_service_harness(
         "recognizer": recognizer,
         "db_manager": db_manager,
         "event_bus": event_bus,
+        "session_repository": session_repository,
+        "persistence_worker": persistence_worker,
     }
     return svc, mocks
 
@@ -151,13 +157,42 @@ class TestServicePropertiesAndQueries:
         assert persons[0].person_id == valid_pid
         mocks["person_service"].list_people.assert_called_once_with(status=PersonStatus.ACTIVE)
 
+    def test_historical_session_queries(self) -> None:
+        """Verify get_session, list_sessions, and count_sessions delegate to session_repository."""
+        svc, mocks = _mk_service_harness()
+        sid = str(uuid.uuid4())
+        mock_record = MagicMock()
+        mocks["session_repository"].get_session.return_value = mock_record
+        mocks["session_repository"].list_sessions.return_value = [mock_record]
+        mocks["session_repository"].count_sessions.return_value = 1
+        mocks["persistence_worker"].flush.return_value = True
+
+        rec = svc.get_session(sid)
+        assert rec is mock_record
+        mocks["session_repository"].get_session.assert_called_once_with(sid)
+
+        sessions = svc.list_sessions(person_id="pid-1", limit=10, offset=5)
+        assert len(sessions) == 1
+        mocks["session_repository"].list_sessions.assert_called_once_with(
+            person_id="pid-1", limit=10, offset=5
+        )
+
+        count = svc.count_sessions(person_id="pid-1")
+        assert count == 1
+        mocks["session_repository"].count_sessions.assert_called_once_with(person_id="pid-1")
+
+        flushed = svc.flush_session_persistence(timeout=1.0)
+        assert flushed is True
+        mocks["persistence_worker"].flush.assert_called_once_with(timeout=1.0)
+
 
 class TestServiceLifecycle:
     def test_start_delegation(self) -> None:
-        """Verify start command delegates to runtime."""
+        """Verify start command starts persistence worker and delegates to runtime."""
         svc, mocks = _mk_service_harness()
 
         svc.start(async_thread=True)
+        mocks["persistence_worker"].start.assert_called_once()
         mocks["runtime"].start.assert_called_once_with(async_thread=True)
 
     def test_pause_and_resume(self) -> None:
@@ -171,12 +206,13 @@ class TestServiceLifecycle:
         mocks["runtime"].resume.assert_called_once()
 
     def test_stop_graceful_shutdown(self) -> None:
-        """Verify stop coordinates shutdown across runtime, coordinator, and db."""
+        """Verify stop coordinates shutdown across runtime, worker, coordinator, and db."""
         svc, mocks = _mk_service_harness(runtime_state=RuntimeState.RUNNING)
 
         svc.stop(timeout=5.0)
 
         mocks["runtime"].stop.assert_called_once_with(timeout=5.0)
+        mocks["persistence_worker"].stop.assert_called_once_with(timeout=5.0)
         mocks["coordinator"].close.assert_called_once()
         mocks["db_manager"].close.assert_called_once()
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 SCHEMA_V1_SQL = """
 -- Schema Version Tracking
@@ -46,6 +46,30 @@ CREATE INDEX IF NOT EXISTS idx_persons_status ON persons(status);
 CREATE INDEX IF NOT EXISTS idx_persons_consent ON persons(consent_status);
 """
 
+SCHEMA_V2_SQL = """
+-- Interaction Sessions Table
+CREATE TABLE IF NOT EXISTS interaction_sessions (
+    session_id TEXT PRIMARY KEY,
+    person_id TEXT,
+    display_name TEXT,
+    started_at REAL NOT NULL,
+    ended_at REAL NOT NULL,
+    duration_seconds REAL NOT NULL,
+    final_state TEXT NOT NULL,
+    identity_was_known INTEGER NOT NULL,
+    identity_transitions_count INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (person_id) REFERENCES persons(person_id) ON DELETE SET NULL
+);
+
+-- Performance Indices for Sessions
+CREATE INDEX IF NOT EXISTS idx_interaction_sessions_person_id ON interaction_sessions(person_id);
+CREATE INDEX IF NOT EXISTS idx_interaction_sessions_ended_at ON interaction_sessions(ended_at);
+CREATE INDEX IF NOT EXISTS idx_interaction_sessions_started_at ON interaction_sessions(started_at);
+CREATE INDEX IF NOT EXISTS idx_interaction_sessions_created_at ON interaction_sessions(created_at);
+"""
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, str]] = {
     1: (SCHEMA_V1_SQL, "Initial schema: persons, face_embeddings, and indices with cascade delete"),
+    2: (SCHEMA_V2_SQL, "Schema v2: interaction_sessions table and performance indices"),
 }

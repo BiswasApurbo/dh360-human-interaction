@@ -22,9 +22,13 @@ from dh360_hi.edge.runtime import EdgeInteractionRuntime, RuntimeMetrics, Runtim
 
 if TYPE_CHECKING:
     from dh360_hi.backend.database import DatabaseManager
-    from dh360_hi.backend.models import ConsentStatus, PersonProfile, PersonStatus
+    from dh360_hi.backend.models import ConsentStatus, PersonProfile, PersonStatus, SessionRecord
     from dh360_hi.backend.person_service import BasePersonService
     from dh360_hi.backend.repository import BasePersonRepository
+    from dh360_hi.backend.session_repository import (
+        BaseSessionRepository,
+        SessionPersistenceWorker,
+    )
     from dh360_hi.vision.enrollment import FaceEnrollmentController
     from dh360_hi.vision.recognition import BaseFaceRecognizer
 
@@ -36,8 +40,8 @@ T = TypeVar("T", bound=BaseEvent)
 class HumanInteractionService:
     """Unified application service facade for the Human Interaction subsystem.
 
-    Coordinates lifecycle management, context queries, person profiles, and
-    recognition gallery synchronization across the composed subsystem components.
+    Coordinates lifecycle management, context queries, person profiles, historical
+    session persistence, and recognition gallery synchronization across subsystem components.
 
     Invariants:
         - Contains zero raw computer vision, tensor manipulation, or SQL execution.
@@ -55,6 +59,8 @@ class HumanInteractionService:
         recognizer: BaseFaceRecognizer,
         db_manager: DatabaseManager,
         event_bus: EventBus,
+        session_repository: BaseSessionRepository | None = None,
+        persistence_worker: SessionPersistenceWorker | None = None,
         enrollment_controller: FaceEnrollmentController | None = None,
         config: HumanInteractionConfig | None = None,
     ) -> None:
@@ -65,6 +71,8 @@ class HumanInteractionService:
         self._recognizer = recognizer
         self._db_manager = db_manager
         self._event_bus = event_bus
+        self._session_repository = session_repository
+        self._persistence_worker = persistence_worker
         self._enrollment_controller = enrollment_controller
         self._config = config or HumanInteractionConfig()
         self._lock = threading.RLock()
@@ -112,6 +120,16 @@ class HumanInteractionService:
     def person_service(self) -> BasePersonService:
         """Composed person service instance."""
         return self._person_service
+
+    @property
+    def session_repository(self) -> BaseSessionRepository | None:
+        """Composed session repository instance, if configured."""
+        return self._session_repository
+
+    @property
+    def persistence_worker(self) -> SessionPersistenceWorker | None:
+        """Composed session persistence worker instance, if configured."""
+        return self._persistence_worker
 
     # ------------------------------------------------------------------
     # Interaction Context Queries
@@ -168,23 +186,96 @@ class HumanInteractionService:
         return people
 
     # ------------------------------------------------------------------
+    # Historical Session Queries & Persistence
+    # ------------------------------------------------------------------
+
+    def get_session(self, session_id: str) -> SessionRecord | None:
+        """Retrieve an interaction session record by UUID identifier.
+
+        Args:
+            session_id: UUID of the target session.
+
+        Returns:
+            SessionRecord if found in persistence, otherwise None.
+        """
+        if self._session_repository is None:
+            return None
+        return self._session_repository.get_session(session_id)
+
+    def list_sessions(
+        self,
+        person_id: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[SessionRecord]:
+        """List historical interaction sessions with optional person filtering and pagination.
+
+        Args:
+            person_id: Optional UUID filter for identified subject.
+            limit: Maximum number of records to return (must be > 0).
+            offset: Number of records to skip for pagination (must be >= 0).
+
+        Returns:
+            List of matching SessionRecord entries ordered chronologically descending.
+        """
+        if self._session_repository is None:
+            return []
+        return self._session_repository.list_sessions(
+            person_id=person_id,
+            limit=limit,
+            offset=offset,
+        )
+
+    def count_sessions(self, person_id: str | None = None) -> int:
+        """Count total historical interaction sessions, optionally filtered by person.
+
+        Args:
+            person_id: Optional UUID filter for identified subject.
+
+        Returns:
+            Total number of matching session records.
+        """
+        if self._session_repository is None:
+            return 0
+        return self._session_repository.count_sessions(person_id=person_id)
+
+    def flush_session_persistence(self, timeout: float = 2.0) -> bool:
+        """Flush pending session persistence writes to storage.
+
+        Args:
+            timeout: Maximum seconds to wait.
+
+        Returns:
+            True if all pending sessions were successfully written before timeout.
+        """
+        if self._persistence_worker is not None:
+            return self._persistence_worker.flush(timeout=timeout)
+        return True
+
+    # ------------------------------------------------------------------
     # Lifecycle Commands
     # ------------------------------------------------------------------
 
     def start(self, async_thread: bool = True) -> None:
-        """Start the continuous edge interaction runtime frame pump.
+        """Start the continuous edge interaction runtime frame pump and persistence worker.
 
         Args:
             async_thread: If True (default), runs continuous processing in a background
                 thread. If False, runs synchronously on the caller thread.
         """
         with self._lock:
+            if self._persistence_worker is not None:
+                self._persistence_worker.start()
             self._runtime.start(async_thread=async_thread)
 
     def stop(self, timeout: float = 3.0) -> None:
         """Gracefully stop the runtime, terminate background workers, and release resources.
 
-        This method is thread-safe, idempotent, and safe to call from any state.
+        Enforces deterministic shutdown ordering:
+            1. Stop runtime frame pump and embedding worker threads.
+            2. Drain and stop background session persistence worker.
+            3. Unsubscribe InteractionCoordinator from EventBus.
+            4. Close DatabaseManager SQLite connection.
 
         Args:
             timeout: Maximum seconds to wait for background thread termination.
@@ -194,6 +285,12 @@ class HumanInteractionService:
                 self._runtime.stop(timeout=timeout)
             except Exception:
                 logger.exception("Error stopping EdgeInteractionRuntime")
+
+            if self._persistence_worker is not None:
+                try:
+                    self._persistence_worker.stop(timeout=timeout)
+                except Exception:
+                    logger.exception("Error stopping SessionPersistenceWorker")
 
             try:
                 self._coordinator.close()

@@ -20,6 +20,7 @@ from dh360_hi.backend.models import (
     PersonProfile,
     PersonRecord,
     PersonStatus,
+    SessionRecord,
     blob_to_vector,
     validate_uuid,
     vector_to_blob,
@@ -27,12 +28,18 @@ from dh360_hi.backend.models import (
 from dh360_hi.backend.person_service import BasePersonService, PersonService
 from dh360_hi.backend.repository import BasePersonRepository, SQLitePersonRepository
 from dh360_hi.backend.schema import CURRENT_SCHEMA_VERSION
+from dh360_hi.backend.session_repository import (
+    BaseSessionRepository,
+    SessionPersistenceWorker,
+    SQLiteSessionRepository,
+)
 
 __all__ = [
     "CURRENT_SCHEMA_VERSION",
     "BackendError",
     "BasePersonRepository",
     "BasePersonService",
+    "BaseSessionRepository",
     "ConsentStatus",
     "DatabaseError",
     "DatabaseManager",
@@ -48,7 +55,10 @@ __all__ = [
     "PersonService",
     "PersonStatus",
     "SQLitePersonRepository",
+    "SQLiteSessionRepository",
     "SchemaVersionError",
+    "SessionPersistenceWorker",
+    "SessionRecord",
     "ValidationError",
     "blob_to_vector",
     "load_gallery_from_repository",

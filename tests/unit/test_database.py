@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 
 def test_in_memory_database_initialization() -> None:
-    """Test initializing an ephemeral in-memory database with schema version 1."""
+    """Test initializing an ephemeral in-memory database with current schema version."""
     db = DatabaseManager(":memory:")
     try:
         assert db.is_memory is True
@@ -27,6 +27,7 @@ def test_in_memory_database_initialization() -> None:
             tables = [row["name"] for row in cur.fetchall()]
             assert "persons" in tables
             assert "face_embeddings" in tables
+            assert "interaction_sessions" in tables
             assert "schema_version" in tables
     finally:
         db.close()

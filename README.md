@@ -15,9 +15,10 @@ The Human Interaction Module is responsible for human perception and dialogue ma
 
 ## 🚀 Current Development Status
 
-- **Current Milestone**: **`M2 — Recognition & Session Supervision (Completed M2.1 Tracking, M2.2 Quality Gate, M2.3 Alignment & Embeddings, M2.4 Recognition & Identity State Machine, M2.5a SQLite Persistence, M2.5b Face Enrollment, M2.5c Person Lifecycle, M2.6 Identity Stability & Two-Rate Pipeline, M2.7 Session Lifecycle Manager & Structured Event Bus, M2.8 Edge Interaction Runtime & Frame Pump, M2.9 Interaction Context Coordinator & Application Event Bridge, M2.10 Unified Application Service & Composition Root)`**
+- **Current Milestone**: **`M2 — Recognition, Session Supervision & Persistent Audit History (Completed M2.1 Tracking, M2.2 Quality Gate, M2.3 Alignment & Embeddings, M2.4 Recognition & Identity State Machine, M2.5a SQLite Persistence, M2.5b Face Enrollment, M2.5c Person Lifecycle, M2.6 Identity Stability & Two-Rate Pipeline, M2.7 Session Lifecycle Manager & Structured Event Bus, M2.8 Edge Interaction Runtime & Frame Pump, M2.9 Interaction Context Coordinator & Application Event Bridge, M2.10 Unified Application Service & Composition Root, M2.11 Persistent Interaction Session Store & Historical Audit Repository)`**
 - **Status**: Implemented & Verified
-- **Approach**: Built **incrementally** milestone by milestone. Core software foundation (M0), vision base & YuNet detection (M1), modular face tracking (M2.1), face quality gating (M2.2), face alignment + embedding evaluation (M2.3), real-time recognition + identity state machine (M2.4), SQLite persistence + Person Service (M2.5a), camera-based face enrollment (M2.5b), complete person lifecycle operations (M2.5c), two-rate perception pipeline with bounded async worker and identity stability (M2.6), session lifecycle manager with structured in-process event bus (M2.7), edge interaction runtime with continuous frame pump (M2.8), interaction context coordinator with application event bridge (M2.9), and unified application service with composition root (M2.10) are established. Backend service endpoints and robot behavioral interfaces will follow incrementally.
+- **Approach**: Built **incrementally** milestone by milestone. Core software foundation (M0), vision base & YuNet detection (M1), modular face tracking (M2.1), face quality gating (M2.2), face alignment + embedding evaluation (M2.3), real-time recognition + identity state machine (M2.4), SQLite persistence + Person Service (M2.5a), camera-based face enrollment (M2.5b), complete person lifecycle operations (M2.5c), two-rate perception pipeline with bounded async worker and identity stability (M2.6), session lifecycle manager with structured in-process event bus (M2.7), edge interaction runtime with continuous frame pump (M2.8), interaction context coordinator with application event bridge (M2.9), unified application service with composition root (M2.10), and persistent interaction session store with historical audit repository (M2.11) are established. Backend service endpoints and robot behavioral interfaces will follow incrementally.
+
 
 ### Implemented Capabilities
 - **Hardware-Independent Frame Sources**: `FrameSource` interface with `VideoFileFrameSource`, `WebcamFrameSource`, and `SyntheticFrameSource`.
@@ -43,6 +44,8 @@ The Human Interaction Module is responsible for human perception and dialogue ma
 - **Edge Interaction Runtime Orchestrator**: `EdgeInteractionRuntime` in `dh360_hi.edge.runtime` supervising the end-to-end edge pipeline (`FrameSource` → `TwoRatePerceptionPipeline` → `SessionManager` → `EventBus`) with lifecycle management (`start`, `stop`, `pause`, `resume`, `step_once`), constant-rate FPS pacing, transient error resilience, and operational metrics telemetry (`RuntimeMetrics`).
 - **Interaction Context Coordinator & Application Boundary**: `InteractionCoordinator` in `dh360_hi.application.coordinator` maintaining queryable, thread-safe application context (`InteractionContext`), profile enrichment via `PersonService`, finalized historical session records (`InteractionSummary`), and listener hooks for downstream services.
 - **Unified Application Service & Composition Root**: `HumanInteractionService` and `create_interaction_service` in `dh360_hi.application` providing a single typed entrypoint for subsystem assembly, lifecycle supervision, context/telemetry queries, and gallery hot-swapping.
+- **Persistent Interaction Session Store & Audit Repository**: `BaseSessionRepository`, `SQLiteSessionRepository`, and `SessionPersistenceWorker` in `dh360_hi.backend.session_repository` storing completed `InteractionSummary` records via Schema v2 migrations, providing non-blocking asynchronous queueing, zero record drops, and chronological querying (`get_session`, `list_sessions`, `count_sessions`).
+
 - **Reproducible Model Acquisition**: `scripts/download_models.py` with SHA-256 cryptographic verification and model cards documentation in `models/MODEL_CARDS.md`.
 - **Monotonic Benchmark Utility**: `PipelineBenchmark` measuring frame count, average/rolling FPS, and latency percentiles (mean, min, p50, p90, p95, p99, max).
 - **Benchmarking & Validation Suites**: `benchmarks/benchmark_m2_8_runtime.py`, `benchmarks/benchmark_m2_6_pipeline.py`, `benchmarks/validate_detection.py`, `benchmarks/benchmark_tracking.py`, `benchmarks/validate_quality_gate.py`, `benchmarks/benchmark_embedder.py`, `benchmarks/benchmark_recognition.py`, and `benchmarks/benchmark_detector.py`.
@@ -122,9 +125,15 @@ service.start(async_thread=True)
 context = service.get_interaction_context()
 print(f"Current State: {context.state}, Person: {context.display_name}")
 
-# 4. Graceful shutdown
+# 4. Query historical interaction sessions
+sessions = service.list_sessions(limit=10)
+for s in sessions:
+    print(f"Session {s.session_id}: Duration {s.duration_seconds:.1f}s, Person: {s.display_name}")
+
+# 5. Graceful shutdown
 service.stop()
 ```
+
 
 > [!NOTE]
 > **Performance Disclaimer**:

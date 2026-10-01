@@ -31,6 +31,10 @@ from dh360_hi.edge.event_bus import EventBus
 if TYPE_CHECKING:
     from dh360_hi.backend.models import PersonProfile
     from dh360_hi.backend.person_service import BasePersonService
+    from dh360_hi.backend.session_repository import (
+        BaseSessionRepository,
+        SessionPersistenceWorker,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +50,7 @@ class InteractionCoordinator:
         - Enriches identified individuals with PersonProfile metadata via PersonService.
         - Maintains thread-safe, immutable InteractionContext snapshots.
         - Generates finalized InteractionSummary records on session termination.
+        - Persists completed interaction sessions to repository storage.
         - Provides clean listener callbacks for downstream application adapters.
     """
 
@@ -53,9 +58,13 @@ class InteractionCoordinator:
         self,
         event_bus: EventBus,
         person_service: BasePersonService | None = None,
+        session_repository: BaseSessionRepository | None = None,
+        persistence_worker: SessionPersistenceWorker | None = None,
     ) -> None:
         self._event_bus = event_bus
         self._person_service = person_service
+        self._session_repository = session_repository
+        self._persistence_worker = persistence_worker
         self._lock = threading.RLock()
 
         # Active interaction state
@@ -74,6 +83,16 @@ class InteractionCoordinator:
     # ------------------------------------------------------------------
     # Properties & Query API
     # ------------------------------------------------------------------
+
+    @property
+    def session_repository(self) -> BaseSessionRepository | None:
+        """Configured session repository, if any."""
+        return self._session_repository
+
+    @property
+    def persistence_worker(self) -> SessionPersistenceWorker | None:
+        """Configured session persistence worker, if any."""
+        return self._persistence_worker
 
     @property
     def context(self) -> InteractionContext:
@@ -347,6 +366,18 @@ class InteractionCoordinator:
                 identity_transitions_count=0,
             )
             snapshot = self._context
+
+        # Asynchronously offload session persistence or fallback to direct repository
+        if self._persistence_worker is not None:
+            self._persistence_worker.submit(summary)
+        elif self._session_repository is not None:
+            try:
+                from dh360_hi.backend.models import SessionRecord
+
+                record = SessionRecord.from_summary(summary)
+                self._session_repository.save_session(record)
+            except Exception:
+                logger.exception("Failed to persist session %s directly", summary.session_id)
 
         self._notify_listeners(snapshot)
 

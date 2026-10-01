@@ -11,6 +11,11 @@ from dh360_hi.backend.database import DatabaseManager
 from dh360_hi.backend.gallery_loader import load_gallery_from_repository
 from dh360_hi.backend.person_service import BasePersonService, PersonService
 from dh360_hi.backend.repository import BasePersonRepository, SQLitePersonRepository
+from dh360_hi.backend.session_repository import (
+    BaseSessionRepository,
+    SessionPersistenceWorker,
+    SQLiteSessionRepository,
+)
 from dh360_hi.edge.event_bus import EventBus
 from dh360_hi.edge.runtime import EdgeInteractionRuntime
 from dh360_hi.edge.session_manager import SessionManager
@@ -50,6 +55,8 @@ def create_interaction_service(
     db_manager: DatabaseManager | None = None,
     repository: BasePersonRepository | None = None,
     person_service: BasePersonService | None = None,
+    session_repository: BaseSessionRepository | None = None,
+    persistence_worker: SessionPersistenceWorker | None = None,
     pipeline: TwoRatePerceptionPipeline | None = None,
 ) -> HumanInteractionService:
     """Composition root: instantiate, wire, and return a complete HumanInteractionService.
@@ -76,7 +83,11 @@ def create_interaction_service(
         db_manager: Database manager instance (defaults to DatabaseManager).
         repository: Person repository instance (defaults to SQLitePersonRepository).
         person_service: Person service instance (defaults to PersonService).
+        session_repository: Session repository instance (defaults to SQLiteSessionRepository).
+        persistence_worker: Session persistence worker instance (defaults to
+            SessionPersistenceWorker).
         pipeline: Fully pre-constructed TwoRatePerceptionPipeline override, if provided.
+
 
     Returns:
         Configured and wired HumanInteractionService instance.
@@ -91,6 +102,9 @@ def create_interaction_service(
     db = db_manager or DatabaseManager(cfg.db_path, auto_init=cfg.auto_init_db)
     repo = repository or SQLitePersonRepository(db)
     svc = person_service or PersonService(repo)
+    session_repo = session_repository or SQLiteSessionRepository(db)
+    pers_worker = persistence_worker or SessionPersistenceWorker(session_repo)
+    pers_worker.start()
 
     # 2. Recognition Gallery & Recognizer
     gallery = load_gallery_from_repository(
@@ -213,6 +227,8 @@ def create_interaction_service(
     coord = coordinator or InteractionCoordinator(
         event_bus=bus,
         person_service=svc,
+        session_repository=session_repo,
+        persistence_worker=pers_worker,
     )
 
     # 8. Human Interaction Application Service
@@ -224,6 +240,8 @@ def create_interaction_service(
         recognizer=rec,
         db_manager=db,
         event_bus=bus,
+        session_repository=session_repo,
+        persistence_worker=pers_worker,
         enrollment_controller=enrollment_ctrl,
         config=cfg,
     )

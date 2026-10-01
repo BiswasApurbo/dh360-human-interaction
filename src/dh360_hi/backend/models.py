@@ -6,10 +6,14 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from dh360_hi.backend.exceptions import ValidationError
+
+if TYPE_CHECKING:
+    from dh360_hi.contracts.interaction import InteractionSummary
 
 
 class PersonStatus(StrEnum):
@@ -169,3 +173,83 @@ class EmbeddingMetadata:
     quality_score: float | None
     enrollment_batch_id: str | None
     created_at: str
+
+
+@dataclass(frozen=True)
+class SessionRecord:
+    """Low-level SQLite database record for an interaction session."""
+
+    session_id: str
+    person_id: str | None
+    display_name: str | None
+    started_at: float
+    ended_at: float
+    duration_seconds: float
+    final_state: str
+    identity_was_known: bool
+    identity_transitions_count: int
+    created_at: str = field(default_factory=utc_now_iso)
+
+    def __post_init__(self) -> None:
+        validate_uuid(self.session_id, "session_id")
+        if self.person_id is not None:
+            validate_uuid(self.person_id, "person_id")
+        if self.duration_seconds < 0.0:
+            msg = "duration_seconds cannot be negative"
+            raise ValidationError(msg)
+        if self.identity_transitions_count < 0:
+            msg = "identity_transitions_count cannot be negative"
+            raise ValidationError(msg)
+        if not self.final_state or not self.final_state.strip():
+            msg = "final_state cannot be empty"
+            raise ValidationError(msg)
+
+    @classmethod
+    def from_summary(
+        cls,
+        summary: InteractionSummary,
+        created_at: str | None = None,
+    ) -> SessionRecord:
+        """Construct a SessionRecord from an application InteractionSummary."""
+        final_state_str = (
+            summary.final_state.value
+            if hasattr(summary.final_state, "value")
+            else str(summary.final_state)
+        )
+        return cls(
+            session_id=summary.session_id,
+            person_id=summary.person_id,
+            display_name=summary.display_name,
+            started_at=summary.started_at,
+            ended_at=summary.ended_at,
+            duration_seconds=summary.duration_seconds,
+            final_state=final_state_str,
+            identity_was_known=summary.identity_was_known,
+            identity_transitions_count=summary.identity_transitions_count,
+            created_at=created_at or utc_now_iso(),
+        )
+
+    def to_summary(
+        self,
+        person_profile: PersonProfile | None = None,
+    ) -> InteractionSummary:
+        """Convert SessionRecord to application-level InteractionSummary."""
+        from dh360_hi.contracts.interaction import InteractionState, InteractionSummary
+
+        try:
+            state = InteractionState(self.final_state)
+        except ValueError:
+            state = InteractionState.IDLE
+
+        return InteractionSummary(
+            session_id=self.session_id,
+            person_id=self.person_id,
+            display_name=self.display_name,
+            person_profile=person_profile,
+            started_at=self.started_at,
+            ended_at=self.ended_at,
+            duration_seconds=self.duration_seconds,
+            final_state=state,
+            identity_was_known=self.identity_was_known,
+            identity_transitions_count=self.identity_transitions_count,
+        )
