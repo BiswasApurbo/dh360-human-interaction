@@ -15,16 +15,17 @@ The Human Interaction Module is responsible for human perception and dialogue ma
 
 ## 🚀 Current Development Status
 
-- **Current Milestone**: **`M1 — Vision Base`**
+- **Current Milestone**: **`M2 — Recognition (Face Tracking Sub-Step)`**
 - **Status**: Implemented & Verified
-- **Approach**: Built **incrementally** milestone by milestone. Core software foundation, tooling, CI, hardware-independent frame sources, YuNet face detector baseline, and reproducible benchmarking suites are established. Heavy tracking, embeddings, backend services, or hardware integrations will follow in subsequent milestones.
+- **Approach**: Built **incrementally** milestone by milestone. Core software foundation (M0), vision base & YuNet detection (M1), and modular face tracking (M2 sub-step 1) are established. Face embeddings, gallery matching, backend services, or hardware integrations will follow incrementally.
 
-### Implemented in M1
+### Implemented Capabilities
 - **Hardware-Independent Frame Sources**: `FrameSource` interface with `VideoFileFrameSource`, `WebcamFrameSource`, and `SyntheticFrameSource`.
 - **Thin Face Detector Interface**: `BaseFaceDetector` interface with `YuNetFaceDetector` backed by OpenCV DNN and official YuNet ONNX weights.
+- **Modular Multi-Object Face Tracker**: `BaseFaceTracker` interface with `FaceTracker` implementing bipartite IoU matching, spatial centroid fallbacks, configurable track expiration, and bounding box smoothing.
 - **Reproducible Model Acquisition**: `scripts/download_models.py` with SHA-256 cryptographic verification and model cards documentation in `models/MODEL_CARDS.md`.
 - **Monotonic Benchmark Utility**: `PipelineBenchmark` measuring frame count, average/rolling FPS, and latency percentiles (mean, min, p50, p90, p95, p99, max).
-- **Benchmarking CLI**: `benchmarks/benchmark_detector.py` for running reproducible performance evaluations.
+- **Benchmarking & Validation Suites**: `benchmarks/validate_detection.py`, `benchmarks/benchmark_tracking.py`, and `benchmarks/benchmark_detector.py`.
 
 ---
 

@@ -24,7 +24,22 @@ python benchmarks/validate_detection.py --frames 100
 
 ---
 
-## 2. Throughput Performance Benchmark (`benchmark_detector.py`)
+## 2. Detection + Tracking Combined Benchmark (`benchmark_tracking.py`)
+
+Measures combined detection and multi-object face tracking throughput and per-stage latency distributions (`face_detection` vs. `face_tracking`).
+
+### Usage
+```bash
+# Benchmark on animated fixture video (150 frames)
+python benchmarks/benchmark_tracking.py --frames 150
+
+# Benchmark on video file
+python benchmarks/benchmark_tracking.py --video data/test_video.mp4 --frames 150
+```
+
+---
+
+## 3. Throughput Performance Benchmark (`benchmark_detector.py`)
 
 Measures pipeline throughput, sliding-window rolling FPS, and latency percentiles under sustained execution on video files, synthetic streams, or webcam input.
 

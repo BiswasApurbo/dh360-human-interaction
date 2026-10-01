@@ -20,20 +20,36 @@ from dh360_hi.vision.frame import (
     VideoFileFrameSource,
     WebcamFrameSource,
 )
+from dh360_hi.vision.tracker import (
+    BaseFaceTracker,
+    FaceTracker,
+    TrackedFace,
+    TrackingResult,
+    TrackState,
+    compute_center_distance,
+    compute_iou,
+)
 
 __all__ = [
     "BaseFaceDetector",
+    "BaseFaceTracker",
     "ConfidenceStats",
     "DetectionResult",
     "FaceDetection",
     "FaceLandmarks",
+    "FaceTracker",
     "Frame",
     "FrameSource",
     "LatencyStats",
     "PipelineBenchmark",
     "StageTimer",
     "SyntheticFrameSource",
+    "TrackState",
+    "TrackedFace",
+    "TrackingResult",
     "VideoFileFrameSource",
     "WebcamFrameSource",
     "YuNetFaceDetector",
+    "compute_center_distance",
+    "compute_iou",
 ]
