@@ -173,18 +173,83 @@ To prevent identity flickering caused by momentary face occlusions, lighting tra
 | Component | Responsibility |
 | :--- | :--- |
 | **FastAPI Layer** | High-performance asynchronous REST endpoints for management, enrolment, and telemetry. |
-| **Database** | Persistent storage for user profiles, interaction logs, session history, and system audit records. |
+| **Database Layer** | Thread-safe SQLite persistence engine with schema versioning, WAL journal mode, and foreign keys (`DatabaseManager`). |
+| **Repository Layer** | Persistence abstraction providing transactional CRUD operations for person records and binary feature embeddings (`SQLitePersonRepository`). |
+| **Person Service** | Business logic and lifecycle supervisor managing profile validation, consent tracking, and embedding counts without exposing raw vectors (`PersonService`). |
+| **Gallery Loader** | Extracts, validates, and normalizes persisted embeddings into an isolated in-memory recognition gallery (`load_gallery_from_repository`). |
 | **Conversation Manager** | Maintains dialogue state, session history, intent resolution, and turn-taking logic. |
 | **LLM Adapter** | Asynchronously interfaces with LLM providers with latency-tolerant fallback routines. |
 | **WebSocket Hub** | Real-time bidirectional event streaming with edge nodes and UI dashboards. |
 | **Robot/Edge Responses** | Dispatches high-level behavioral directives and synthesized responses back to edge actuators. |
 
+#### 5.2.1 Persistence & Repository Architecture
+
+The persistent storage tier uses standard library `sqlite3` without external ORM overhead:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                       Person Service                        │
+│             (Domain Validation & Privacy Boundary)          │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  SQLite Person Repository                   │
+│        (Transactional Persistence & Cascade Handling)       │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      Database Manager                       │
+│     (Single-Writer Lock, WAL Mode, Foreign Keys, Pragma)     │
+└──────────────────────┬──────────────────────────────┬───────┘
+                       ▼                              ▼
+             ┌──────────────────┐           ┌──────────────────┐
+             │     persons      │           │ face_embeddings  │
+             │   (UUID PK)      │◄──────────┤ (FK ON DELETE    │
+             └──────────────────┘  CASCADE  │  CASCADE, BLOB)  │
+                                            └──────────────────┘
+```
+
+- **Schema & Versioning**: `schema_version` table with atomic migration runner ensuring safe schema evolution.
+- **Referential Integrity**: `PRAGMA foreign_keys = ON;` strictly enforced. Deleting a person automatically cascades to remove all associated face embeddings, preventing orphaned biometric vectors.
+- **Binary Embedding Storage**: 128-D feature vectors are stored as float32 binary `BLOB` buffers (512 bytes) with shape and finiteness validation on both read and write.
+- **Single-Writer Concurrency**: A thread-safe reentrant lock (`threading.RLock`) synchronizes write transactions with `BEGIN IMMEDIATE` and `WAL` journal mode for unhindered concurrent reads.
+
+#### 5.2.2 Gallery Loading & Synchronization
+
+To guarantee real-time vision performance (`> 15 FPS` deployment target), the camera loop never queries SQLite directly:
+
+```
+┌─────────────────────────┐
+│     SQLite Database     │
+│ (persons & embeddings)  │
+└────────────┬────────────┘
+             │
+             │ load_gallery_from_repository()
+             ▼
+┌─────────────────────────┐
+│    InMemoryGallery      │ (Atomic Gallery Replacement)
+└────────────┬────────────┘
+             │
+             ▼
+┌─────────────────────────┐
+│     FaceRecognizer      │ (Real-Time In-Memory Cosine Similarity)
+└─────────────────────────┘
+```
+
+1. **Model & Metadata Filtering**: Loads only embeddings compatible with the configured detector/embedder (`model_name="SFace"`, `model_version="2021dec"`).
+2. **Status & Consent Filtering**: By default, only identities with `status = ACTIVE` and `consent_status = GRANTED` are admitted into the active recognition gallery.
+3. **Atomic Replacement**: A fresh `InMemoryGallery` is constructed in the background before assignment to `FaceRecognizer`, ensuring lock-free, zero-downtime gallery updates.
+
 ### 5.3 Shared Contracts
+
 
 - Type-safe, versioned Pydantic models defining:
   - Identity and detection events (`PersonSeen`, `PersonIdentified`, `PersonLeft`).
   - Conversation payloads (`UserUtterance`, `SystemResponse`).
   - Actuation and robot commands (`LookAt`, `Speak`, `SetExpression`).
+
 
 ---
 
