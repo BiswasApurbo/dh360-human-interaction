@@ -285,6 +285,42 @@ To guarantee real-time vision performance (`> 15 FPS` deployment target), the ca
 2. **Status & Consent Filtering**: By default, only identities with `status = ACTIVE` and `consent_status = GRANTED` are admitted into the active recognition gallery.
 3. **Atomic Replacement**: A fresh `InMemoryGallery` is constructed in the background before assignment to `FaceRecognizer`, ensuring lock-free, zero-downtime gallery updates.
 
+#### 5.2.3 Person Lifecycle Management & Biometric Operations
+
+The `PersonService` provides complete lifecycle operations ensuring strict privacy boundaries and referential integrity:
+
+```
+┌───────────────────────────────────────────────────────────────────────────┐
+│                          Person Lifecycle Operations                      │
+├──────────────────┬────────────────────────────────────────────────────────┤
+│ Operation        │ Semantics & Safety Behavior                            │
+├──────────────────┼────────────────────────────────────────────────────────┤
+│ View / List      │ Returns sanitized PersonProfile models with embedding  │
+│                  │ counts and metadata. Raw vectors are never exposed.    │
+├──────────────────┼────────────────────────────────────────────────────────┤
+│ Edit Profile     │ Updates basic demographics (name, preferred name,      │
+│                  │ notes, status). Preserves original consent timestamp.  │
+├──────────────────┼────────────────────────────────────────────────────────┤
+│ ADD_SAMPLES      │ Appends new camera captures to existing person.        │
+│                  │ Rejects duplicates vs in-session AND stored vectors.   │
+├──────────────────┼────────────────────────────────────────────────────────┤
+│ REPLACE          │ Staged replacement: captures new batch in memory.      │
+│ (Re-register)    │ Atomically replaces old records on commit; if aborted, │
+│                  │ old active biometric records remain 100% intact.       │
+├──────────────────┼────────────────────────────────────────────────────────┤
+│ Delete           │ Transactionally removes person; SQLite ON DELETE       │
+│                  │ CASCADE wipes embeddings; automatically reloads the   │
+│                  │ recognition gallery and invalidates active tracks.     │
+└──────────────────┴────────────────────────────────────────────────────────┘
+```
+
+- **Privacy Boundary**: `PersonProfile` and `EmbeddingMetadata` provide user-facing views containing counts and metadata. Raw binary BLOBs and float32 embedding vectors are strictly internal to the database repository and in-memory gallery.
+- **Explicit Re-registration Modes**:
+  - `EnrollmentMode.ADD_SAMPLES`: Pre-loads existing stored embeddings for the subject and deduplicates incoming camera samples against both the active session buffer and existing stored vectors (cosine similarity $\ge 0.95$ rejected).
+  - `EnrollmentMode.REPLACE`: Collects and validates candidate samples in-memory without deleting pre-existing database records. On explicit commit, executes `SQLitePersonRepository.replace_embeddings_for_person()` within an atomic SQLite transaction (`DELETE` old + `INSERT` new batch). If the session fails or is cancelled, old embeddings are preserved completely intact.
+- **Biometric Reset**: `delete_person_embeddings()` permits clearing biometric data (face vectors) without deleting the user's demographic record.
+- **Cascade Deletion & Active Track Invalidation**: Calling `delete_person(person_id, recognizer, identity_manager)` transactionally removes the person from SQLite (which cascades to all associated embeddings), reloads `FaceRecognizer` gallery, and invokes `IdentityStateManager.invalidate_person(person_id)`, transitioning any matching active camera tracks immediately to `UNREGISTERED` and resetting their observation history.
+
 ### 5.3 Shared Contracts
 
 

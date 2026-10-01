@@ -35,6 +35,13 @@ from dh360_hi.vision.recognition import FaceRecognizer
 logger = logging.getLogger(__name__)
 
 
+class EnrollmentMode(StrEnum):
+    """Operation mode for face enrollment/re-registration."""
+
+    ADD_SAMPLES = "add_samples"  # Append new diverse face samples to existing enrollment
+    REPLACE = "replace"  # Atomically replace all existing embeddings with new batch
+
+
 class EnrollmentState(StrEnum):
     """Lifecycle states of an enrollment session."""
 
@@ -106,8 +113,10 @@ class _ActiveSessionData:
     enrollment_batch_id: str
     person_id: str
     display_name: str
+    mode: EnrollmentMode = EnrollmentMode.ADD_SAMPLES
     state: EnrollmentState = EnrollmentState.COLLECTING
     samples: list[EnrollmentSample] = field(default_factory=list)
+    existing_embeddings: list[np.ndarray] = field(default_factory=list)
     attempts: int = 0
     start_time: float = field(default_factory=time.monotonic)
     last_sample_time: float = 0.0
@@ -124,6 +133,7 @@ class EnrollmentProgress:
     enrollment_batch_id: str
     person_id: str
     display_name: str
+    mode: EnrollmentMode
     state: EnrollmentState
     samples_collected: int
     target_samples: int
@@ -144,6 +154,7 @@ class EnrollmentResult:
     enrollment_batch_id: str
     person_id: str
     display_name: str
+    mode: EnrollmentMode
     is_success: bool
     state: EnrollmentState
     samples_enrolled: int
@@ -157,8 +168,13 @@ class BaseFaceEnrollment(ABC):
     """Abstract interface for operator-controlled face enrollment."""
 
     @abstractmethod
-    def start_session(self, person_id: str) -> EnrollmentProgress:
+    def start_session(
+        self,
+        person_id: str,
+        mode: EnrollmentMode | str = EnrollmentMode.ADD_SAMPLES,
+    ) -> EnrollmentProgress:
         """Start a new enrollment session for a consented person."""
+        ...
 
     @abstractmethod
     def process_frame(self, frame: Frame) -> EnrollmentProgress:
@@ -230,6 +246,7 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             enrollment_batch_id=s.enrollment_batch_id,
             person_id=s.person_id,
             display_name=s.display_name,
+            mode=s.mode,
             state=s.state,
             samples_collected=len(s.samples),
             target_samples=self._config.target_samples,
@@ -242,7 +259,11 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             is_complete=s.state == EnrollmentState.COMPLETED,
         )
 
-    def start_session(self, person_id: str) -> EnrollmentProgress:
+    def start_session(
+        self,
+        person_id: str,
+        mode: EnrollmentMode | str = EnrollmentMode.ADD_SAMPLES,
+    ) -> EnrollmentProgress:
         """Start a new enrollment session for an existing, consented person."""
         if self._session is not None and self._session.state == EnrollmentState.COLLECTING:
             msg = (
@@ -250,6 +271,12 @@ class FaceEnrollmentController(BaseFaceEnrollment):
                 f"is already active for person '{self._session.person_id}'"
             )
             raise ValidationError(msg)
+
+        try:
+            mode_enum = EnrollmentMode(mode) if isinstance(mode, str) else mode
+        except ValueError as exc:
+            msg = f"Invalid enrollment mode: '{mode}'"
+            raise ValidationError(msg) from exc
 
         # Verify person exists in PersonService
         person = self._person_service.get_person(person_id)
@@ -271,19 +298,32 @@ class FaceEnrollmentController(BaseFaceEnrollment):
         session_id = str(uuid.uuid4())
         batch_id = str(uuid.uuid4())
 
+        existing_vectors: list[np.ndarray] = []
+        if mode_enum == EnrollmentMode.ADD_SAMPLES:
+            try:
+                existing_records = self._person_service.repository.get_embeddings_for_person(
+                    person.person_id
+                )
+                existing_vectors = [r.vector for r in existing_records]
+            except Exception as exc:
+                logger.warning("Could not preload existing embeddings for duplicate check: %s", exc)
+
         self._session = _ActiveSessionData(
             session_id=session_id,
             enrollment_batch_id=batch_id,
             person_id=person.person_id,
             display_name=person.preferred_name or person.display_name,
+            mode=mode_enum,
             state=EnrollmentState.COLLECTING,
+            existing_embeddings=existing_vectors,
         )
 
         logger.info(
-            "Started face enrollment session %s for person '%s' (%s), batch %s",
+            "Started face enrollment session %s for person '%s' (%s), mode %s, batch %s",
             session_id,
             person.person_id,
             person.display_name,
+            mode_enum.value,
             batch_id,
         )
         return self._build_progress(self._session)
@@ -392,13 +432,28 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             s.rejection_counts[SampleRejectionReason.DUPLICATE_SAMPLE.value] += 1
             return self._build_progress(s)
 
+        # Check against existing stored embeddings in ADD_SAMPLES mode
+        if s.mode == EnrollmentMode.ADD_SAMPLES and s.existing_embeddings:
+            for exist_vec in s.existing_embeddings:
+                sim = compute_cosine_similarity(candidate_vector, exist_vec)
+                if sim >= self._config.duplicate_similarity_threshold:
+                    s.last_rejection_reason = SampleRejectionReason.DUPLICATE_SAMPLE
+                    s.last_rejection_details = (
+                        f"Sample similarity {sim:.4f} exceeds duplicate threshold "
+                        f"{self._config.duplicate_similarity_threshold:.2f} "
+                        "with existing enrolled sample"
+                    )
+                    s.rejection_counts[SampleRejectionReason.DUPLICATE_SAMPLE.value] += 1
+                    return self._build_progress(s)
+
+        # Check against session samples in current batch
         for existing_sample in s.samples:
             sim = compute_cosine_similarity(candidate_vector, existing_sample.embedding)
             if sim >= self._config.duplicate_similarity_threshold:
                 s.last_rejection_reason = SampleRejectionReason.DUPLICATE_SAMPLE
                 s.last_rejection_details = (
                     f"Sample similarity {sim:.4f} exceeds duplicate threshold "
-                    f"{self._config.duplicate_similarity_threshold:.2f}"
+                    f"{self._config.duplicate_similarity_threshold:.2f} with session sample"
                 )
                 s.rejection_counts[SampleRejectionReason.DUPLICATE_SAMPLE.value] += 1
                 return self._build_progress(s)
@@ -470,6 +525,7 @@ class FaceEnrollmentController(BaseFaceEnrollment):
                 enrollment_batch_id=s.enrollment_batch_id,
                 person_id=s.person_id,
                 display_name=s.display_name,
+                mode=s.mode,
                 is_success=False,
                 state=EnrollmentState.FAILED,
                 samples_enrolled=0,
@@ -502,7 +558,12 @@ class FaceEnrollmentController(BaseFaceEnrollment):
 
         # 3. Transactional Persistence via Repository
         try:
-            persisted = self._person_service.repository.add_embeddings(records)
+            if s.mode == EnrollmentMode.REPLACE:
+                persisted = self._person_service.repository.replace_embeddings_for_person(
+                    s.person_id, records
+                )
+            else:
+                persisted = self._person_service.repository.add_embeddings(records)
             persisted_ids = [r.embedding_id for r in persisted]
         except Exception as exc:
             s.state = EnrollmentState.FAILED
@@ -513,6 +574,7 @@ class FaceEnrollmentController(BaseFaceEnrollment):
                 enrollment_batch_id=s.enrollment_batch_id,
                 person_id=s.person_id,
                 display_name=s.display_name,
+                mode=s.mode,
                 is_success=False,
                 state=EnrollmentState.FAILED,
                 samples_enrolled=0,
@@ -541,6 +603,7 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             enrollment_batch_id=s.enrollment_batch_id,
             person_id=s.person_id,
             display_name=s.display_name,
+            mode=s.mode,
             is_success=True,
             state=EnrollmentState.COMPLETED,
             samples_enrolled=len(persisted_ids),
@@ -551,10 +614,11 @@ class FaceEnrollmentController(BaseFaceEnrollment):
         )
 
         logger.info(
-            "Successfully enrolled person '%s' (%s) with %d samples (batch %s)",
+            "Successfully enrolled person '%s' (%s) with %d samples in %s mode (batch %s)",
             s.person_id,
             s.display_name,
             len(persisted_ids),
+            s.mode.value,
             s.enrollment_batch_id,
         )
         self._session = None

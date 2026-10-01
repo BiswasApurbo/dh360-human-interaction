@@ -15,6 +15,7 @@ from dh360_hi.vision.detector import BaseFaceDetector, DetectionResult, FaceDete
 from dh360_hi.vision.embedder import BaseFaceEmbedder, EmbeddingResult, normalize_l2
 from dh360_hi.vision.enrollment import (
     EnrollmentConfig,
+    EnrollmentMode,
     EnrollmentState,
     FaceEnrollmentController,
     SampleRejectionReason,
@@ -398,3 +399,147 @@ def test_successful_enrollment_and_gallery_auto_reload(mock_pipeline: tuple) -> 
     gallery_entry = recognizer.gallery.get_entry(person.person_id)
     assert gallery_entry is not None
     assert len(gallery_entry.embeddings) == 5
+
+
+def test_enrollment_add_samples_mode_and_existing_duplicate_protection(
+    mock_pipeline: tuple,
+) -> None:
+    """Test ADD_SAMPLES mode rejects samples that duplicate already-persisted embeddings."""
+    detector, quality_gate, _, embedder, service, controller = mock_pipeline
+    person = service.create_person("David Smith")
+    dummy_frame = Frame(image=np.zeros((480, 640, 3), dtype=np.uint8), frame_id=1, timestamp=0.0)
+
+    detector.set_detections([FaceDetection(bbox=(10.0, 10.0, 50.0, 50.0), confidence=0.95)])
+    quality_gate.set_acceptable(True)
+
+    # 1. Pre-populate 1 existing embedding in DB
+    existing_vec = normalize_l2(np.ones(128, dtype=np.float32))
+    service.add_person_embedding(person.person_id, existing_vec)
+    assert service.repository.count_embeddings(person.person_id) == 1
+
+    # 2. Start ADD_SAMPLES session
+    controller.start_session(person.person_id, mode=EnrollmentMode.ADD_SAMPLES)
+
+    # 3. Present frame matching existing embedding -> Rejection
+    embedder.set_vector(existing_vec)
+    prog = controller.process_frame(dummy_frame)
+    assert prog.samples_collected == 0
+    assert prog.last_rejection_reason == SampleRejectionReason.DUPLICATE_SAMPLE
+    assert "existing enrolled sample" in str(prog.last_rejection_details)
+
+    # 4. Present 3 diverse new vectors
+    rng = np.random.default_rng(seed=456)
+    for _ in range(3):
+        vec = normalize_l2(rng.standard_normal(128).astype(np.float32))
+        embedder.set_vector(vec)
+        controller.process_frame(dummy_frame)
+
+    assert controller.current_progress.samples_collected == 3  # type: ignore[union-attr]
+
+    # 5. Commit session -> total embeddings in DB should be 1 + 3 = 4
+    res = controller.commit_session()
+    assert res.is_success is True
+    assert res.samples_enrolled == 3
+    assert service.repository.count_embeddings(person.person_id) == 4
+
+
+def test_staged_replacement_success_and_gallery_replacement(mock_pipeline: tuple) -> None:
+    """Test REPLACE mode replaces old embeddings atomically and updates recognizer gallery."""
+    detector, quality_gate, _, embedder, service, controller = mock_pipeline
+    recognizer = FaceRecognizer()
+    controller._recognizer = recognizer
+
+    person = service.create_person("Old Enrollment Person")
+    dummy_frame = Frame(image=np.zeros((480, 640, 3), dtype=np.uint8), frame_id=1, timestamp=0.0)
+    detector.set_detections([FaceDetection(bbox=(10.0, 10.0, 50.0, 50.0), confidence=0.95)])
+    quality_gate.set_acceptable(True)
+
+    # 1. Old enrollment (3 embeddings)
+    for _ in range(3):
+        service.add_person_embedding(
+            person.person_id,
+            normalize_l2(np.random.randn(128).astype(np.float32)),
+        )
+    recognizer._gallery = service.load_recognition_gallery()
+    assert service.repository.count_embeddings(person.person_id) == 3
+    assert len(recognizer.gallery.get_entry(person.person_id).embeddings) == 3
+
+    # 2. Start REPLACE session
+    prog = controller.start_session(person.person_id, mode=EnrollmentMode.REPLACE)
+    assert prog.mode == EnrollmentMode.REPLACE
+
+    # Old embeddings remain intact while collecting
+    assert service.repository.count_embeddings(person.person_id) == 3
+
+    # 3. Collect 4 diverse new samples
+    rng = np.random.default_rng(seed=789)
+    new_vectors = []
+    for _ in range(4):
+        vec = normalize_l2(rng.standard_normal(128).astype(np.float32))
+        new_vectors.append(vec)
+        embedder.set_vector(vec)
+        controller.process_frame(dummy_frame)
+
+    # Old embeddings still intact in DB before commit
+    assert service.repository.count_embeddings(person.person_id) == 3
+
+    # 4. Commit replacement
+    res = controller.commit_session()
+    assert res.is_success is True
+    assert res.samples_enrolled == 4
+    assert res.mode == EnrollmentMode.REPLACE
+
+    # Verify old embeddings deleted and only new 4 remain
+    assert service.repository.count_embeddings(person.person_id) == 4
+    records = service.repository.get_embeddings_for_person(person.person_id)
+    assert len(records) == 4
+    assert {r.enrollment_batch_id for r in records} == {res.enrollment_batch_id}
+
+    # Verify gallery updated
+    gallery_entry = recognizer.gallery.get_entry(person.person_id)
+    assert gallery_entry is not None
+    assert len(gallery_entry.embeddings) == 4
+
+
+def test_staged_replacement_failure_preserves_old_enrollment(mock_pipeline: tuple) -> None:
+    """Test failed/cancelled replacement preserves old enrollment completely intact."""
+    detector, quality_gate, _, embedder, service, controller = mock_pipeline
+    person = service.create_person("Protected Person")
+    dummy_frame = Frame(image=np.zeros((480, 640, 3), dtype=np.uint8), frame_id=1, timestamp=0.0)
+    detector.set_detections([FaceDetection(bbox=(10.0, 10.0, 50.0, 50.0), confidence=0.95)])
+    quality_gate.set_acceptable(True)
+
+    # 1. Existing enrollment of 4 samples
+    for _ in range(4):
+        service.add_person_embedding(
+            person.person_id,
+            normalize_l2(np.random.randn(128).astype(np.float32)),
+        )
+    initial_records = service.repository.get_embeddings_for_person(person.person_id)
+    initial_ids = {r.embedding_id for r in initial_records}
+    assert len(initial_ids) == 4
+
+    # 2. Start REPLACE session and collect insufficient samples (< 3 minimum)
+    controller.start_session(person.person_id, mode=EnrollmentMode.REPLACE)
+    embedder.set_vector(normalize_l2(np.random.randn(128).astype(np.float32)))
+    controller.process_frame(dummy_frame)  # only 1 sample
+
+    # 3. Commit fails
+    res = controller.commit_session()
+    assert res.is_success is False
+    assert res.state == EnrollmentState.FAILED
+
+    # 4. Confirm original 4 embeddings are completely intact
+    after_records = service.repository.get_embeddings_for_person(person.person_id)
+    after_ids = {r.embedding_id for r in after_records}
+    assert after_ids == initial_ids
+    assert len(after_records) == 4
+
+
+def test_invalid_enrollment_mode_raises_validation_error(mock_pipeline: tuple) -> None:
+    """Test that passing an unrecognized mode string raises ValidationError."""
+    _, _, _, _, service, controller = mock_pipeline
+    person = service.create_person("Test Person")
+
+    with pytest.raises(ValidationError, match="Invalid enrollment mode"):
+        controller.start_session(person.person_id, mode="unknown_mode")  # type: ignore[arg-type]

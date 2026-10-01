@@ -32,6 +32,7 @@ from dh360_hi.vision.embedder import (
 from dh360_hi.vision.enrollment import (
     BaseFaceEnrollment,
     EnrollmentConfig,
+    EnrollmentMode,
     EnrollmentProgress,
     EnrollmentResult,
     EnrollmentSample,
@@ -105,6 +106,7 @@ __all__ = [
     "DetectionResult",
     "EmbeddingResult",
     "EnrollmentConfig",
+    "EnrollmentMode",
     "EnrollmentProgress",
     "EnrollmentResult",
     "EnrollmentSample",

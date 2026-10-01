@@ -233,6 +233,33 @@ class IdentityStateManager:
 
         return pruned
 
+    def invalidate_person(self, person_id: str, frame_id: int = 0) -> list[int]:
+        """Invalidate identity state for any active tracks currently associated with person_id.
+
+        Args:
+            person_id: The person ID being deleted or whose biometrics were removed.
+            frame_id: Optional current frame index.
+
+        Returns:
+            List of track IDs whose identity state was invalidated.
+        """
+        invalidated_tracks: list[int] = []
+        for track_id, track_state in self._tracks.items():
+            has_person_id = track_state.current_person_id == person_id
+            has_in_history = any(
+                obs.person_id == person_id for obs in track_state.recent_observations
+            )
+            if has_person_id or has_in_history:
+                track_state.current_person_id = None
+                track_state.current_display_name = None
+                track_state.confidence_score = 0.0
+                track_state.consecutive_conflicts = 0
+                track_state.recent_observations.clear()
+                self._transition_to(track_state, IdentityState.UNREGISTERED, frame_id)
+                invalidated_tracks.append(track_id)
+
+        return invalidated_tracks
+
     def reset(self) -> None:
         """Reset all track identity states."""
         self._tracks.clear()

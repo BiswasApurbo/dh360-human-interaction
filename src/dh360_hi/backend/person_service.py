@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -21,6 +22,10 @@ from dh360_hi.backend.models import (
 )
 from dh360_hi.backend.repository import BasePersonRepository
 from dh360_hi.vision.recognition import InMemoryGallery
+
+if TYPE_CHECKING:
+    from dh360_hi.vision.identity_state import IdentityStateManager
+    from dh360_hi.vision.recognition import FaceRecognizer
 
 
 class BasePersonService(ABC):
@@ -64,7 +69,12 @@ class BasePersonService(ABC):
         """Update an existing person profile."""
 
     @abstractmethod
-    def delete_person(self, person_id: str) -> bool:
+    def delete_person(
+        self,
+        person_id: str,
+        recognizer: FaceRecognizer | None = None,
+        identity_manager: IdentityStateManager | None = None,
+    ) -> bool:
         """Delete a person and cascade delete their stored embeddings."""
 
     @abstractmethod
@@ -81,12 +91,34 @@ class BasePersonService(ABC):
         """Store a new face embedding vector for a person and return its metadata."""
 
     @abstractmethod
+    def replace_person_embeddings(
+        self,
+        person_id: str,
+        embeddings: list[np.ndarray],
+        model_name: str = "SFace",
+        model_version: str = "2021dec",
+        quality_scores: list[float | None] | None = None,
+        enrollment_batch_id: str | None = None,
+        recognizer: FaceRecognizer | None = None,
+    ) -> list[EmbeddingMetadata]:
+        """Atomically replace all face embeddings for a person with a new set."""
+
+    @abstractmethod
     def get_person_embeddings(self, person_id: str) -> list[EmbeddingMetadata]:
         """Retrieve metadata for all embeddings associated with a person."""
 
     @abstractmethod
     def delete_person_embedding(self, embedding_id: str) -> bool:
         """Delete a specific embedding record by ID."""
+
+    @abstractmethod
+    def delete_person_embeddings(
+        self,
+        person_id: str,
+        recognizer: FaceRecognizer | None = None,
+        identity_manager: IdentityStateManager | None = None,
+    ) -> int:
+        """Delete all face embeddings associated with a person while retaining profile."""
 
     @abstractmethod
     def load_recognition_gallery(
@@ -238,9 +270,21 @@ class PersonService(BasePersonService):
         persisted = self._repo.update_person(updated_rec)
         return self._record_to_profile(persisted)
 
-    def delete_person(self, person_id: str) -> bool:
+    def delete_person(
+        self,
+        person_id: str,
+        recognizer: FaceRecognizer | None = None,
+        identity_manager: IdentityStateManager | None = None,
+    ) -> bool:
         """Delete a person and cascade delete their stored embeddings."""
-        return self._repo.delete_person(person_id)
+        success = self._repo.delete_person(person_id)
+        if success:
+            if recognizer is not None:
+                new_gallery = self.load_recognition_gallery()
+                recognizer._gallery = new_gallery
+            if identity_manager is not None and hasattr(identity_manager, "invalidate_person"):
+                identity_manager.invalidate_person(person_id)
+        return success
 
     def add_person_embedding(
         self,
@@ -288,6 +332,69 @@ class PersonService(BasePersonService):
             created_at=persisted.created_at,
         )
 
+    def replace_person_embeddings(
+        self,
+        person_id: str,
+        embeddings: list[np.ndarray],
+        model_name: str = "SFace",
+        model_version: str = "2021dec",
+        quality_scores: list[float | None] | None = None,
+        enrollment_batch_id: str | None = None,
+        recognizer: FaceRecognizer | None = None,
+    ) -> list[EmbeddingMetadata]:
+        """Atomically replace all face embeddings for a person with a new set."""
+        existing = self._repo.get_person(person_id)
+        if existing is None:
+            msg = f"Cannot replace embeddings: person '{person_id}' not found"
+            raise PersonNotFoundError(msg)
+
+        batch_id = enrollment_batch_id or str(uuid.uuid4())
+        now_str = utc_now_iso()
+        records: list[EmbeddingRecord] = []
+        for idx, emb in enumerate(embeddings):
+            eid = str(uuid.uuid4())
+            blob = vector_to_blob(emb, expected_dim=128)
+            q_score = (
+                quality_scores[idx]
+                if quality_scores is not None and idx < len(quality_scores)
+                else None
+            )
+            records.append(
+                EmbeddingRecord(
+                    embedding_id=eid,
+                    person_id=existing.person_id,
+                    embedding=blob,
+                    dimension=128,
+                    model_name=model_name,
+                    model_version=model_version,
+                    quality_score=q_score,
+                    enrollment_batch_id=batch_id,
+                    created_at=now_str,
+                )
+            )
+
+        persisted = self._repo.replace_embeddings_for_person(existing.person_id, records)
+        if recognizer is not None:
+            new_gallery = self.load_recognition_gallery(
+                model_name=model_name,
+                model_version=model_version,
+            )
+            recognizer._gallery = new_gallery
+
+        return [
+            EmbeddingMetadata(
+                embedding_id=r.embedding_id,
+                person_id=r.person_id,
+                dimension=r.dimension,
+                model_name=r.model_name,
+                model_version=r.model_version,
+                quality_score=r.quality_score,
+                enrollment_batch_id=r.enrollment_batch_id,
+                created_at=r.created_at,
+            )
+            for r in persisted
+        ]
+
     def get_person_embeddings(self, person_id: str) -> list[EmbeddingMetadata]:
         """Retrieve metadata for all embeddings associated with a person."""
         existing = self._repo.get_person(person_id)
@@ -313,6 +420,26 @@ class PersonService(BasePersonService):
     def delete_person_embedding(self, embedding_id: str) -> bool:
         """Delete a specific embedding record by ID."""
         return self._repo.delete_embedding(embedding_id)
+
+    def delete_person_embeddings(
+        self,
+        person_id: str,
+        recognizer: FaceRecognizer | None = None,
+        identity_manager: IdentityStateManager | None = None,
+    ) -> int:
+        """Delete all face embeddings for a person, syncing gallery and identity state."""
+        existing = self._repo.get_person(person_id)
+        if existing is None:
+            msg = f"Person '{person_id}' not found"
+            raise PersonNotFoundError(msg)
+
+        count = self._repo.delete_embeddings_for_person(person_id)
+        if recognizer is not None:
+            new_gallery = self.load_recognition_gallery()
+            recognizer._gallery = new_gallery
+        if identity_manager is not None and hasattr(identity_manager, "invalidate_person"):
+            identity_manager.invalidate_person(person_id)
+        return count
 
     def load_recognition_gallery(
         self,

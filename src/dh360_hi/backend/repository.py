@@ -77,6 +77,14 @@ class BasePersonRepository(ABC):
         """Delete all face embeddings associated with a specific person ID."""
 
     @abstractmethod
+    def replace_embeddings_for_person(
+        self,
+        person_id: str,
+        embeddings: list[EmbeddingRecord],
+    ) -> list[EmbeddingRecord]:
+        """Atomically delete old embeddings for a person and persist a new batch."""
+
+    @abstractmethod
     def count_persons(self, status: PersonStatus | None = None) -> int:
         """Count total person records in the repository."""
 
@@ -352,6 +360,56 @@ class SQLitePersonRepository(BasePersonRepository):
         with self._db.transaction() as cur:
             cur.execute(query, (valid_id,))
             return int(cur.rowcount)
+
+    def replace_embeddings_for_person(
+        self,
+        person_id: str,
+        embeddings: list[EmbeddingRecord],
+    ) -> list[EmbeddingRecord]:
+        """Atomically delete old embeddings for a person and persist a new batch."""
+        valid_id = validate_uuid(person_id, "person_id")
+        person = self.get_person(valid_id)
+        if person is None:
+            msg = f"Cannot replace embeddings: person '{valid_id}' not found"
+            raise PersonNotFoundError(msg)
+
+        delete_query = "DELETE FROM face_embeddings WHERE person_id = ?;"
+        insert_query = """
+        INSERT INTO face_embeddings (
+            embedding_id, person_id, embedding, dimension,
+            model_name, model_version, quality_score, enrollment_batch_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """
+        payload = [
+            (
+                e.embedding_id,
+                e.person_id,
+                e.embedding,
+                e.dimension,
+                e.model_name,
+                e.model_version,
+                e.quality_score,
+                e.enrollment_batch_id,
+                e.created_at,
+            )
+            for e in embeddings
+        ]
+        try:
+            with self._db.transaction() as cur:
+                cur.execute(delete_query, (valid_id,))
+                if payload:
+                    cur.executemany(insert_query, payload)
+        except sqlite3.IntegrityError as exc:
+            err_msg = str(exc).lower()
+            if "foreign key" in err_msg:
+                msg = f"Foreign key violation replacing embeddings for person '{valid_id}': {exc}"
+                raise ForeignKeyViolationError(msg) from exc
+            if "unique" in err_msg or "primary key" in err_msg:
+                msg = f"Duplicate embedding key violation in replacement batch: {exc}"
+                raise DuplicateEmbeddingError(msg) from exc
+            raise
+
+        return embeddings
 
     def count_persons(self, status: PersonStatus | None = None) -> int:
         """Count total person records in the repository."""
