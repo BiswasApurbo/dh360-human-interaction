@@ -484,6 +484,44 @@ All events are frozen, immutable dataclasses carrying only domain-level semantic
    - **Departure**: `PersonLeftEvent` → `SessionEndedEvent`
    - **Mid-Session Identity Transition**: `PersonLostIdentityEvent` → `PersonIdentifiedEvent`
 
+### 5.4 Edge Interaction Runtime & Continuous Frame Pump (`dh360_hi.edge.runtime`)
+
+The `EdgeInteractionRuntime` is the top-level orchestration component responsible for the continuous execution loop and operational supervision of the complete edge pipeline:
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                             EdgeInteractionRuntime                               │
+│                                                                                  │
+│   ┌───────────────┐     ┌──────────────────────────┐     ┌───────────────────┐   │
+│   │  FrameSource  │ ──► │ TwoRatePerceptionPipeline│ ──► │  SessionManager   │   │
+│   └───────────────┘     └──────────────────────────┘     └─────────┬─────────┘   │
+│                                                                    │             │
+│                                                                    ▼ list[Event] │
+│                                                          ┌───────────────────┐   │
+│                                                          │     EventBus      │   │
+│                                                          └───────────────────┘   │
+└──────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.4.1 Core Responsibilities & Dependency Ownership
+
+1. **Top-Level Lifecycle Supervision**: Manages continuous frame acquisition, perception execution, session state progression, and domain event dispatch under thread-safe state machine control (`STOPPED`, `RUNNING`, `PAUSED`, `ERROR`).
+2. **Explicit Dependency Ownership**:
+   - Manages the underlying `FrameSource` lifecycle (`open()` on start, `release()` on stop).
+   - Manages the `TwoRatePerceptionPipeline` lifecycle (`pipeline.start()` / `pipeline.stop(timeout)`), ensuring clean shutdown of the background `BoundedEmbeddingWorker` thread.
+   - Forwards perception results to `SessionManager` and ensures any returned domain events are published to `EventBus`.
+3. **Execution Modes**:
+   - **Asynchronous Mode (`start(async_thread=True)`)**: Launches a dedicated background frame pump thread (`EdgeInteractionRuntimeThread`) executing continuous acquisition, processing, and event emission.
+   - **Synchronous Mode (`start(async_thread=False)`)**: Executes the continuous loop on the caller thread until stream termination or external stop.
+   - **Single-Step Execution (`step_once()`)**: Executes exactly one complete deterministic frame-to-event cycle, returning `(TwoRateFrameResult, list[BaseEvent])` for testing, diagnostics, and headless simulation.
+
+#### 5.4.2 Constant-Rate FPS Pacing & Error Isolation
+
+- **FPS Pacing**: Regulates continuous frame pump rate toward `target_fps` using monotonic deadlines. If frame processing falls behind schedule, deadlines are dynamically reset to avoid burst processing or lagging frame cascades.
+- **Transient Error Resilience**: Individual frame processing exceptions (e.g., corrupted frame buffers, temporary driver glitches) are logged and recorded without terminating the runtime loop.
+- **Consecutive Error Threshold**: If consecutive errors exceed `max_consecutive_frame_errors` (default: 10), the runtime transitions safely to `RuntimeState.ERROR`, recording the root cause for telemetry and external supervision.
+- **Operational Metrics Snapshot (`RuntimeMetrics`)**: Exposes thread-safe immutable telemetry including `frames_processed`, `current_fps` (rolling window), `average_latency_ms`, `last_error`, and `uptime_seconds`.
+
 ---
 
 ## 6. Integration with Digital Health 360
