@@ -168,6 +168,49 @@ To prevent identity flickering caused by momentary face occlusions, lighting tra
   - `LOST`: Track has been missing for more than `max_missed_frames_to_lost` (default: 30 frames).
 - **Hysteresis Conflict Patience**: Once a track reaches `IDENTIFIED`, isolated conflicting observations (e.g. single blurry frame) do not immediately flip the state. The state machine requires sustained conflicting observations (`hysteresis_patience_observations >= 4`) before demoting the identity to `UNCERTAIN`.
 
+#### 5.1.3 Camera-Based Face Enrollment Subsystem
+
+The enrollment subsystem (`FaceEnrollmentController`, `BaseFaceEnrollment`) provides a safe, operator-controlled workflow capturing multiple high-quality face samples from the robot camera and persisting their embeddings without per-user model fine-tuning:
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│  Camera Frame   │────►│ Face Detection   │────►│ Single Dominant  │
+└─────────────────┘     │     (YuNet)      │     │    Face Check    │
+                        └──────────────────┘     └────────┬─────────┘
+                                                          │ Exactly 1 face
+                                                          ▼
+┌─────────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│ SFace Embedding │◄────│  Face Alignment  │◄────│ FaceQualityGate  │
+│ (128-D float32) │     │ (112x112 affine) │     │ (Confidence, Size│
+└────────┬────────┘     └──────────────────┘     │  Sharpness, Pose)│
+         │                                       └──────────────────┘
+         ▼
+┌──────────────────────────────────────────┐
+│        Diversity & Duplicate Check       │
+│ (Cosine Similarity < 0.95 vs prev saved) │
+└────────┬─────────────────────────────────┘
+         │ Passed
+         ▼
+┌──────────────────────────────────────────┐
+│     In-Memory Session Sample Buffer      │
+│         (5–10 Samples Target)            │
+└────────┬─────────────────────────────────┘
+         │ Operator Commit (>= 5 samples)
+         ▼
+┌──────────────────────────────────────────┐
+│   Transactional Batch Persistence &      │
+│   Atomic FaceRecognizer Gallery Reload   │
+└──────────────────────────────────────────┘
+```
+
+- **Single Dominant Face Lock**: Requires strictly one detected face in the frame (`FaceDetection`). Frames with zero faces (`NO_FACE_DETECTED`) or multiple faces (`MULTIPLE_FACES_DETECTED`) are rejected to avoid accidental multi-subject blending.
+- **Strict Quality Gating**: Every candidate face must pass `FaceQualityGate` thresholds (confidence $\ge 0.80$, bounding box $\ge 80\times 80$, sharpness $\ge 50.0$, roll $\le 15^\circ$, yaw $\le 2.0$).
+- **Diversity & Duplicate Protection**: Consecutive camera frames often have nearly identical poses and expressions. The controller compares the candidate embedding against all previously buffered session embeddings; samples with cosine similarity $\ge 0.95$ are rejected (`DUPLICATE_SAMPLE`) to enforce visual diversity (angles, expressions, subtle lighting variations).
+- **Consent & Active Status Validation**: Starting a session verifies with `PersonService` that the person exists, is `ACTIVE`, and has `consent_status == GRANTED`.
+- **Single Active Session Lock**: Only one enrollment session may be open at any given time, preventing concurrency hazards on the shared camera feed.
+- **Transactional Batch Persistence**: On commit, all collected samples are persisted within a single transaction with a shared `enrollment_batch_id`. If the session is cancelled or aborted prior to reaching `minimum_samples` (default: 5), zero partial records are committed to the database.
+- **Atomic Gallery Synchronization**: Immediately upon successful transactional commit, the controller triggers `PersonService.load_recognition_gallery()`, atomically swapping the active `InMemoryGallery` in `FaceRecognizer` so the newly enrolled user is recognized instantly without service restarts.
+
 ### 5.2 Backend Components
 
 | Component | Responsibility |

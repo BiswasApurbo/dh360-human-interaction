@@ -1,4 +1,4 @@
-"""Vision pipeline core modules: vision base, quality gate, recognition, and identity states."""
+"""Vision pipeline modules: vision base, quality gate, recognition, identity, enrollment."""
 
 from dh360_hi.vision.aligner import (
     CANONICAL_5_PTS_112,
@@ -28,6 +28,16 @@ from dh360_hi.vision.embedder import (
     compute_cosine_distance,
     compute_cosine_similarity,
     normalize_l2,
+)
+from dh360_hi.vision.enrollment import (
+    BaseFaceEnrollment,
+    EnrollmentConfig,
+    EnrollmentProgress,
+    EnrollmentResult,
+    EnrollmentSample,
+    EnrollmentState,
+    FaceEnrollmentController,
+    SampleRejectionReason,
 )
 from dh360_hi.vision.evaluation import (
     EvaluationReport,
@@ -87,15 +97,22 @@ __all__ = [
     "BaseFaceAligner",
     "BaseFaceDetector",
     "BaseFaceEmbedder",
+    "BaseFaceEnrollment",
     "BaseFaceQualityGate",
     "BaseFaceRecognizer",
     "BaseFaceTracker",
     "ConfidenceStats",
     "DetectionResult",
     "EmbeddingResult",
+    "EnrollmentConfig",
+    "EnrollmentProgress",
+    "EnrollmentResult",
+    "EnrollmentSample",
+    "EnrollmentState",
     "EvaluationReport",
     "FaceAligner",
     "FaceDetection",
+    "FaceEnrollmentController",
     "FaceLandmarks",
     "FaceQualityGate",
     "FaceQualityMetrics",
@@ -119,6 +136,7 @@ __all__ = [
     "RecognitionOutcome",
     "RecognitionResult",
     "SFaceEmbedder",
+    "SampleRejectionReason",
     "ScoreDistribution",
     "StageTimer",
     "SyntheticFrameSource",

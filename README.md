@@ -15,9 +15,9 @@ The Human Interaction Module is responsible for human perception and dialogue ma
 
 ## 🚀 Current Development Status
 
-- **Current Milestone**: **`M2 — Recognition (Completed M2.1 Tracking, M2.2 Quality Gate, M2.3 Alignment & Embeddings, M2.4 Recognition & Identity State Machine, M2.5a SQLite Schema + Repository + Person Service)`**
+- **Current Milestone**: **`M2 — Recognition (Completed M2.1 Tracking, M2.2 Quality Gate, M2.3 Alignment & Embeddings, M2.4 Recognition & Identity State Machine, M2.5a SQLite Schema + Repository + Person Service, M2.5b Camera-Based Face Enrollment)`**
 - **Status**: Implemented & Verified
-- **Approach**: Built **incrementally** milestone by milestone. Core software foundation (M0), vision base & YuNet detection (M1), modular face tracking (M2.1), face quality gating (M2.2), face alignment + embedding evaluation (M2.3), real-time recognition + identity state machine (M2.4), and SQLite persistence + Person Service (M2.5a) are established. Session supervision, target selection, and backend/robot services will follow incrementally.
+- **Approach**: Built **incrementally** milestone by milestone. Core software foundation (M0), vision base & YuNet detection (M1), modular face tracking (M2.1), face quality gating (M2.2), face alignment + embedding evaluation (M2.3), real-time recognition + identity state machine (M2.4), SQLite persistence + Person Service (M2.5a), and camera-based face enrollment (M2.5b) are established. Session supervision, target selection, and backend/robot services will follow incrementally.
 
 ### Implemented Capabilities
 - **Hardware-Independent Frame Sources**: `FrameSource` interface with `VideoFileFrameSource`, `WebcamFrameSource`, and `SyntheticFrameSource`.
@@ -31,6 +31,7 @@ The Human Interaction Module is responsible for human perception and dialogue ma
 - **SQLite Database Layer & Migrations**: `DatabaseManager` providing connection lifecycle, schema version tracking, thread-safe single-writer locking, foreign key constraints (`PRAGMA foreign_keys = ON;`), and `WAL` journal mode without external ORM dependencies.
 - **SQLite Person & Embedding Repository**: `BasePersonRepository` and `SQLitePersonRepository` providing transactional CRUD operations for person records and binary 128-D float32 embeddings with foreign key cascade deletions.
 - **Person Service Layer**: `BasePersonService` and `PersonService` managing person lifecycle semantics, validation (UUIDs, required names, status and consent enums), and profile abstractions without exposing raw feature vectors.
+- **Camera-Based Face Enrollment**: `BaseFaceEnrollment` and `FaceEnrollmentController` enabling operator-controlled multi-sample face capture (5–10 samples) with single dominant face locking, strict quality filtering, sample diversity deduplication (cosine similarity $< 0.95$), transactional batch persistence, and instant in-memory gallery reloading.
 - **In-Memory Gallery Synchronization**: `load_gallery_from_repository` extracting active, consented, model-compatible embeddings into an isolated `InMemoryGallery` for real-time recognition without database querying on camera frames.
 - **Reproducible Model Acquisition**: `scripts/download_models.py` with SHA-256 cryptographic verification and model cards documentation in `models/MODEL_CARDS.md`.
 - **Monotonic Benchmark Utility**: `PipelineBenchmark` measuring frame count, average/rolling FPS, and latency percentiles (mean, min, p50, p90, p95, p99, max).

@@ -8,7 +8,6 @@ from abc import ABC, abstractmethod
 import numpy as np
 
 from dh360_hi.backend.exceptions import PersonNotFoundError, ValidationError
-from dh360_hi.backend.gallery_loader import load_gallery_from_repository
 from dh360_hi.backend.models import (
     ConsentStatus,
     EmbeddingMetadata,
@@ -26,6 +25,11 @@ from dh360_hi.vision.recognition import InMemoryGallery
 
 class BasePersonService(ABC):
     """Abstract interface for Person management and profile lifecycle services."""
+
+    @property
+    @abstractmethod
+    def repository(self) -> BasePersonRepository:
+        """Underlying persistence repository."""
 
     @abstractmethod
     def create_person(
@@ -318,6 +322,8 @@ class PersonService(BasePersonService):
         require_consent: bool = True,
     ) -> InMemoryGallery:
         """Load an isolated InMemoryGallery from persisted database records."""
+        from dh360_hi.backend.gallery_loader import load_gallery_from_repository
+
         return load_gallery_from_repository(
             repository=self._repo,
             model_name=model_name,
