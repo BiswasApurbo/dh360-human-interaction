@@ -593,7 +593,7 @@ class FaceEnrollmentController(BaseFaceEnrollment):
                 model_version=self._config.model_version,
             )
             if self._recognizer is not None:
-                self._recognizer._gallery = new_gallery
+                self._recognizer.replace_gallery(new_gallery)
         except Exception as exc:
             logger.warning("Gallery reload encountered non-fatal error: %s", exc)
 

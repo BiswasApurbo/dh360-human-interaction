@@ -61,9 +61,18 @@ class EmbeddingWorkerResult:
 
 @dataclass(frozen=True)
 class EmbeddingWorkerConfig:
-    """Configuration for bounded asynchronous embedding worker."""
+    """Configuration for bounded asynchronous embedding worker.
+
+    Attributes:
+        max_queue_size: Maximum pending tasks in queue before evicting oldest.
+        max_results_queue_size: Maximum completed results buffered before dropping oldest unpolled.
+        max_request_age_sec: Drop pending tasks older than this threshold.
+        drop_stale_requests: Whether to drop stale pending tasks before inference.
+        poll_batch_size: Default maximum results returned per poll_results call.
+    """
 
     max_queue_size: int = 8
+    max_results_queue_size: int = 32
     max_request_age_sec: float = 1.0
     drop_stale_requests: bool = True
     poll_batch_size: int = 16
@@ -130,8 +139,10 @@ class BoundedEmbeddingWorker(BaseEmbeddingWorker):
         # Track IDs currently undergoing inference in the worker thread
         self._in_progress_tracks: set[int] = set()
 
-        # Results buffer: thread-safe deque populated by worker, drained by main loop
-        self._results_queue: deque[EmbeddingWorkerResult] = deque()
+        # Results buffer: thread-safe bounded deque populated by worker, drained by main loop
+        self._results_queue: deque[EmbeddingWorkerResult] = deque(
+            maxlen=self._config.max_results_queue_size
+        )
 
     @property
     def is_running(self) -> bool:
@@ -158,7 +169,12 @@ class BoundedEmbeddingWorker(BaseEmbeddingWorker):
             logger.info("BoundedEmbeddingWorker thread started")
 
     def stop(self, timeout: float = 2.0) -> None:
-        """Signal worker thread to shut down and wait for termination."""
+        """Signal worker thread to shut down and wait for termination.
+
+        Note:
+            Any pending tasks remaining in the queue when stop() is called are
+            discarded without notification.
+        """
         thread_to_join: threading.Thread | None = None
         with self._lock:
             if not self._running:

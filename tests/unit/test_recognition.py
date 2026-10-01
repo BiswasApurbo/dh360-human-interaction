@@ -211,3 +211,34 @@ def test_invalid_query_embedding_handled_safely() -> None:
     empty = np.array([], dtype=np.float32)
     res_empty = recognizer.recognize(empty)
     assert res_empty.outcome == RecognitionOutcome.NO_MATCH
+
+
+def test_recognizer_replace_gallery_updates_recognition() -> None:
+    """Verify replace_gallery replaces the active gallery and affects subsequent queries."""
+    emb_alice = _create_unit_vector(128, 0)
+    emb_bob = _create_unit_vector(128, 1)
+
+    initial_gallery = InMemoryGallery(
+        [GalleryEntry(person_id="p001", display_name="Alice", embeddings=[emb_alice])]
+    )
+    recognizer = FaceRecognizer(gallery=initial_gallery)
+
+    # Query with Bob against Alice-only gallery -> UNREGISTERED
+    res1 = recognizer.recognize(emb_bob)
+    assert res1.outcome == RecognitionOutcome.UNREGISTERED
+
+    # Atomically replace gallery with Bob
+    updated_gallery = InMemoryGallery(
+        [GalleryEntry(person_id="p002", display_name="Bob", embeddings=[emb_bob])]
+    )
+    recognizer.replace_gallery(updated_gallery)
+
+    # Query with Bob now succeeds
+    res2 = recognizer.recognize(emb_bob)
+    assert res2.outcome == RecognitionOutcome.IDENTIFIED
+    assert res2.person_id == "p002"
+    assert res2.display_name == "Bob"
+
+    # Query with Alice is now UNREGISTERED
+    res3 = recognizer.recognize(emb_alice)
+    assert res3.outcome == RecognitionOutcome.UNREGISTERED

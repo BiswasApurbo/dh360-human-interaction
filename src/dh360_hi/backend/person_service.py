@@ -281,7 +281,7 @@ class PersonService(BasePersonService):
         if success:
             if recognizer is not None:
                 new_gallery = self.load_recognition_gallery()
-                recognizer._gallery = new_gallery
+                recognizer.replace_gallery(new_gallery)
             if identity_manager is not None and hasattr(identity_manager, "invalidate_person"):
                 identity_manager.invalidate_person(person_id)
         return success
@@ -379,7 +379,7 @@ class PersonService(BasePersonService):
                 model_name=model_name,
                 model_version=model_version,
             )
-            recognizer._gallery = new_gallery
+            recognizer.replace_gallery(new_gallery)
 
         return [
             EmbeddingMetadata(
@@ -436,7 +436,7 @@ class PersonService(BasePersonService):
         count = self._repo.delete_embeddings_for_person(person_id)
         if recognizer is not None:
             new_gallery = self.load_recognition_gallery()
-            recognizer._gallery = new_gallery
+            recognizer.replace_gallery(new_gallery)
         if identity_manager is not None and hasattr(identity_manager, "invalidate_person"):
             identity_manager.invalidate_person(person_id)
         return count

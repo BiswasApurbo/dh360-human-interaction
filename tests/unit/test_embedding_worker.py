@@ -17,6 +17,7 @@ from dh360_hi.vision.embedding_worker import (
 from dh360_hi.vision.quality_gate import FaceQualityTier
 from dh360_hi.vision.recognition import (
     BaseFaceRecognizer,
+    InMemoryGallery,
     MatchCandidate,
     RecognitionOutcome,
     RecognitionResult,
@@ -106,6 +107,9 @@ class MockRecognizer(BaseFaceRecognizer):
     @property
     def gallery(self):
         return MagicMock()
+
+    def replace_gallery(self, gallery: InMemoryGallery) -> None:
+        del gallery
 
     def recognize(self, query_embedding: np.ndarray) -> RecognitionResult:
         del query_embedding
@@ -270,3 +274,55 @@ def test_worker_synchronous_process_sync() -> None:
     assert result.recognition_result.person_id == "person-123"
     assert result.error is None
     assert result.total_latency_ms >= 0.0
+
+
+def test_worker_bounded_results_queue_drops_oldest_on_backlog() -> None:
+    """Test that results queue is bounded to max_results_queue_size and drops oldest."""
+    config = EmbeddingWorkerConfig(max_results_queue_size=3, max_queue_size=10)
+    worker = BoundedEmbeddingWorker(
+        aligner=MockAligner(),
+        embedder=MockEmbedder(),
+        recognizer=MockRecognizer(),
+        config=config,
+    )
+    worker.start()
+
+    try:
+        # Submit 5 tasks for different tracks without polling
+        for i in range(1, 6):
+            worker.submit(_make_task(track_id=i, frame_id=i))
+
+        # Allow worker thread to process all 5 tasks
+        time.sleep(0.15)
+
+        # Polling results should yield at most max_results_queue_size (3)
+        # and should contain the most recent completed results (3, 4, 5)
+        results = worker.poll_results(max_results=10)
+        assert len(results) == 3
+        polled_track_ids = [r.track_id for r in results]
+        assert polled_track_ids == [3, 4, 5]
+
+    finally:
+        worker.stop()
+
+
+def test_worker_stop_leaves_worker_in_clean_non_running_state() -> None:
+    """Test that stop() terminates worker cleanly and marks is_running False."""
+    worker = BoundedEmbeddingWorker(
+        aligner=MockAligner(),
+        embedder=MockEmbedder(),
+        recognizer=MockRecognizer(),
+    )
+    assert not worker.is_running
+
+    worker.start()
+    assert worker.is_running
+
+    # Submit a task and immediately stop
+    worker.submit(_make_task(track_id=7, frame_id=1))
+    worker.stop(timeout=1.0)
+
+    assert not worker.is_running
+    # Calling stop again on stopped worker is idempotent and safe
+    worker.stop(timeout=1.0)
+    assert not worker.is_running

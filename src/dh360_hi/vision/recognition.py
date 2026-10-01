@@ -155,6 +155,10 @@ class BaseFaceRecognizer(ABC):
     ) -> RecognitionResult:
         """Match a query face embedding against the gallery."""
 
+    @abstractmethod
+    def replace_gallery(self, gallery: InMemoryGallery) -> None:
+        """Atomically replace the active in-memory recognition gallery."""
+
     @property
     @abstractmethod
     def gallery(self) -> InMemoryGallery:
@@ -180,6 +184,10 @@ class FaceRecognizer(BaseFaceRecognizer):
         self._config = config or RecognitionConfig()
         self._model_name = model_name
         self._model_version = model_version
+
+    def replace_gallery(self, gallery: InMemoryGallery) -> None:
+        """Atomically replace the active in-memory recognition gallery."""
+        self._gallery = gallery
 
     @property
     def gallery(self) -> InMemoryGallery:

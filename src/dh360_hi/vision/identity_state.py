@@ -65,7 +65,14 @@ class TrackIdentityState:
 
 
 class IdentityStateManager:
-    """Manages identity state machines and temporal evidence smoothing across all active tracks."""
+    """Manages identity state machines and temporal evidence smoothing across all active tracks.
+
+    Threading Contract:
+        IdentityStateManager is designed for single-threaded execution on the primary
+        vision perception loop thread. External operations (such as PersonService
+        profile deletion or biometric reset) must either be invoked when the perception
+        loop is paused or between frame processing steps.
+    """
 
     def __init__(self, config: IdentityStateConfig | None = None) -> None:
         self._config = config or IdentityStateConfig()
@@ -87,14 +94,47 @@ class IdentityStateManager:
         """Retrieve a copy of all active track identity states."""
         return dict(self._tracks)
 
+    def ensure_track(self, track_id: int, frame_id: int) -> TrackIdentityState:
+        """Ensure a track exists in the identity manager and update its last seen frame."""
+        if track_id not in self._tracks:
+            track_state = TrackIdentityState(
+                track_id=track_id,
+                state=IdentityState.NEW,
+                last_seen_frame_id=frame_id,
+                state_change_frame_id=frame_id,
+                last_verification_frame_id=frame_id,
+                recent_observations=deque(maxlen=self._config.evidence_window_size),
+            )
+            self._tracks[track_id] = track_state
+        else:
+            track_state = self._tracks[track_id]
+            track_state.last_seen_frame_id = frame_id
+        return track_state
+
     def update(
         self,
         track_id: int,
         rec_result: RecognitionResult | None,
         frame_id: int,
-    ) -> TrackIdentityState:
-        """Update a track's identity state with an optional recognition observation."""
+        create_if_missing: bool = True,
+    ) -> TrackIdentityState | None:
+        """Update a track's identity state with an optional recognition observation.
+
+        Args:
+            track_id: Target track ID.
+            rec_result: Recognition result observation (or None).
+            frame_id: Current frame index.
+            create_if_missing: If True, initialize a new TrackIdentityState if not present.
+                If False (e.g. for asynchronous worker results), late results for pruned
+                or nonexistent tracks are discarded and return None.
+
+        Returns:
+            Updated TrackIdentityState, or None if track does not exist and
+            create_if_missing is False.
+        """
         if track_id not in self._tracks:
+            if not create_if_missing:
+                return None
             # Initialize new track state
             track_state = TrackIdentityState(
                 track_id=track_id,
@@ -259,6 +299,12 @@ class IdentityStateManager:
         Returns:
             Set of track IDs that are in spatial crossing/proximity.
         """
+        # Reset spatial ambiguity flag for all active tracks for current frame evaluation
+        for t in active_tracks:
+            state = self._tracks.get(t.track_id)
+            if state is not None:
+                state.is_spatial_ambiguous = False
+
         ambiguous_tracks: set[int] = set()
         n_tracks = len(active_tracks)
         if n_tracks < 2:
@@ -303,7 +349,7 @@ class IdentityStateManager:
         - Rejected / Low quality: do not submit (saves worker/CPU budget).
         - NEW / COLLECTING / UNCERTAIN: submit on MEDIUM or HIGH to gather evidence.
         - UNREGISTERED: submit periodically (every ~30 frames) on MEDIUM or HIGH.
-        - IDENTIFIED: submit on HIGH or MEDIUM if spatial ambiguity occurred recently,
+        - IDENTIFIED: submit on HIGH or MEDIUM if spatial ambiguity is active or occurred recently,
           or if reverification interval has elapsed.
 
         Args:
@@ -335,9 +381,9 @@ class IdentityStateManager:
             )
 
         if track_state.state == IdentityState.IDENTIFIED:
-            # Re-verify if spatial crossing/proximity occurred within last 30 frames
-            if (
-                track_state.is_spatial_ambiguous
+            # Re-verify if spatial crossing/proximity is active or occurred within last 30 frames
+            if track_state.is_spatial_ambiguous or (
+                track_state.last_spatial_ambiguity_frame_id > 0
                 and (frame_id - track_state.last_spatial_ambiguity_frame_id) <= 30
             ):
                 return True

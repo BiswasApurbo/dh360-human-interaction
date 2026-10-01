@@ -209,3 +209,95 @@ def test_should_request_embedding_policy() -> None:
     mgr.get_track_state(1).is_spatial_ambiguous = True
     mgr.get_track_state(1).last_spatial_ambiguity_frame_id = 10
     assert mgr.should_request_embedding(1, 15, FaceQualityTier.HIGH) is True
+
+
+def test_late_async_result_for_pruned_track_is_safely_discarded() -> None:
+    """Test that late async recognition results for pruned tracks do not recreate ghost states."""
+    mgr = IdentityStateManager(IdentityStateConfig(max_missed_frames_to_lost=10))
+    rec_alice = _make_rec("p1", "Alice", RecognitionOutcome.IDENTIFIED, 0.90)
+    rec_bob = _make_rec("p2", "Bob", RecognitionOutcome.IDENTIFIED, 0.90)
+
+    # Track 1 active at frames 1..3
+    mgr.update(track_id=1, rec_result=rec_alice, frame_id=1)
+    mgr.update(track_id=1, rec_result=rec_alice, frame_id=2)
+    mgr.update(track_id=1, rec_result=rec_alice, frame_id=3)
+    assert mgr.get_track_state(1) is not None
+
+    # Track 2 active at frame 20
+    mgr.ensure_track(track_id=2, frame_id=20)
+
+    # Prune at frame 20 (track 1 was last seen at frame 3, missed_frames = 17 > 10)
+    pruned = mgr.prune_lost_tracks(current_frame_id=20, active_track_ids={2})
+    assert pruned == [1]
+    assert mgr.get_track_state(1) is None
+    assert mgr.get_track_state(2) is not None
+
+    # Late async result arrives for pruned track 1 at frame 21
+    late_update = mgr.update(
+        track_id=1,
+        rec_result=rec_alice,
+        frame_id=21,
+        create_if_missing=False,
+    )
+    # Late result is safely discarded and returns None
+    assert late_update is None
+    # Track 1 is NOT recreated as a ghost track
+    assert mgr.get_track_state(1) is None
+    assert 1 not in mgr.get_all_states()
+
+    # Active track 2 updates normally with create_if_missing=False
+    valid_update = mgr.update(
+        track_id=2,
+        rec_result=rec_bob,
+        frame_id=21,
+        create_if_missing=False,
+    )
+    assert valid_update is not None
+    assert valid_update.track_id == 2
+    assert mgr.get_track_state(2) is not None
+
+
+def test_repeated_late_async_results_remain_harmless_and_do_not_leak_state() -> None:
+    """Test that repeated late results for nonexistent tracks do not leak state."""
+    mgr = IdentityStateManager()
+    rec = _make_rec("p1", "Alice", RecognitionOutcome.IDENTIFIED, 0.90)
+
+    for dead_id in [99, 100, 101, 102]:
+        res = mgr.update(track_id=dead_id, rec_result=rec, frame_id=50, create_if_missing=False)
+        assert res is None
+
+    assert len(mgr.get_all_states()) == 0
+
+
+def test_spatial_ambiguity_flag_resets_upon_separation() -> None:
+    """Test that is_spatial_ambiguous is reset when crossing tracks separate."""
+    mgr = IdentityStateManager()
+    mgr.ensure_track(1, frame_id=1)
+    mgr.ensure_track(2, frame_id=1)
+
+    # Frame 1: Distant tracks -> not ambiguous
+    t1_far = _make_track(1, (100.0, 100.0, 80.0, 80.0))
+    t2_far = _make_track(2, (400.0, 100.0, 80.0, 80.0))
+    crossings_f1 = mgr.check_track_crossings([t1_far, t2_far], current_frame_id=1)
+    assert len(crossings_f1) == 0
+    assert not mgr.get_track_state(1).is_spatial_ambiguous
+    assert not mgr.get_track_state(2).is_spatial_ambiguous
+
+    # Frame 2: Crossing / overlap -> is_spatial_ambiguous becomes True
+    t1_close = _make_track(1, (200.0, 100.0, 80.0, 80.0))
+    t2_close = _make_track(2, (220.0, 100.0, 80.0, 80.0))
+    crossings_f2 = mgr.check_track_crossings([t1_close, t2_close], current_frame_id=2)
+    assert crossings_f2 == {1, 2}
+    assert mgr.get_track_state(1).is_spatial_ambiguous is True
+    assert mgr.get_track_state(2).is_spatial_ambiguous is True
+    assert mgr.get_track_state(1).last_spatial_ambiguity_frame_id == 2
+
+    # Frame 3: Tracks separate -> is_spatial_ambiguous resets to False
+    t1_sep = _make_track(1, (100.0, 100.0, 80.0, 80.0))
+    t2_sep = _make_track(2, (400.0, 100.0, 80.0, 80.0))
+    crossings_f3 = mgr.check_track_crossings([t1_sep, t2_sep], current_frame_id=3)
+    assert len(crossings_f3) == 0
+    assert mgr.get_track_state(1).is_spatial_ambiguous is False
+    assert mgr.get_track_state(2).is_spatial_ambiguous is False
+    # Historical frame ID of ambiguity is preserved for re-verification window
+    assert mgr.get_track_state(1).last_spatial_ambiguity_frame_id == 2

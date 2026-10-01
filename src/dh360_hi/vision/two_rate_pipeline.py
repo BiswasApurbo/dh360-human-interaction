@@ -189,9 +189,10 @@ class TwoRatePerceptionPipeline:
         active_tracks = track_result.tracks
         confirmed_tracks = track_result.confirmed_tracks
 
-        # 3. Face Quality Gating (Fast Path)
+        # 3. Ensure active tracks in IdentityStateManager & Face Quality Gating (Fast Path)
         quality_map: dict[int, FaceQualityResult] = {}
         for track in confirmed_tracks:
+            self._identity_manager.ensure_track(track.track_id, frame.frame_id)
             q_res = self._quality_gate.evaluate(
                 frame=frame,
                 target=track,
@@ -214,6 +215,7 @@ class TwoRatePerceptionPipeline:
                     track_id=res.track_id,
                     rec_result=res.recognition_result,
                     frame_id=frame.frame_id,
+                    create_if_missing=False,
                 )
 
         # 6. Evaluate and Submit New Embedding Tasks to Bounded Worker

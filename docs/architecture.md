@@ -126,6 +126,7 @@ Development follows a two-tier strategy:
 
 The recognition module (`FaceRecognizer`) provides modular in-memory identity matching:
 - **`InMemoryGallery`**: Thread-safe in-memory store associating `person_id` and `display_name` with one or more normalized 128-D feature vectors (`GalleryEntry`).
+- **Encapsulated Gallery Replacement**: `FaceRecognizer` owns its active gallery instance; external components (such as `PersonService` and `FaceEnrollmentController`) update the gallery exclusively via `FaceRecognizer.replace_gallery(new_gallery)`.
 - **Cosine Similarity Matching**: Uses dot products of unit L2-normalized vectors (`compute_cosine_similarity`).
 - **Multi-Embedding Aggregation**: Configurable aggregation strategies (`max` or `mean` similarity across enrolled samples per identity).
 - **Top-1 vs. Top-2 Margin Gating**: Requires both `top_similarity >= similarity_threshold` (default `0.65`) and `(top_similarity - second_similarity) >= min_similarity_margin` (default `0.08`). Ambiguous candidate pairs return `UNCERTAIN` instead of guessing.
@@ -239,19 +240,25 @@ To achieve sustained high frame rates (`> 15 FPS` Pi target, `~56 FPS` measured 
   - Frame acquisition $\rightarrow$ YuNet face detection $\rightarrow$ Multi-face tracking $\rightarrow$ Face quality gating with discrete operational tiers (`FaceQualityTier`: `REJECTED`, `LOW`, `MEDIUM`, `HIGH`) $\rightarrow$ Spatial crossing & proximity checks $\rightarrow$ Non-blocking result polling $\rightarrow$ Target selection $\rightarrow$ Presence debouncing.
 - **Slow-Path / Event-Driven Path (Asynchronous Background Thread)**:
   - Alignment (5-point affine transform) $\rightarrow$ 128-D SFace feature embedding $\rightarrow$ Gallery cosine similarity matching.
-- **Latest-Wins Bounded Queue**:
+- **Latest-Wins Bounded Queue & Results Buffer**:
   - `BoundedEmbeddingWorker` manages a bounded queue with latest-wins replacement per `track_id`. If a track produces a newer, higher-quality frame while an earlier request is pending, the older request is updated in-place, eliminating stale backlogs.
-  - If queue capacity is exceeded, oldest pending tracks are evicted so camera loop execution never blocks.
+  - If pending task queue capacity (`max_queue_size`, default: 8) is exceeded, oldest pending tracks are evicted so camera loop execution never blocks.
+  - Completed recognition results are buffered in a thread-safe bounded buffer (`max_results_queue_size`, default: 32) where oldest unpolled results are discarded if polling lags, preventing unbounded memory growth.
+  - Calling `worker.stop()` gracefully terminates the background thread and safely discards any remaining unstarted pending tasks.
 - **Decoupled Backend/LLM**: Backend REST, WebSocket, and LLM dialogues operate strictly out-of-band and never sit on the real-time vision loop.
 
 #### 5.1.5 Per-Track Identity Stability & Track-ID Swap Protection
 
 - **Identity Associated with Track State, Not Raw Track ID**:
   - Identity state is managed by `IdentityStateManager` over a sliding temporal evidence window (`TrackIdentityState`), preventing raw tracker ID mutations from immediately corrupting recognition decisions.
-- **Spatial Crossing & ID Swap Protection**:
+- **Threading Contract**:
+  - `IdentityStateManager` is designed for single-threaded execution on the primary perception loop thread. External lifecycle operations (such as profile deletion or biometric reset) are invoked when the loop is paused or between frame processing steps.
+- **Current-Frame Spatial Crossing & ID Swap Protection**:
   - `check_track_crossings()` measures pairwise bounding box IoU and centroid Euclidean distance across all active tracks.
-  - When two subjects cross or enter close proximity ($\le 80\text{px}$ or $\text{IoU} \ge 0.08$), both tracks are marked `is_spatial_ambiguous = True`.
+  - The `is_spatial_ambiguous` flag is re-evaluated per frame: reset to `False` for all active tracks at the beginning of each frame's check, and set to `True` only for tracks currently involved in crossing/overlap ($\le 80\text{px}$ or $\text{IoU} \ge 0.08$).
   - Spatially ambiguous tracks require fresh, high-quality recognition evidence and cannot blindly inherit prior momentum.
+- **Late Result Discard & Ghost Track Protection**:
+  - When an old track disappears and is pruned, any late-arriving asynchronous recognition results for the missing `track_id` are safely discarded without recreating ghost track states.
 - **Track Disappearance and Reappearance**:
   - When an old track disappears and is pruned, any newly spawned track begins strictly in `NEW` state and must gather independent evidence across the sliding observation window before achieving `IDENTIFIED` state.
 - **Hysteresis Protection**:
@@ -349,7 +356,7 @@ To guarantee real-time vision performance (`> 15 FPS` deployment target), the ca
 
 1. **Model & Metadata Filtering**: Loads only embeddings compatible with the configured detector/embedder (`model_name="SFace"`, `model_version="2021dec"`).
 2. **Status & Consent Filtering**: By default, only identities with `status = ACTIVE` and `consent_status = GRANTED` are admitted into the active recognition gallery.
-3. **Atomic Replacement**: A fresh `InMemoryGallery` is constructed in the background before assignment to `FaceRecognizer`, ensuring lock-free, zero-downtime gallery updates.
+3. **Atomic Encapsulated Replacement**: A fresh `InMemoryGallery` is constructed in the background and applied atomically via `FaceRecognizer.replace_gallery(new_gallery)`, ensuring lock-free, zero-downtime gallery updates without mutating private attributes across package boundaries.
 
 #### 5.2.3 Person Lifecycle Management & Biometric Operations
 
