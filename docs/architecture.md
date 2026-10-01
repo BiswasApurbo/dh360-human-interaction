@@ -110,16 +110,63 @@ Development follows a two-tier strategy:
 | Component | Responsibility |
 | :--- | :--- |
 | **FrameSource** | Hardware-abstracted frame capture interface (webcam, CSI camera, RTSP, video file). |
-| **Face Detector** | Lightweight, high-speed face detection producing bounding boxes and landmarks. |
-| **Tracker** | Multi-object tracking associating bounding boxes across frames with persistent track IDs. |
-| **Face Quality Gate** | Evaluates pose, blur, illumination, and resolution before passing crops to embedding worker. |
-| **Embedding Worker** | Extracts feature vector embeddings using a lightweight pretrained model on filtered frames. |
-| **Local Gallery Matching** | Performs cosine similarity matching against registered local identities. |
-| **Identity Decision** | Applies confidence thresholds and temporal smoothing to confirm or reject identity matches. |
+| **Face Detector** | Lightweight, high-speed face detection producing bounding boxes and 5-point facial landmarks (`YuNetFaceDetector`). |
+| **Tracker** | Multi-object tracking associating bounding boxes across frames with persistent track IDs (`FaceTracker`). |
+| **Face Quality Gate** | Evaluates detector confidence, bounding box size, sharpness (Laplacian variance), and pose frontality (`FaceQualityGate`). |
+| **Face Aligner** | Warps and crops faces via 5-point similarity transformation to canonical 112x112 aligned crops (`FaceAligner`). |
+| **Embedding Worker** | Extracts L2-normalized 128-D feature embeddings using lightweight pretrained models (`SFaceEmbedder`). |
+| **Local Gallery Matching** | Evaluates cosine similarity against registered in-memory identities with model compatibility checks (`FaceRecognizer`, `InMemoryGallery`). |
+| **Identity State Machine** | Applies multi-observation temporal smoothing and hysteresis patience to stabilize track identities (`IdentityStateManager`). |
 | **Target Selection** | Determines primary user of interest when multiple persons are visible. |
 | **Presence / Session Supervisor** | Tracks user entry, dwell time, active engagement, and departure states. |
 | **Event Transport** | Emits structured edge events to the backend over reliable, low-overhead protocols. |
 | **Robot Interface** | Translates interaction commands (gaze tracking, audio cues, LED/screen expressions) to robot hardware. |
+
+#### 5.1.1 Recognition & Gallery Architecture
+
+The recognition module (`FaceRecognizer`) provides modular in-memory identity matching:
+- **`InMemoryGallery`**: Thread-safe in-memory store associating `person_id` and `display_name` with one or more normalized 128-D feature vectors (`GalleryEntry`).
+- **Cosine Similarity Matching**: Uses dot products of unit L2-normalized vectors (`compute_cosine_similarity`).
+- **Multi-Embedding Aggregation**: Configurable aggregation strategies (`max` or `mean` similarity across enrolled samples per identity).
+- **Top-1 vs. Top-2 Margin Gating**: Requires both `top_similarity >= similarity_threshold` (default `0.65`) and `(top_similarity - second_similarity) >= min_similarity_margin` (default `0.08`). Ambiguous candidate pairs return `UNCERTAIN` instead of guessing.
+- **Model Version Compatibility**: Rejects or ignores gallery vectors produced by incompatible model versions.
+
+#### 5.1.2 Identity State Machine Lifecycle & Hysteresis
+
+To prevent identity flickering caused by momentary face occlusions, lighting transients, or profile views, the `IdentityStateManager` manages a state machine per track ID:
+
+```
+                  ┌──────────────┐
+                  │     NEW      │
+                  └──────┬───────┘
+                         │ (First observation)
+                         ▼
+                  ┌──────────────┐
+        ┌────────►│  COLLECTING  │◄────────┐
+        │         └──────┬───────┘         │
+        │                │                 │
+        │ (Contradiction │ (Consistent     │ (Sustained
+        │  / Ambiguity)  │  Evidence)      │  Conflict)
+        │                ▼                 │
+  ┌─────┴────────┐┌──────────────┐┌────────┴──────┐
+  │  UNCERTAIN   ││  IDENTIFIED  ││ UNREGISTERED  │
+  └──────────────┘└──────┬───────┘└───────────────┘
+                         │
+                         │ (Track expired / max missed frames)
+                         ▼
+                  ┌──────────────┐
+                  │     LOST     │
+                  └──────────────┘
+```
+
+- **States**:
+  - `NEW`: Track initialized; awaiting initial recognition observations.
+  - `COLLECTING`: Accumulating observations over a sliding evidence window (default: 7 observations, minimum 3 to decide).
+  - `IDENTIFIED`: Track confirmed as a registered identity based on consistent thresholded matches (`consistency_ratio >= 0.70`).
+  - `UNREGISTERED`: Track consistently identified as unknown / below recognition threshold.
+  - `UNCERTAIN`: Conflicting identities in window or top candidates within the ambiguity margin.
+  - `LOST`: Track has been missing for more than `max_missed_frames_to_lost` (default: 30 frames).
+- **Hysteresis Conflict Patience**: Once a track reaches `IDENTIFIED`, isolated conflicting observations (e.g. single blurry frame) do not immediately flip the state. The state machine requires sustained conflicting observations (`hysteresis_patience_observations >= 4`) before demoting the identity to `UNCERTAIN`.
 
 ### 5.2 Backend Components
 
@@ -155,3 +202,4 @@ The Human Interaction module serves as the primary perceptual and social front-e
 - **Biometric Protection**: Face embeddings constitute sensitive biometric data. Raw embeddings are stored with strict access controls, hashed references, and never exposed over unauthenticated channels.
 - **Pretrained Models**: Model weights are downloaded and verified with cryptographic checksums; no model binaries are committed to version control.
 - **Zero-Secret Commits**: All configuration secrets, API tokens, and private endpoints are loaded strictly via environment variables.
+- **Non-Authentication Scope / Disclaimer**: Face recognition within this module is designed strictly for **conversational personalization, natural user engagement, and presence awareness**. It is **NOT** a secure biometric authentication mechanism, cryptographic credential, or physical access control system. The pipeline does not incorporate presentation attack detection (PAD) or 3D liveness verification; clinical authorization or sensitive EHR data access must always rely on external verified authentication mechanisms.

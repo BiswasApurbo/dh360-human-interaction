@@ -15,9 +15,9 @@ The Human Interaction Module is responsible for human perception and dialogue ma
 
 ## 🚀 Current Development Status
 
-- **Current Milestone**: **`M2 — Recognition (Tracking, Quality Gate, Alignment & Embeddings Sub-Steps)`**
+- **Current Milestone**: **`M2 — Recognition (Completed M2.1 Tracking, M2.2 Quality Gate, M2.3 Alignment & Embeddings, M2.4 Recognition & Identity State Machine)`**
 - **Status**: Implemented & Verified
-- **Approach**: Built **incrementally** milestone by milestone. Core software foundation (M0), vision base & YuNet detection (M1), modular face tracking (M2.1), face quality gating (M2.2), and face alignment + embedding evaluation (M2.3) are established. Gallery matching, recognition decision logic, backend services, or hardware integrations will follow incrementally.
+- **Approach**: Built **incrementally** milestone by milestone. Core software foundation (M0), vision base & YuNet detection (M1), modular face tracking (M2.1), face quality gating (M2.2), face alignment + embedding evaluation (M2.3), and real-time recognition + identity state machine (M2.4) are established. Session supervision, target selection, and backend/robot services will follow incrementally.
 
 ### Implemented Capabilities
 - **Hardware-Independent Frame Sources**: `FrameSource` interface with `VideoFileFrameSource`, `WebcamFrameSource`, and `SyntheticFrameSource`.
@@ -26,9 +26,12 @@ The Human Interaction Module is responsible for human perception and dialogue ma
 - **Face Quality Gate**: `BaseFaceQualityGate` and `FaceQualityGate` evaluating detector confidence, bounding box size, image sharpness (Laplacian variance), and 5-point facial pose frontality (roll tilt and yaw asymmetry) with configurable thresholds and rejection reasons.
 - **Face Alignment Module**: `BaseFaceAligner` and `FaceAligner` providing deterministic 5-point similarity transformation to canonical dimensions (default 112x112) with bounding-box fallbacks.
 - **Face Feature Embedders**: `BaseFaceEmbedder` and `SFaceEmbedder` extracting L2-normalized 128-D embeddings using OpenCV DNN (supporting FP32 and INT8 quantized variants).
+- **In-Memory Face Recognition & Gallery**: `BaseFaceRecognizer`, `FaceRecognizer`, and `InMemoryGallery` providing cosine similarity matching, multi-embedding aggregation (`max`/`mean`), top-1 vs. top-2 ambiguity margin gating, and model/version compatibility validation.
+- **Per-Track Identity State Machine**: `IdentityStateManager` managing track lifecycle transitions (`NEW` → `COLLECTING` → `IDENTIFIED` / `UNREGISTERED` / `UNCERTAIN` → `LOST`) with sliding-window temporal consistency voting and hysteresis conflict patience.
 - **Reproducible Model Acquisition**: `scripts/download_models.py` with SHA-256 cryptographic verification and model cards documentation in `models/MODEL_CARDS.md`.
 - **Monotonic Benchmark Utility**: `PipelineBenchmark` measuring frame count, average/rolling FPS, and latency percentiles (mean, min, p50, p90, p95, p99, max).
-- **Benchmarking & Validation Suites**: `benchmarks/validate_detection.py`, `benchmarks/benchmark_tracking.py`, `benchmarks/validate_quality_gate.py`, `benchmarks/benchmark_embedder.py`, and `benchmarks/benchmark_detector.py`.
+- **Benchmarking & Validation Suites**: `benchmarks/validate_detection.py`, `benchmarks/benchmark_tracking.py`, `benchmarks/validate_quality_gate.py`, `benchmarks/benchmark_embedder.py`, `benchmarks/benchmark_recognition.py`, and `benchmarks/benchmark_detector.py`.
+
 
 ---
 

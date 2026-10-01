@@ -82,7 +82,20 @@ python benchmarks/evaluate_embeddings_dataset.py --model sface_int8
 
 ---
 
-## 6. Throughput Performance Benchmark (`benchmark_detector.py`)
+## 6. End-to-End Recognition & Identity State Benchmark (`benchmark_recognition.py`)
+
+Measures per-stage latency percentiles and overall pipeline throughput across the complete integrated vision chain:
+`Detection -> Tracking -> Quality Gate -> Face Alignment -> SFace Feature Embedding -> Gallery Matching -> Identity State Machine`.
+
+### Usage
+```bash
+# Benchmark full end-to-end recognition pipeline (100 frames)
+python benchmarks/benchmark_recognition.py --frames 100
+```
+
+---
+
+## 7. Throughput Performance Benchmark (`benchmark_detector.py`)
 
 Measures pipeline throughput, sliding-window rolling FPS, and latency percentiles under sustained execution on video files, synthetic streams, or webcam input.
 

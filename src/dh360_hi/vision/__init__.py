@@ -1,4 +1,4 @@
-"""Vision pipeline core modules: detection, tracking, quality gate, alignment, and embeddings."""
+"""Vision pipeline core modules: vision base, quality gate, recognition, and identity states."""
 
 from dh360_hi.vision.aligner import (
     CANONICAL_5_PTS_112,
@@ -45,6 +45,12 @@ from dh360_hi.vision.frame import (
     VideoFileFrameSource,
     WebcamFrameSource,
 )
+from dh360_hi.vision.identity_state import (
+    IdentityState,
+    IdentityStateConfig,
+    IdentityStateManager,
+    TrackIdentityState,
+)
 from dh360_hi.vision.quality_gate import (
     BaseFaceQualityGate,
     FaceQualityGate,
@@ -54,6 +60,16 @@ from dh360_hi.vision.quality_gate import (
     FaceRejectionReason,
     compute_pose_metrics,
     compute_sharpness,
+)
+from dh360_hi.vision.recognition import (
+    BaseFaceRecognizer,
+    FaceRecognizer,
+    GalleryEntry,
+    InMemoryGallery,
+    MatchCandidate,
+    RecognitionConfig,
+    RecognitionOutcome,
+    RecognitionResult,
 )
 from dh360_hi.vision.tracker import (
     BaseFaceTracker,
@@ -72,6 +88,7 @@ __all__ = [
     "BaseFaceDetector",
     "BaseFaceEmbedder",
     "BaseFaceQualityGate",
+    "BaseFaceRecognizer",
     "BaseFaceTracker",
     "ConfidenceStats",
     "DetectionResult",
@@ -84,18 +101,29 @@ __all__ = [
     "FaceQualityMetrics",
     "FaceQualityResult",
     "FaceQualityThresholds",
+    "FaceRecognizer",
     "FaceRejectionReason",
     "FaceTracker",
     "Frame",
     "FrameSource",
+    "GalleryEntry",
+    "IdentityState",
+    "IdentityStateConfig",
+    "IdentityStateManager",
+    "InMemoryGallery",
     "LatencyStats",
+    "MatchCandidate",
     "PairComparison",
     "PipelineBenchmark",
+    "RecognitionConfig",
+    "RecognitionOutcome",
+    "RecognitionResult",
     "SFaceEmbedder",
     "ScoreDistribution",
     "StageTimer",
     "SyntheticFrameSource",
     "ThresholdPoint",
+    "TrackIdentityState",
     "TrackState",
     "TrackedFace",
     "TrackingResult",
