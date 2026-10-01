@@ -39,7 +39,19 @@ python benchmarks/benchmark_tracking.py --video data/test_video.mp4 --frames 150
 
 ---
 
-## 3. Throughput Performance Benchmark (`benchmark_detector.py`)
+## 3. Face Quality Gate Validation (`validate_quality_gate.py`)
+
+Exercises the `FaceQualityGate` pipeline over detected and tracked faces to evaluate sharpness (Laplacian variance), bounding box size, detector confidence, and head pose frontality (roll tilt and yaw asymmetry) to verify rejection/acceptance metrics and latency.
+
+### Usage
+```bash
+# Run quality gate validation over 100 animated fixture frames
+python benchmarks/validate_quality_gate.py --frames 100
+```
+
+---
+
+## 4. Throughput Performance Benchmark (`benchmark_detector.py`)
 
 Measures pipeline throughput, sliding-window rolling FPS, and latency percentiles under sustained execution on video files, synthetic streams, or webcam input.
 

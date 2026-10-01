@@ -15,17 +15,18 @@ The Human Interaction Module is responsible for human perception and dialogue ma
 
 ## 🚀 Current Development Status
 
-- **Current Milestone**: **`M2 — Recognition (Face Tracking Sub-Step)`**
+- **Current Milestone**: **`M2 — Recognition (Face Tracking & Quality Gate Sub-Steps)`**
 - **Status**: Implemented & Verified
-- **Approach**: Built **incrementally** milestone by milestone. Core software foundation (M0), vision base & YuNet detection (M1), and modular face tracking (M2 sub-step 1) are established. Face embeddings, gallery matching, backend services, or hardware integrations will follow incrementally.
+- **Approach**: Built **incrementally** milestone by milestone. Core software foundation (M0), vision base & YuNet detection (M1), modular face tracking (M2 sub-step 1), and face quality gating (M2 sub-step 2) are established. Face embeddings, gallery matching, backend services, or hardware integrations will follow incrementally.
 
 ### Implemented Capabilities
 - **Hardware-Independent Frame Sources**: `FrameSource` interface with `VideoFileFrameSource`, `WebcamFrameSource`, and `SyntheticFrameSource`.
 - **Thin Face Detector Interface**: `BaseFaceDetector` interface with `YuNetFaceDetector` backed by OpenCV DNN and official YuNet ONNX weights.
 - **Modular Multi-Object Face Tracker**: `BaseFaceTracker` interface with `FaceTracker` implementing bipartite IoU matching, spatial centroid fallbacks, configurable track expiration, and bounding box smoothing.
+- **Face Quality Gate**: `BaseFaceQualityGate` and `FaceQualityGate` evaluating detector confidence, bounding box size, image sharpness (Laplacian variance), and 5-point facial pose frontality (roll tilt and yaw asymmetry) with configurable thresholds and rejection reasons.
 - **Reproducible Model Acquisition**: `scripts/download_models.py` with SHA-256 cryptographic verification and model cards documentation in `models/MODEL_CARDS.md`.
 - **Monotonic Benchmark Utility**: `PipelineBenchmark` measuring frame count, average/rolling FPS, and latency percentiles (mean, min, p50, p90, p95, p99, max).
-- **Benchmarking & Validation Suites**: `benchmarks/validate_detection.py`, `benchmarks/benchmark_tracking.py`, and `benchmarks/benchmark_detector.py`.
+- **Benchmarking & Validation Suites**: `benchmarks/validate_detection.py`, `benchmarks/benchmark_tracking.py`, `benchmarks/validate_quality_gate.py`, and `benchmarks/benchmark_detector.py`.
 
 ---
 

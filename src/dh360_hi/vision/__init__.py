@@ -20,6 +20,16 @@ from dh360_hi.vision.frame import (
     VideoFileFrameSource,
     WebcamFrameSource,
 )
+from dh360_hi.vision.quality_gate import (
+    BaseFaceQualityGate,
+    FaceQualityGate,
+    FaceQualityMetrics,
+    FaceQualityResult,
+    FaceQualityThresholds,
+    FaceRejectionReason,
+    compute_pose_metrics,
+    compute_sharpness,
+)
 from dh360_hi.vision.tracker import (
     BaseFaceTracker,
     FaceTracker,
@@ -32,11 +42,17 @@ from dh360_hi.vision.tracker import (
 
 __all__ = [
     "BaseFaceDetector",
+    "BaseFaceQualityGate",
     "BaseFaceTracker",
     "ConfidenceStats",
     "DetectionResult",
     "FaceDetection",
     "FaceLandmarks",
+    "FaceQualityGate",
+    "FaceQualityMetrics",
+    "FaceQualityResult",
+    "FaceQualityThresholds",
+    "FaceRejectionReason",
     "FaceTracker",
     "Frame",
     "FrameSource",
@@ -52,4 +68,6 @@ __all__ = [
     "YuNetFaceDetector",
     "compute_center_distance",
     "compute_iou",
+    "compute_pose_metrics",
+    "compute_sharpness",
 ]

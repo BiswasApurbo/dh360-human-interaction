@@ -1,0 +1,268 @@
+"""Face quality gating module for filtering low-quality or non-frontal faces before recognition."""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from enum import StrEnum
+
+import cv2
+import numpy as np
+
+from dh360_hi.vision.detector import FaceDetection, FaceLandmarks
+from dh360_hi.vision.frame import Frame
+from dh360_hi.vision.tracker import TrackedFace
+
+
+class FaceRejectionReason(StrEnum):
+    """Enumeration of quality criteria failure reasons."""
+
+    INVALID_IMAGE = "invalid_image"
+    INVALID_BBOX = "invalid_bbox"
+    LOW_CONFIDENCE = "low_confidence"
+    TOO_SMALL = "too_small"
+    BLURRY = "blurry"
+    EXCESSIVE_ROLL = "excessive_roll"
+    EXCESSIVE_YAW = "excessive_yaw"
+    MISSING_LANDMARKS = "missing_landmarks"
+
+
+@dataclass(frozen=True)
+class FaceQualityThresholds:
+    """Configurable thresholds for face quality evaluation.
+
+    Note:
+        These values represent engineering baseline defaults and are subject
+        to empirical tuning for specific deployment lighting, cameras, and environments.
+    """
+
+    min_confidence: float = 0.80
+    min_face_width: float = 40.0
+    min_face_height: float = 40.0
+    min_sharpness: float = 50.0  # Laplacian variance threshold
+    max_roll_angle_deg: float = 25.0  # In-plane head tilt
+    max_yaw_asymmetry: float = 2.5  # Ratio between left/right eye-to-nose horizontal distances
+    require_landmarks: bool = False  # If True, missing landmarks causes rejection
+
+
+@dataclass(frozen=True)
+class FaceQualityMetrics:
+    """Numerical quality measurements extracted from a face crop and its landmarks."""
+
+    confidence: float
+    face_width: float
+    face_height: float
+    sharpness: float  # Variance of Laplacian on grayscale face crop
+    roll_angle_deg: float | None = None
+    yaw_asymmetry: float | None = None
+    crop_valid: bool = True
+
+
+@dataclass(frozen=True)
+class FaceQualityResult:
+    """Evaluation result for a single face against quality gate criteria."""
+
+    is_acceptable: bool
+    metrics: FaceQualityMetrics
+    rejection_reasons: list[FaceRejectionReason]
+    thresholds: FaceQualityThresholds
+
+    @property
+    def has_rejection_reason(self) -> bool:
+        """Check if any rejection reasons were recorded."""
+        return len(self.rejection_reasons) > 0
+
+
+def compute_sharpness(crop: np.ndarray) -> float:
+    """Compute sharpness metric using the variance of the Laplacian operator on grayscale."""
+    if crop.size == 0:
+        return 0.0
+
+    if len(crop.shape) == 3 and crop.shape[2] == 3:
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    elif len(crop.shape) == 2:
+        gray = crop
+    else:
+        return 0.0
+
+    laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+    return float(laplacian.var())
+
+
+def compute_pose_metrics(
+    landmarks: FaceLandmarks,
+) -> tuple[float, float]:
+    """Compute roll angle (degrees) and yaw asymmetry ratio from 5-point landmarks.
+
+    Returns:
+        tuple of (roll_angle_deg, yaw_asymmetry_ratio)
+    """
+    re_x, re_y = landmarks.right_eye
+    le_x, le_y = landmarks.left_eye
+    nt_x, _ = landmarks.nose_tip
+
+    # Roll angle: angle of inter-ocular axis relative to horizontal
+    dx = le_x - re_x
+    dy = le_y - re_y
+    roll_angle_deg = float(abs(np.degrees(np.arctan2(dy, dx))))
+
+    # Yaw asymmetry ratio: comparison of horizontal distance from nose to each eye
+    d_right = abs(nt_x - re_x)
+    d_left = abs(le_x - nt_x)
+    min_dist = max(min(d_right, d_left), 1e-4)
+    max_dist = max(d_right, d_left)
+    yaw_asymmetry = float(max_dist / min_dist)
+
+    return roll_angle_deg, yaw_asymmetry
+
+
+class BaseFaceQualityGate(ABC):
+    """Abstract interface for face quality evaluation."""
+
+    @abstractmethod
+    def evaluate(
+        self,
+        frame: Frame | np.ndarray,
+        target: FaceDetection | TrackedFace | tuple[float, float, float, float],
+        confidence: float | None = None,
+        landmarks: FaceLandmarks | None = None,
+    ) -> FaceQualityResult:
+        """Evaluate a detected or tracked face for recognition suitability."""
+
+    @property
+    @abstractmethod
+    def thresholds(self) -> FaceQualityThresholds:
+        """Current quality thresholds."""
+
+    @thresholds.setter
+    @abstractmethod
+    def thresholds(self, thresholds: FaceQualityThresholds) -> None:
+        """Update quality thresholds."""
+
+
+class FaceQualityGate(BaseFaceQualityGate):
+    """Standard face quality gate based on size, confidence, Laplacian sharpness, and pose."""
+
+    def __init__(self, thresholds: FaceQualityThresholds | None = None) -> None:
+        self._thresholds = thresholds or FaceQualityThresholds()
+
+    @property
+    def thresholds(self) -> FaceQualityThresholds:
+        return self._thresholds
+
+    @thresholds.setter
+    def thresholds(self, thresholds: FaceQualityThresholds) -> None:
+        self._thresholds = thresholds
+
+    def evaluate(
+        self,
+        frame: Frame | np.ndarray,
+        target: FaceDetection | TrackedFace | tuple[float, float, float, float],
+        confidence: float | None = None,
+        landmarks: FaceLandmarks | None = None,
+    ) -> FaceQualityResult:
+        """Evaluate face quality against configured thresholds."""
+        # 1. Extract image array
+        image = frame.image if isinstance(frame, Frame) else frame
+
+        if image is None or not isinstance(image, np.ndarray) or image.size == 0:
+            return FaceQualityResult(
+                is_acceptable=False,
+                metrics=FaceQualityMetrics(
+                    confidence=0.0,
+                    face_width=0.0,
+                    face_height=0.0,
+                    sharpness=0.0,
+                    crop_valid=False,
+                ),
+                rejection_reasons=[FaceRejectionReason.INVALID_IMAGE],
+                thresholds=self._thresholds,
+            )
+
+        # 2. Extract bounding box, confidence, and landmarks from target
+        if isinstance(target, (FaceDetection, TrackedFace)):
+            bbox = target.bbox
+            target_conf = target.confidence if confidence is None else confidence
+            target_lm = target.landmarks if landmarks is None else landmarks
+        else:
+            bbox = target
+            target_conf = 1.0 if confidence is None else confidence
+            target_lm = landmarks
+
+        x, y, w, h = bbox
+        img_h, img_w = image.shape[:2]
+
+        rejection_reasons: list[FaceRejectionReason] = []
+
+        # 3. Check Confidence
+        if target_conf < self._thresholds.min_confidence:
+            rejection_reasons.append(FaceRejectionReason.LOW_CONFIDENCE)
+
+        # 4. Check Dimensions & Bounds
+        if w <= 0 or h <= 0 or not np.isfinite(x) or not np.isfinite(y):
+            return FaceQualityResult(
+                is_acceptable=False,
+                metrics=FaceQualityMetrics(
+                    confidence=target_conf,
+                    face_width=max(0.0, w),
+                    face_height=max(0.0, h),
+                    sharpness=0.0,
+                    crop_valid=False,
+                ),
+                rejection_reasons=[FaceRejectionReason.INVALID_BBOX],
+                thresholds=self._thresholds,
+            )
+
+        if w < self._thresholds.min_face_width or h < self._thresholds.min_face_height:
+            rejection_reasons.append(FaceRejectionReason.TOO_SMALL)
+
+        # 5. Extract and Crop Face
+        x1 = max(0, int(np.floor(x)))
+        y1 = max(0, int(np.floor(y)))
+        x2 = min(img_w, int(np.ceil(x + w)))
+        y2 = min(img_h, int(np.ceil(y + h)))
+
+        crop = image[y1:y2, x1:x2]
+        if crop.size == 0 or (x2 - x1) <= 0 or (y2 - y1) <= 0:
+            rejection_reasons.append(FaceRejectionReason.INVALID_BBOX)
+            sharpness = 0.0
+            crop_valid = False
+        else:
+            sharpness = compute_sharpness(crop)
+            crop_valid = True
+            if sharpness < self._thresholds.min_sharpness:
+                rejection_reasons.append(FaceRejectionReason.BLURRY)
+
+        # 6. Pose & Frontality Evaluation
+        roll_angle_deg: float | None = None
+        yaw_asymmetry: float | None = None
+
+        if target_lm is not None:
+            roll_angle_deg, yaw_asymmetry = compute_pose_metrics(target_lm)
+
+            if roll_angle_deg > self._thresholds.max_roll_angle_deg:
+                rejection_reasons.append(FaceRejectionReason.EXCESSIVE_ROLL)
+
+            if yaw_asymmetry > self._thresholds.max_yaw_asymmetry:
+                rejection_reasons.append(FaceRejectionReason.EXCESSIVE_YAW)
+        elif self._thresholds.require_landmarks:
+            rejection_reasons.append(FaceRejectionReason.MISSING_LANDMARKS)
+
+        metrics = FaceQualityMetrics(
+            confidence=target_conf,
+            face_width=float(w),
+            face_height=float(h),
+            sharpness=sharpness,
+            roll_angle_deg=roll_angle_deg,
+            yaw_asymmetry=yaw_asymmetry,
+            crop_valid=crop_valid,
+        )
+
+        is_acceptable = len(rejection_reasons) == 0
+
+        return FaceQualityResult(
+            is_acceptable=is_acceptable,
+            metrics=metrics,
+            rejection_reasons=rejection_reasons,
+            thresholds=self._thresholds,
+        )
