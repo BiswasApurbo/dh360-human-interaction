@@ -42,5 +42,8 @@ jobs:
       - name: Run Mypy Type Check
         run: mypy
 
+      - name: Download Pretrained Models
+        run: python scripts/download_models.py
+
       - name: Run Pytest Test Suite
         run: pytest

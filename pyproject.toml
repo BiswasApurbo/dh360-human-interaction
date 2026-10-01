@@ -23,7 +23,10 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-dependencies = []
+dependencies = [
+    "numpy>=1.24.0",
+    "opencv-python>=4.8.0",
+]
 
 [project.optional-dependencies]
 dev = [
