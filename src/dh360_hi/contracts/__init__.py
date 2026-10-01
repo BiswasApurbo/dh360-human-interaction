@@ -1,5 +1,28 @@
-"""Shared message, event, and data contracts between edge and backend layers."""
+"""Shared message, event, DTO, error, and data contracts across layers."""
 
+from dh360_hi.contracts.dto import (
+    CreatePersonCommand,
+    EnrollmentProgressDTO,
+    EnrollmentResultDTO,
+    InteractionContextDTO,
+    InteractionSessionDTO,
+    InteractionSummaryDTO,
+    PersonEngagementStatsDTO,
+    PersonProfileDTO,
+    RuntimeMetricsDTO,
+    SessionAggregateAnalyticsDTO,
+    StepResultDTO,
+    UpdatePersonCommand,
+    epoch_to_iso,
+)
+from dh360_hi.contracts.errors import (
+    ApplicationError,
+    ConflictAppError,
+    EnrollmentAppError,
+    EntityNotFoundError,
+    ServiceUnavailableError,
+    ValidationAppError,
+)
 from dh360_hi.contracts.events import (
     BaseEvent,
     PersonEnteredEvent,
@@ -9,6 +32,15 @@ from dh360_hi.contracts.events import (
     SessionEndedEvent,
     SessionStartedEvent,
 )
+from dh360_hi.contracts.integration import (
+    BaseIntegrationEvent,
+    InteractionContextUpdatedIntegrationEvent,
+    PersonIdentifiedIntegrationEvent,
+    PersonLostIdentityIntegrationEvent,
+    SessionEndedIntegrationEvent,
+    SessionStartedIntegrationEvent,
+    map_domain_event_to_integration,
+)
 from dh360_hi.contracts.interaction import (
     InteractionContext,
     InteractionState,
@@ -16,14 +48,40 @@ from dh360_hi.contracts.interaction import (
 )
 
 __all__ = [
+    "ApplicationError",
     "BaseEvent",
+    "BaseIntegrationEvent",
+    "ConflictAppError",
+    "CreatePersonCommand",
+    "EnrollmentAppError",
+    "EnrollmentProgressDTO",
+    "EnrollmentResultDTO",
+    "EntityNotFoundError",
     "InteractionContext",
+    "InteractionContextDTO",
+    "InteractionContextUpdatedIntegrationEvent",
+    "InteractionSessionDTO",
     "InteractionState",
     "InteractionSummary",
+    "InteractionSummaryDTO",
+    "PersonEngagementStatsDTO",
     "PersonEnteredEvent",
     "PersonIdentifiedEvent",
+    "PersonIdentifiedIntegrationEvent",
     "PersonLeftEvent",
     "PersonLostIdentityEvent",
+    "PersonLostIdentityIntegrationEvent",
+    "PersonProfileDTO",
+    "RuntimeMetricsDTO",
+    "ServiceUnavailableError",
+    "SessionAggregateAnalyticsDTO",
     "SessionEndedEvent",
+    "SessionEndedIntegrationEvent",
     "SessionStartedEvent",
+    "SessionStartedIntegrationEvent",
+    "StepResultDTO",
+    "UpdatePersonCommand",
+    "ValidationAppError",
+    "epoch_to_iso",
+    "map_domain_event_to_integration",
 ]

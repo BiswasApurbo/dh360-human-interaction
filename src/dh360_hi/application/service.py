@@ -1,8 +1,15 @@
 """Unified human interaction application service facade.
 
 Provides a thin, typed, in-process application facade coordinating edge perception
-runtime, identity recognition, session management, and context aggregation without
-duplicating underlying domain logic.
+runtime, identity recognition, session management, face enrollment, and context aggregation
+without duplicating underlying domain logic.
+
+Invariants:
+    - Transport-neutral boundary returning frozen, serialization-safe DTOs.
+    - Zero raw computer vision, tensor manipulation, or SQL execution directly in facade.
+    - Exposes strictly application-safe contracts without leaking internal biometric
+      embeddings, tracker IDs, frame IDs, or raw camera image arrays.
+    - Delegates all domain responsibilities to specialized underlying services.
 """
 
 from __future__ import annotations
@@ -12,24 +19,42 @@ import threading
 from collections.abc import Callable
 from typing import TYPE_CHECKING, TypeVar
 
+import numpy as np
+
 from dh360_hi.application.config import HumanInteractionConfig
 from dh360_hi.application.coordinator import InteractionCoordinator
+from dh360_hi.application.health import ServiceHealthSnapshot, evaluate_service_health
 from dh360_hi.backend.gallery_loader import load_gallery_from_repository
-from dh360_hi.contracts.events import BaseEvent
-from dh360_hi.contracts.interaction import InteractionContext, InteractionSummary
+from dh360_hi.contracts.dto import (
+    CreatePersonCommand,
+    EnrollmentProgressDTO,
+    EnrollmentResultDTO,
+    InteractionContextDTO,
+    InteractionSessionDTO,
+    InteractionSummaryDTO,
+    PersonEngagementStatsDTO,
+    PersonProfileDTO,
+    RuntimeMetricsDTO,
+    SessionAggregateAnalyticsDTO,
+    StepResultDTO,
+    UpdatePersonCommand,
+)
+from dh360_hi.contracts.errors import ServiceUnavailableError
+from dh360_hi.contracts.events import BaseEvent, SessionEndedEvent
+from dh360_hi.contracts.integration import (
+    BaseIntegrationEvent,
+    map_domain_event_to_integration,
+)
 from dh360_hi.edge.event_bus import EventBus
 from dh360_hi.edge.runtime import EdgeInteractionRuntime, RuntimeMetrics, RuntimeState
+from dh360_hi.vision.frame import Frame
 
 if TYPE_CHECKING:
     from dh360_hi.backend.database import DatabaseManager
     from dh360_hi.backend.models import (
         ConsentStatus,
-        PersonEngagementStats,
-        PersonProfile,
         PersonStatus,
-        SessionAggregateAnalytics,
         SessionQueryFilter,
-        SessionRecord,
     )
     from dh360_hi.backend.person_service import BasePersonService
     from dh360_hi.backend.repository import BasePersonRepository
@@ -37,7 +62,8 @@ if TYPE_CHECKING:
         BaseSessionRepository,
         SessionPersistenceWorker,
     )
-    from dh360_hi.vision.enrollment import FaceEnrollmentController
+    from dh360_hi.contracts.interaction import InteractionContext
+    from dh360_hi.vision.enrollment import EnrollmentMode, FaceEnrollmentController
     from dh360_hi.vision.recognition import BaseFaceRecognizer
 
 logger = logging.getLogger(__name__)
@@ -49,13 +75,7 @@ class HumanInteractionService:
     """Unified application service facade for the Human Interaction subsystem.
 
     Coordinates lifecycle management, context queries, person profiles, historical
-    session persistence, and recognition gallery synchronization across subsystem components.
-
-    Invariants:
-        - Contains zero raw computer vision, tensor manipulation, or SQL execution.
-        - Exposes strictly application-safe contracts without leaking internal biometric
-          embeddings or image arrays.
-        - Delegates all domain responsibilities to specialized underlying services.
+    session persistence, face enrollment workflows, and recognition gallery synchronization.
     """
 
     def __init__(
@@ -85,6 +105,35 @@ class HumanInteractionService:
         self._config = config or HumanInteractionConfig()
         self._lock = threading.RLock()
 
+        # Integration event subscribers
+        self._integration_listeners: dict[int, Callable[[BaseIntegrationEvent], None]] = {}
+        self._next_integration_listener_id = 1
+        self._context_listener_adapters: dict[int, Callable[[InteractionContext], None]] = {}
+
+        # Subscribe to internal domain events to broadcast sanitized integration events
+        self._domain_sub_id: int | None = self._event_bus.subscribe(
+            BaseEvent,
+            self._handle_domain_event_for_integration,
+        )
+
+    def _handle_domain_event_for_integration(self, event: BaseEvent) -> None:
+        """Bridge internal domain events to external integration event subscribers."""
+        summary_dto: InteractionSummaryDTO | None = None
+        if isinstance(event, SessionEndedEvent):
+            raw_summary = self._coordinator.get_last_summary()
+            if raw_summary is not None:
+                summary_dto = InteractionSummaryDTO.from_summary(raw_summary)
+
+        integ_event = map_domain_event_to_integration(event, summary=summary_dto)
+        if integ_event is not None:
+            with self._lock:
+                listeners = list(self._integration_listeners.values())
+            for listener in listeners:
+                try:
+                    listener(integ_event)
+                except Exception:
+                    logger.exception("Error dispatching event %s", integ_event.event_type)
+
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
@@ -105,9 +154,9 @@ class HumanInteractionService:
         return self._runtime.state
 
     @property
-    def context(self) -> InteractionContext:
-        """Current immutable interaction context snapshot."""
-        return self._coordinator.get_context()
+    def context(self) -> InteractionContextDTO:
+        """Current immutable interaction context snapshot DTO."""
+        return InteractionContextDTO.from_context(self._coordinator.get_context())
 
     @property
     def metrics(self) -> RuntimeMetrics:
@@ -139,46 +188,53 @@ class HumanInteractionService:
         """Composed session persistence worker instance, if configured."""
         return self._persistence_worker
 
+    @property
+    def enrollment_controller(self) -> FaceEnrollmentController | None:
+        """Composed face enrollment controller instance, if configured."""
+        return self._enrollment_controller
+
     # ------------------------------------------------------------------
-    # Interaction Context Queries
+    # Interaction Context Queries (DTO Boundary)
     # ------------------------------------------------------------------
 
-    def get_interaction_context(self) -> InteractionContext:
+    def get_interaction_context(self) -> InteractionContextDTO:
         """Retrieve the current thread-safe immutable interaction context snapshot."""
-        return self._coordinator.get_context()
+        return InteractionContextDTO.from_context(self._coordinator.get_context())
 
-    def get_last_summary(self) -> InteractionSummary | None:
+    def get_last_summary(self) -> InteractionSummaryDTO | None:
         """Retrieve the summary record of the most recently completed session, if any."""
-        return self._coordinator.get_last_summary()
+        summary = self._coordinator.get_last_summary()
+        return InteractionSummaryDTO.from_summary(summary) if summary is not None else None
 
-    def get_runtime_metrics(self) -> RuntimeMetrics:
-        """Retrieve current operational telemetry metrics."""
-        return self._runtime.metrics
+    def get_runtime_metrics(self) -> RuntimeMetricsDTO:
+        """Retrieve current operational telemetry metrics snapshot DTO."""
+        return RuntimeMetricsDTO.from_metrics(self._runtime.metrics)
 
     def get_runtime_state(self) -> RuntimeState:
         """Retrieve current runtime execution state."""
         return self._runtime.state
 
     # ------------------------------------------------------------------
-    # Person & Profile Queries
+    # Person & Profile Queries and Commands (DTO Boundary)
     # ------------------------------------------------------------------
 
-    def get_person(self, person_id: str) -> PersonProfile | None:
-        """Retrieve a public person profile by UUID identifier.
+    def get_person(self, person_id: str) -> PersonProfileDTO | None:
+        """Retrieve a sanitized public person profile by UUID identifier.
 
         Args:
             person_id: UUID of the target person.
 
         Returns:
-            PersonProfile if found and registered, otherwise None.
+            PersonProfileDTO if found and registered, otherwise None.
         """
-        return self._person_service.get_person(person_id)
+        profile = self._person_service.get_person(person_id)
+        return PersonProfileDTO.from_profile(profile) if profile is not None else None
 
     def list_persons(
         self,
-        status: PersonStatus | None = None,
-        consent_status: ConsentStatus | None = None,
-    ) -> list[PersonProfile]:
+        status: PersonStatus | str | None = None,
+        consent_status: ConsentStatus | str | None = None,
+    ) -> list[PersonProfileDTO]:
         """List registered person profiles with optional filtering.
 
         Args:
@@ -186,63 +242,228 @@ class HumanInteractionService:
             consent_status: Optional ConsentStatus filter (e.g. GRANTED).
 
         Returns:
-            List of matching PersonProfile records.
+            List of matching PersonProfileDTO records.
         """
         people = self._person_service.list_people(status=status)
         if consent_status is not None:
-            people = [p for p in people if p.consent_status == consent_status]
-        return people
+            c_val = (
+                consent_status.value if hasattr(consent_status, "value") else str(consent_status)
+            )
+            people = [
+                p
+                for p in people
+                if (
+                    p.consent_status.value
+                    if hasattr(p.consent_status, "value")
+                    else str(p.consent_status)
+                )
+                == c_val
+            ]
+        return [PersonProfileDTO.from_profile(p) for p in people]
 
-    # ------------------------------------------------------------------
-    # Historical Session Queries & Persistence
-    # ------------------------------------------------------------------
-
-    def get_session(self, session_id: str) -> SessionRecord | None:
-        """Retrieve an interaction session record by UUID identifier.
+    def create_person(self, command: CreatePersonCommand) -> PersonProfileDTO:
+        """Create and enroll a new person profile.
 
         Args:
-            session_id: UUID of the target session.
+            command: Validated CreatePersonCommand payload.
 
         Returns:
-            SessionRecord if found in persistence, otherwise None.
+            Created PersonProfileDTO.
         """
+        profile = self._person_service.create_person(
+            display_name=command.display_name,
+            preferred_name=command.preferred_name,
+            status=command.status,
+            consent_status=command.consent_status,
+            notes=command.notes,
+            person_id=command.person_id,
+        )
+        return PersonProfileDTO.from_profile(profile)
+
+    def update_person(self, person_id: str, command: UpdatePersonCommand) -> PersonProfileDTO:
+        """Update an existing person profile.
+
+        Args:
+            person_id: UUID of the target person.
+            command: Validated UpdatePersonCommand payload.
+
+        Returns:
+            Updated PersonProfileDTO.
+        """
+        profile = self._person_service.update_person(
+            person_id=person_id,
+            display_name=command.display_name,
+            preferred_name=command.preferred_name,
+            status=command.status,
+            consent_status=command.consent_status,
+            notes=command.notes,
+        )
+        return PersonProfileDTO.from_profile(profile)
+
+    def delete_person(self, person_id: str) -> bool:
+        """Delete a person profile, stored embeddings, and synchronize runtime identity state.
+
+        Args:
+            person_id: UUID of the target person.
+
+        Returns:
+            True if person was deleted, False if not found.
+        """
+        id_mgr = getattr(getattr(self._runtime, "pipeline", None), "identity_manager", None)
+        from dh360_hi.vision.recognition import FaceRecognizer
+
+        rec_inst = self._recognizer if isinstance(self._recognizer, FaceRecognizer) else None
+        return self._person_service.delete_person(
+            person_id=person_id,
+            recognizer=rec_inst,
+            identity_manager=id_mgr,
+        )
+
+    def reset_person_biometrics(self, person_id: str) -> int:
+        """Delete all biometric embeddings for a person and update runtime recognizer gallery.
+
+        Args:
+            person_id: UUID of the target person.
+
+        Returns:
+            Count of deleted biometric embedding records.
+        """
+        id_mgr = getattr(getattr(self._runtime, "pipeline", None), "identity_manager", None)
+        from dh360_hi.vision.recognition import FaceRecognizer
+
+        rec_inst = self._recognizer if isinstance(self._recognizer, FaceRecognizer) else None
+        return self._person_service.delete_person_embeddings(
+            person_id=person_id,
+            recognizer=rec_inst,
+            identity_manager=id_mgr,
+        )
+
+    # ------------------------------------------------------------------
+    # Face Enrollment Workflow Commands (DTO Boundary)
+    # ------------------------------------------------------------------
+
+    def start_enrollment(
+        self,
+        person_id: str,
+        mode: EnrollmentMode | str = "add_samples",
+    ) -> EnrollmentProgressDTO:
+        """Start a guided face enrollment session for an enrolled, consented person.
+
+        Args:
+            person_id: Target person UUID.
+            mode: Enrollment mode ('add_samples' or 'replace').
+
+        Returns:
+            Initial EnrollmentProgressDTO.
+
+        Raises:
+            ServiceUnavailableError: If enrollment controller is not configured.
+        """
+        if self._enrollment_controller is None:
+            msg = "FaceEnrollmentController is not configured"
+            raise ServiceUnavailableError("enrollment", msg)
+        progress = self._enrollment_controller.start_session(person_id=person_id, mode=mode)
+        return EnrollmentProgressDTO.from_progress(progress)
+
+    def process_enrollment_frame(
+        self,
+        frame: Frame | np.ndarray,
+    ) -> EnrollmentProgressDTO:
+        """Process a camera frame against the active face enrollment session.
+
+        Args:
+            frame: Camera Frame or raw BGR numpy array.
+
+        Returns:
+            Updated EnrollmentProgressDTO.
+
+        Raises:
+            ServiceUnavailableError: If enrollment controller is not configured.
+        """
+        if self._enrollment_controller is None:
+            msg = "FaceEnrollmentController is not configured"
+            raise ServiceUnavailableError("enrollment", msg)
+        if isinstance(frame, np.ndarray):
+            import time
+
+            frame_obj = Frame(image=frame, frame_id=0, timestamp=time.time())
+        else:
+            frame_obj = frame
+        progress = self._enrollment_controller.process_frame(frame_obj)
+        return EnrollmentProgressDTO.from_progress(progress)
+
+    def cancel_enrollment(self, reason: str = "User cancelled") -> bool:
+        """Cancel an in-progress face enrollment session without persisting samples.
+
+        Args:
+            reason: Optional cancellation reason.
+
+        Returns:
+            True if cancelled.
+
+        Raises:
+            ServiceUnavailableError: If enrollment controller is not configured.
+        """
+        if self._enrollment_controller is None:
+            msg = "FaceEnrollmentController is not configured"
+            raise ServiceUnavailableError("enrollment", msg)
+        _ = reason
+        self._enrollment_controller.cancel_session()
+        return True
+
+    def commit_enrollment(self) -> EnrollmentResultDTO:
+        """Persist collected enrollment samples transactionally and reload recognizer gallery.
+
+        Returns:
+            EnrollmentResultDTO outcome.
+
+        Raises:
+            ServiceUnavailableError: If enrollment controller is not configured.
+        """
+        if self._enrollment_controller is None:
+            msg = "FaceEnrollmentController is not configured"
+            raise ServiceUnavailableError("enrollment", msg)
+        res = self._enrollment_controller.commit_session()
+        if res.is_success:
+            self.reload_gallery()
+        return EnrollmentResultDTO.from_result(res)
+
+    def get_enrollment_progress(self) -> EnrollmentProgressDTO | None:
+        """Retrieve current progress of the active enrollment session, if any."""
+        if self._enrollment_controller is None:
+            return None
+        p = self._enrollment_controller.current_progress
+        return EnrollmentProgressDTO.from_progress(p) if p is not None else None
+
+    # ------------------------------------------------------------------
+    # Historical Session Queries & Analytics (DTO Boundary)
+    # ------------------------------------------------------------------
+
+    def get_session(self, session_id: str) -> InteractionSessionDTO | None:
+        """Retrieve an interaction session record DTO by UUID identifier."""
         if self._session_repository is None:
             return None
-        return self._session_repository.get_session(session_id)
+        rec = self._session_repository.get_session(session_id)
+        return InteractionSessionDTO.from_record(rec) if rec is not None else None
 
     def list_sessions(
         self,
         person_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> list[SessionRecord]:
-        """List historical interaction sessions with optional person filtering and pagination.
-
-        Args:
-            person_id: Optional UUID filter for identified subject.
-            limit: Maximum number of records to return (must be > 0).
-            offset: Number of records to skip for pagination (must be >= 0).
-
-        Returns:
-            List of matching SessionRecord entries ordered chronologically descending.
-        """
+    ) -> list[InteractionSessionDTO]:
+        """List historical interaction session DTOs with pagination."""
         if self._session_repository is None:
             return []
-        return self._session_repository.list_sessions(
+        recs = self._session_repository.list_sessions(
             person_id=person_id,
             limit=limit,
             offset=offset,
         )
+        return [InteractionSessionDTO.from_record(r) for r in recs]
 
     def count_sessions(self, person_id: str | None = None) -> int:
-        """Count total historical interaction sessions, optionally filtered by person.
-
-        Args:
-            person_id: Optional UUID filter for identified subject.
-
-        Returns:
-            Total number of matching session records.
-        """
+        """Count total historical interaction sessions."""
         if self._session_repository is None:
             return 0
         return self._session_repository.count_sessions(person_id=person_id)
@@ -250,34 +471,21 @@ class HumanInteractionService:
     def query_sessions(
         self,
         filter: SessionQueryFilter | None = None,
-    ) -> list[SessionRecord]:
-        """Query historical interaction sessions with rich filtering and pagination.
-
-        Args:
-            filter: Filter criteria model (defaults to default SessionQueryFilter()).
-
-        Returns:
-            List of matching SessionRecord entries ordered chronologically descending.
-        """
+    ) -> list[InteractionSessionDTO]:
+        """Query historical interaction sessions with rich filtering and pagination."""
         if self._session_repository is None:
             return []
         from dh360_hi.backend.models import SessionQueryFilter
 
         criteria = filter if filter is not None else SessionQueryFilter()
-        return self._session_repository.query_sessions(criteria)
+        recs = self._session_repository.query_sessions(criteria)
+        return [InteractionSessionDTO.from_record(r) for r in recs]
 
     def count_query_sessions(
         self,
         filter: SessionQueryFilter | None = None,
     ) -> int:
-        """Count historical interaction sessions matching structured criteria.
-
-        Args:
-            filter: Filter criteria model (defaults to default SessionQueryFilter()).
-
-        Returns:
-            Total count of matching session records.
-        """
+        """Count historical interaction sessions matching structured criteria."""
         if self._session_repository is None:
             return 0
         from dh360_hi.backend.models import SessionQueryFilter
@@ -288,19 +496,12 @@ class HumanInteractionService:
     def get_aggregate_analytics(
         self,
         filter: SessionQueryFilter | None = None,
-    ) -> SessionAggregateAnalytics:
-        """Compute aggregate statistics directly in SQLite across filtered sessions.
-
-        Args:
-            filter: Optional filter criteria to restrict the analytical scope.
-
-        Returns:
-            SessionAggregateAnalytics model with aggregate metrics.
-        """
+    ) -> SessionAggregateAnalyticsDTO:
+        """Compute aggregate statistics directly in SQLite across filtered sessions."""
         if self._session_repository is None:
             from dh360_hi.backend.models import SessionAggregateAnalytics
 
-            return SessionAggregateAnalytics(
+            analytics = SessionAggregateAnalytics(
                 total_sessions=0,
                 total_duration_seconds=0.0,
                 average_duration_seconds=0.0,
@@ -311,66 +512,55 @@ class HumanInteractionService:
                 earliest_session_started_at=None,
                 latest_session_ended_at=None,
             )
-        return self._session_repository.get_aggregate_analytics(filter=filter)
+        else:
+            analytics = self._session_repository.get_aggregate_analytics(filter=filter)
+        return SessionAggregateAnalyticsDTO.from_analytics(analytics)
 
     def get_person_engagement_stats(
         self,
         person_id: str,
-    ) -> PersonEngagementStats | None:
-        """Retrieve historical interaction metrics for a specific person.
-
-        Args:
-            person_id: UUID of the target person.
-
-        Returns:
-            PersonEngagementStats if sessions exist for this person, otherwise None.
-        """
+    ) -> PersonEngagementStatsDTO | None:
+        """Retrieve historical interaction metrics DTO for a specific person."""
         if self._session_repository is None:
             return None
-        return self._session_repository.get_person_engagement_stats(person_id)
+        stats = self._session_repository.get_person_engagement_stats(person_id)
+        return PersonEngagementStatsDTO.from_stats(stats) if stats is not None else None
 
     def flush_session_persistence(self, timeout: float = 2.0) -> bool:
-        """Flush pending session persistence writes to storage.
-
-        Args:
-            timeout: Maximum seconds to wait.
-
-        Returns:
-            True if all pending sessions were successfully written before timeout.
-        """
+        """Flush pending session persistence writes to storage."""
         if self._persistence_worker is not None:
             return self._persistence_worker.flush(timeout=timeout)
         return True
+
+    # ------------------------------------------------------------------
+    # Health Diagnostics
+    # ------------------------------------------------------------------
+
+    def get_health_snapshot(self) -> ServiceHealthSnapshot:
+        """Retrieve a comprehensive health snapshot of the service and all subsystems."""
+        return evaluate_service_health(self)
 
     # ------------------------------------------------------------------
     # Lifecycle Commands
     # ------------------------------------------------------------------
 
     def start(self, async_thread: bool = True) -> None:
-        """Start the continuous edge interaction runtime frame pump and persistence worker.
-
-        Args:
-            async_thread: If True (default), runs continuous processing in a background
-                thread. If False, runs synchronously on the caller thread.
-        """
+        """Start the continuous edge interaction runtime frame pump and persistence worker."""
         with self._lock:
             if self._persistence_worker is not None:
                 self._persistence_worker.start()
             self._runtime.start(async_thread=async_thread)
 
     def stop(self, timeout: float = 3.0) -> None:
-        """Gracefully stop the runtime, terminate background workers, and release resources.
-
-        Enforces deterministic shutdown ordering:
-            1. Stop runtime frame pump and embedding worker threads.
-            2. Drain and stop background session persistence worker.
-            3. Unsubscribe InteractionCoordinator from EventBus.
-            4. Close DatabaseManager SQLite connection.
-
-        Args:
-            timeout: Maximum seconds to wait for background thread termination.
-        """
+        """Gracefully stop the runtime, terminate background workers, and release resources."""
         with self._lock:
+            if self._domain_sub_id is not None:
+                try:
+                    self._event_bus.unsubscribe(self._domain_sub_id)
+                    self._domain_sub_id = None
+                except Exception:
+                    logger.exception("Error unsubscribing domain event bridge")
+
             try:
                 self._runtime.stop(timeout=timeout)
             except Exception:
@@ -402,33 +592,38 @@ class HumanInteractionService:
         with self._lock:
             self._runtime.resume()
 
-    def step_once(self) -> tuple[InteractionContext, list[BaseEvent]]:
+    def step_once(self) -> StepResultDTO:
         """Execute a single deterministic frame-to-interaction step.
 
         Runs one frame through perception, session management, and event dispatch,
-        and returns the resulting application context snapshot and domain events.
+        and returns the resulting transport-neutral StepResultDTO.
 
         Returns:
-            Tuple of (InteractionContext snapshot, list of emitted BaseEvents).
+            StepResultDTO containing InteractionContextDTO and list[BaseIntegrationEvent].
         """
         with self._lock:
-            _frame_result, events = self._runtime.step_once()
-            ctx = self._coordinator.get_context()
-            return ctx, events
+            _frame_result, domain_events = self._runtime.step_once()
+            ctx_dto = InteractionContextDTO.from_context(self._coordinator.get_context())
+
+            summary_dto: InteractionSummaryDTO | None = None
+            raw_summary = self._coordinator.get_last_summary()
+            if raw_summary is not None:
+                summary_dto = InteractionSummaryDTO.from_summary(raw_summary)
+
+            integ_events: list[BaseIntegrationEvent] = []
+            for ev in domain_events:
+                mapped = map_domain_event_to_integration(ev, summary=summary_dto)
+                if mapped is not None:
+                    integ_events.append(mapped)
+
+            return StepResultDTO(context=ctx_dto, events=integ_events)
 
     # ------------------------------------------------------------------
     # Gallery & Recognition Management
     # ------------------------------------------------------------------
 
     def reload_gallery(self) -> int:
-        """Synchronize in-memory face recognition gallery with persisted embeddings.
-
-        Extracts active, consented embeddings matching the configured model from
-        the repository and atomically hot-swaps the recognition gallery.
-
-        Returns:
-            Number of enrolled person identities loaded into the active gallery.
-        """
+        """Synchronize in-memory face recognition gallery with persisted embeddings."""
         with self._lock:
             gallery = load_gallery_from_repository(
                 repository=self._repository,
@@ -441,19 +636,56 @@ class HumanInteractionService:
             return len(gallery.list_entries())
 
     # ------------------------------------------------------------------
-    # Listener Registration Delegation
+    # Integration & Domain Event Subscriptions
     # ------------------------------------------------------------------
 
-    def add_context_listener(self, callback: Callable[[InteractionContext], None]) -> int:
-        """Register a callback for application interaction context transitions.
+    def add_integration_event_listener(
+        self,
+        callback: Callable[[BaseIntegrationEvent], None],
+    ) -> int:
+        """Register a callback for sanitized transport-neutral integration events.
 
         Args:
-            callback: Function invoked synchronously on context updates.
+            callback: Function invoked synchronously on integration events.
 
         Returns:
             Unique listener ID for subsequent unregistration.
         """
-        return self._coordinator.add_context_listener(callback)
+        with self._lock:
+            lid = self._next_integration_listener_id
+            self._next_integration_listener_id += 1
+            self._integration_listeners[lid] = callback
+            return lid
+
+    def remove_integration_event_listener(self, listener_id: int) -> bool:
+        """Unregister an integration event listener.
+
+        Args:
+            listener_id: ID returned by add_integration_event_listener.
+
+        Returns:
+            True if removed, False if not found.
+        """
+        with self._lock:
+            return self._integration_listeners.pop(listener_id, None) is not None
+
+    def add_context_listener(self, callback: Callable[[InteractionContextDTO], None]) -> int:
+        """Register a callback for application interaction context transitions.
+
+        Args:
+            callback: Function invoked with InteractionContextDTO on context updates.
+
+        Returns:
+            Unique listener ID for subsequent unregistration.
+        """
+
+        def _adapter(ctx: InteractionContext) -> None:
+            callback(InteractionContextDTO.from_context(ctx))
+
+        with self._lock:
+            lid = self._coordinator.add_context_listener(_adapter)
+            self._context_listener_adapters[lid] = _adapter
+            return lid
 
     def remove_context_listener(self, listener_id: int) -> bool:
         """Unregister a previously registered context listener.
@@ -464,14 +696,16 @@ class HumanInteractionService:
         Returns:
             True if removed, False if listener was not found.
         """
-        return self._coordinator.remove_context_listener(listener_id)
+        with self._lock:
+            self._context_listener_adapters.pop(listener_id, None)
+            return self._coordinator.remove_context_listener(listener_id)
 
     def add_event_listener(
         self,
         event_type: type[T],
         callback: Callable[[T], None],
     ) -> int:
-        """Subscribe directly to structured domain events on the in-process EventBus.
+        """Subscribe directly to internal domain events on the in-process EventBus.
 
         Args:
             event_type: Concrete subclass of BaseEvent to subscribe to.

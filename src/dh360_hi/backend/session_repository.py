@@ -604,6 +604,12 @@ class SessionPersistenceWorker:
             return self._last_error
 
     @property
+    def is_alive(self) -> bool:
+        """Whether the worker background thread is alive and executing."""
+        with self._lock:
+            return self._thread is not None and self._thread.is_alive()
+
+    @property
     def max_queue_size(self) -> int:
         """Configured maximum queue capacity."""
         return self._max_queue_size

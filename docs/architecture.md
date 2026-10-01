@@ -666,9 +666,74 @@ The `HumanInteractionService` and its composition root `create_interaction_servi
    - Drains and terminates the background `SessionPersistenceWorker`, ensuring all pending interaction summaries are safely committed to SQLite.
    - Unsubscribes coordinator listeners from the `EventBus`.
    - Closes the `DatabaseManager` SQLite connection.
-4. **Deterministic Simulation & Test Step (`step_once()`)**: Executes a single frame cycle through perception and event dispatch, returning `tuple[InteractionContext, list[BaseEvent]]` without leaking raw vision tensors.
-5. **Zero-Leakage Privacy Boundary**: All external interactions traverse pure application contracts (`InteractionContext`, `InteractionSummary`, `SessionRecord`, `PersonProfile`, `RuntimeMetrics`). Raw biometric feature vectors, model weights, OpenCV arrays, and database cursors remain strictly encapsulated.
+4. **Deterministic Simulation & Test Step (`step_once()`)**: Executes a single frame cycle through perception and event dispatch, returning a sanitized `StepResultDTO` without leaking raw vision tensors or internal tracker IDs.
+5. **Zero-Leakage Privacy Boundary**: All external interactions traverse pure transport-neutral DTOs (`InteractionContextDTO`, `InteractionSummaryDTO`, `InteractionSessionDTO`, `PersonProfileDTO`, `RuntimeMetricsDTO`). Raw biometric feature vectors, model weights, OpenCV arrays, internal tracker IDs (`track_id`), frame sequence IDs (`frame_id`), and database cursors remain strictly encapsulated.
 
+### 5.7 Application Integration Boundary & Transport-Neutral Contracts (`dh360_hi.contracts.dto`, `integration`, `errors`, & `health`)
+
+Milestone M2.13 establishes the formal application integration boundary, decoupling the core perception and domain subsystem from all transport and presentation layers (REST APIs, WebSockets, dialogue managers, robotics, UI dashboards):
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                        External Orchestrators & Transports                             │
+│       [ FastAPI REST / WebSockets ]    [ Dialogue Manager / LLM ]    [ Robot UI ]      │
+└───────────────────────────────────────────┬────────────────────────────────────────────┘
+                                            │ Operates Strictly Across DTO Boundary
+                                            ▼
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                        Application Integration Boundary (M2.13)                        │
+├─────────────────────────┬──────────────────────────┬───────────────────────────────────┤
+│ Transport-Neutral DTOs  │ External Integration     │ Application Error Taxonomy &      │
+│ • PersonProfileDTO      │ Events                   │ Health Diagnostics                │
+│ • CreatePersonCommand   │ • SessionStarted         │ • ApplicationError                │
+│ • UpdatePersonCommand   │ • PersonIdentified       │ • EntityNotFoundError             │
+│ • InteractionContextDTO │ • PersonLostIdentity     │ • ValidationAppError              │
+│ • InteractionSummaryDTO │ • SessionEnded           │ • ConflictAppError                │
+│ • InteractionSessionDTO │ • ContextUpdated         │ • ServiceUnavailableError         │
+│ • Analytics DTOs        │ (Zero tracker/frame IDs, │ • EnrollmentAppError              │
+│ • StepResultDTO         │  ISO 8601 UTC times)     │ • ServiceHealthSnapshot           │
+└─────────────────────────┴─────────────┬────────────┴───────────────────────────────────┘
+                                        │ Typed Facade Delegation
+                                        ▼
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                                HumanInteractionService                                 │
+│  • get_interaction_context() -> InteractionContextDTO                                  │
+│  • get_last_summary() -> InteractionSummaryDTO | None                                  │
+│  • get_person() / list_persons() -> PersonProfileDTO / list[PersonProfileDTO]          │
+│  • create_person() / update_person() / delete_person() / reset_person_biometrics()     │
+│  • start_enrollment() / process_enrollment_frame() / commit_enrollment()               │
+│  • query_sessions() / get_aggregate_analytics() / get_person_engagement_stats()        │
+│  • get_health_snapshot() -> ServiceHealthSnapshot                                      │
+│  • add_integration_event_listener() / step_once() -> StepResultDTO                     │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.7.1 Transport-Neutral DTO Architecture
+
+1. **Frozen & JSON-Serializable**: All DTOs are frozen dataclasses (`@dataclass(frozen=True)`) equipped with `.to_dict()` methods, producing JSON-compliant dictionary trees with zero OpenCV matrices, NumPy ndarrays, or database cursor dependencies.
+2. **Standardized ISO 8601 UTC Timestamps**: Float epoch timestamps are converted to UTC strings formatted according to ISO 8601 (e.g. `2026-10-01T12:00:00+00:00`), ensuring transport interoperability across web and backend clients.
+3. **Strict Privacy Invariants**:
+   - `PersonProfileDTO` exposes only public demographic metadata (`person_id`, `display_name`, `preferred_name`, `status`, `consent_status`, `consent_timestamp`, `created_at`, `updated_at`). Internal biometric implementation details (raw embeddings, vector counts, model names) and free-form `notes` are completely omitted.
+   - `StepResultDTO` packages `InteractionContextDTO` and sanitized `list[BaseIntegrationEvent]`, stripping internal vision tracker IDs (`track_id`) and camera frame IDs (`frame_id`).
+
+#### 5.7.2 External Integration Events & Domain Event Mapper
+
+- **Sanitized Event Bridge (`map_domain_event_to_integration`)**: Translates internal perception domain events (`SessionStartedEvent`, `PersonIdentifiedEvent`, `PersonLostIdentityEvent`, `SessionEndedEvent`) into external integration events (`SessionStartedIntegrationEvent`, `PersonIdentifiedIntegrationEvent`, `PersonLostIdentityIntegrationEvent`, `SessionEndedIntegrationEvent`).
+- **Internal Perception Event Encapsulation**: Low-level vision tracking events (`PersonEnteredEvent`, `PersonLeftEvent`) remain internal to the perception pipeline and return `None` during integration mapping.
+- **Integration Event Subscribers**: `add_integration_event_listener(callback)` and `remove_integration_event_listener(listener_id)` provide a clean in-process subscription mechanism for downstream application adapters.
+
+#### 5.7.3 Application Error Hierarchy & Health Diagnostics
+
+- **Structured Application Exceptions**:
+  - `ApplicationError`: Base class providing structured error codes (`code`) and diagnostic context dictionaries (`details`), easily serializable via `.to_dict()`.
+  - `EntityNotFoundError`: Raised on missing domain entities (e.g. person or session).
+  - `ValidationAppError`: Raised on invalid command or query filter parameters.
+  - `ConflictAppError`: Raised on concurrent state conflicts or duplicate keys.
+  - `ServiceUnavailableError`: Raised when unconfigured or offline subsystems are invoked.
+  - `EnrollmentAppError`: Raised on face enrollment failures or timeouts.
+- **Defensive Health Diagnostics (`evaluate_service_health`)**:
+  - Inspects `runtime`, `database`, `persistence_worker`, `recognizer`, and `enrollment` subsystems defensively without throwing exceptions.
+  - Produces a `ServiceHealthSnapshot` with operational health tiers (`HEALTHY`, `DEGRADED`, `UNHEALTHY`, `DISABLED`) and real-time performance telemetry (`RuntimeMetricsDTO`).
 
 ---
 
