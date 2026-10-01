@@ -394,14 +394,95 @@ The `PersonService` provides complete lifecycle operations ensuring strict priva
 - **Biometric Reset**: `delete_person_embeddings()` permits clearing biometric data (face vectors) without deleting the user's demographic record.
 - **Cascade Deletion & Active Track Invalidation**: Calling `delete_person(person_id, recognizer, identity_manager)` transactionally removes the person from SQLite (which cascades to all associated embeddings), reloads `FaceRecognizer` gallery, and invokes `IdentityStateManager.invalidate_person(person_id)`, transitioning any matching active camera tracks immediately to `UNREGISTERED` and resetting their observation history.
 
-### 5.3 Shared Contracts
+### 5.3 Edge Session Supervision & Structured Event Bus (M2.7)
 
+Milestone M2.7 introduces a clean domain boundary that converts raw perception outputs (`TwoRateFrameResult`) into stable, typed interaction events, decoupling computer vision internals from downstream dialogue and robotic behavior controllers.
 
-- Type-safe, versioned Pydantic models defining:
-  - Identity and detection events (`PersonSeen`, `PersonIdentified`, `PersonLeft`).
-  - Conversation payloads (`UserUtterance`, `SystemResponse`).
-  - Actuation and robot commands (`LookAt`, `Speak`, `SetExpression`).
+```
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                      Two-Rate Perception Pipeline (Vision)                       │
+│        (YuNet Detect → Track → Quality → Async SFace → Target Selector)          │
+└────────────────────────────────────────┬─────────────────────────────────────────┘
+                                         │
+                                         ▼ TwoRateFrameResult
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                                SessionManager                                    │
+│       (Primary Interaction Target Lifecycle & State Machine Supervision)         │
+└────────────────────────────────────────┬─────────────────────────────────────────┘
+                                         │
+                                         ▼ list[BaseEvent]
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                                   EventBus                                       │
+│          (Synchronous In-Process Dispatch with Subscriber Isolation)             │
+└────────────────────────────────────────┬─────────────────────────────────────────┘
+                                         │
+                  ┌──────────────────────┼──────────────────────┐
+                  ▼                      ▼                      ▼
+        [ PersonEnteredEvent ] [ SessionStartedEvent ] [ PersonIdentifiedEvent ]
+        [ PersonLeftEvent ]    [ SessionEndedEvent ]   [ PersonLostIdentityEvent ]
+```
 
+#### 5.3.1 Domain Event Contracts (`dh360_hi.contracts.events`)
+
+All events are frozen, immutable dataclasses carrying only domain-level semantics:
+- **Zero Vision Leakage**: Events contain no embeddings, bounding boxes, landmark points, numpy arrays, or camera frame buffers.
+- **Opaque Identification**: Subjects are referenced by opaque `person_id: str | None` and `track_id: int`. Unregistered individuals are first-class citizens represented with `person_id=None`.
+- **Core Event Hierarchy**:
+  - `BaseEvent`: Base class with `event_id` (UUID4 string), `frame_id`, and `timestamp`.
+  - `PersonEnteredEvent`: Emitted when the primary interaction target's presence is confirmed after entry debounce.
+  - `SessionStartedEvent`: Emitted exactly once when a new primary interaction session begins (`session_id: str`, `person_id: str | None`).
+  - `PersonIdentifiedEvent`: Emitted when the active target transitions to `IDENTIFIED` state (`session_id`, `person_id: str`).
+  - `PersonLostIdentityEvent`: Emitted when the active target loses a previously stable identity without terminating the interaction session.
+  - `PersonLeftEvent`: Emitted when the active target's departure is confirmed after leave debounce.
+  - `SessionEndedEvent`: Emitted exactly once when the primary session terminates (`session_id`, `final_person_id: str | None`).
+
+#### 5.3.2 In-Process Synchronous Event Bus (`dh360_hi.edge.event_bus`)
+
+`EventBus` provides deterministic, lightweight in-process event delivery:
+- **No Global Singleton**: Callers instantiate and wire `EventBus` explicitly.
+- **Synchronous & In-Line**: Dispatches directly on the caller's thread without queues, worker threads, or background event loops.
+- **Subscriber Isolation**: Exceptions in subscriber callbacks are caught and logged; failure in one handler cannot abort event delivery to remaining subscribers.
+- **Deterministic Order & Unsubscription**: Subscribers execute in exact registration order and receive unique subscription IDs for clean unregistration.
+
+#### 5.3.3 Session Lifecycle State Machine (`dh360_hi.edge.session_manager`)
+
+`SessionManager` manages the lifecycle of the single **primary interaction target**:
+
+```
+                  ┌──────────────────────────────────────────────┐
+                  │                 NO_SESSION                   │
+                  └──────────────────────┬───────────────────────┘
+                                         │
+                                         │ confirmed PERSON_ENTERED
+                                         │ & primary target selected
+                                         ▼
+                  ┌──────────────────────────────────────────────┐
+                  │               ACTIVE_SESSION                 │
+                  │   - SessionStartedEvent(person_id=None/ID)   │
+                  │   - [PersonIdentifiedEvent]                  │
+                  │   - [PersonLostIdentityEvent]                │
+                  └──────────────────────┬───────────────────────┘
+                                         │
+                                         │ confirmed PERSON_LEFT
+                                         │ (active target departs)
+                                         ▼
+                  ┌──────────────────────────────────────────────┐
+                  │                 NO_SESSION                   │
+                  │   - PersonLeftEvent                          │
+                  │   - SessionEndedEvent                        │
+                  └──────────────────────────────────────────────┘
+```
+
+#### 5.3.4 Primary Target Switching & Multi-Person Semantics
+
+1. **Target Ranking Stability**: If the target selector switches candidate rankings while the active target is still present in the scene, `SessionManager` **retains the current session**. No fake `PersonLeftEvent`, `SessionEndedEvent`, or secondary session is emitted.
+2. **True Departure Transition**: Only when the active session's subject physically leaves (confirmed by `PresenceDebouncer` after departure patience frames) does the active session end with `PersonLeftEvent → SessionEndedEvent`.
+3. **Subsequent Target Promotion**: If another person was present in the background and becomes the primary target after the previous subject leaves, a new session starts cleanly (`PersonEnteredEvent → SessionStartedEvent`).
+4. **Background Person Isolation**: Background faces that are not selected as the primary interaction target do not generate sessions, entry, identification, or departure domain events.
+5. **Deterministic Event Ordering**:
+   - **Entry**: `PersonEnteredEvent` → `SessionStartedEvent` → [`PersonIdentifiedEvent`]
+   - **Departure**: `PersonLeftEvent` → `SessionEndedEvent`
+   - **Mid-Session Identity Transition**: `PersonLostIdentityEvent` → `PersonIdentifiedEvent`
 
 ---
 
