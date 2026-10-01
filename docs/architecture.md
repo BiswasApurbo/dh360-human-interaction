@@ -522,6 +522,55 @@ The `EdgeInteractionRuntime` is the top-level orchestration component responsibl
 - **Consecutive Error Threshold**: If consecutive errors exceed `max_consecutive_frame_errors` (default: 10), the runtime transitions safely to `RuntimeState.ERROR`, recording the root cause for telemetry and external supervision.
 - **Operational Metrics Snapshot (`RuntimeMetrics`)**: Exposes thread-safe immutable telemetry including `frames_processed`, `current_fps` (rolling window), `average_latency_ms`, `last_error`, and `uptime_seconds`.
 
+### 5.5 Interaction Context Coordinator & Application Boundary (`dh360_hi.application.coordinator`)
+
+The `InteractionCoordinator` creates a clean, decoupled application-level boundary immediately following the in-process `EventBus`:
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                             Edge Perception & Runtime                            │
+│           (FrameSource → TwoRatePerceptionPipeline → SessionManager)             │
+└────────────────────────────────────────┬─────────────────────────────────────────┘
+                                         │
+                                         ▼ list[BaseEvent]
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                                   EventBus                                       │
+│                 (In-Process Synchronous Event Distribution)                      │
+└────────────────────────────────────────┬─────────────────────────────────────────┘
+                                         │
+                                         ▼ BaseEvent Subscriptions
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                             InteractionCoordinator                               │
+│              (Application Context Aggregation & Profile Resolution)              │
+│                                        │                                         │
+│                ┌───────────────────────┴───────────────────────┐                 │
+│                ▼                                               ▼                 │
+│      [ PersonService Lookup ]                     [ Context Listener Callbacks ] │
+│      (Public PersonProfile)                       (Thread-Safe Immutable Events) │
+└────────────────────────────────────────┬─────────────────────────────────────────┘
+                                         │
+                                         ▼ Queryable Application Contracts
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                      Application Boundary (Contracts)                            │
+│                                                                                  │
+│   • InteractionContext (session_id, person_id, display_name, profile, state)    │
+│   • InteractionSummary (session_id, timestamps, duration, identity transitions)  │
+│   • InteractionState (IDLE ↔ GREETING ↔ ENGAGED ↔ FAREWELL)                      │
+└────────────────────────────────────────┬─────────────────────────────────────────┘
+                                         │
+                   ┌─────────────────────┼─────────────────────┐
+                   ▼                     ▼                     ▼
+        [ Future FastAPI / REST ] [ Future LLM Dialogue ] [ Future Robot Actions ]
+```
+
+#### 5.5.1 Architectural Invariants & Separation of Concerns
+
+1. **SessionManager Remains Authoritative**: `SessionManager` retains exclusive ownership of target presence tracking, departure debouncing, and session ID generation. `InteractionCoordinator` consumes authoritative lifecycle events without duplicating vision state machines.
+2. **Context Aggregator & Enricher**: `InteractionCoordinator` maintains the active `InteractionContext` snapshot, resolving opaque `person_id` values into rich `PersonProfile` metadata via `PersonService` (display name, preferred name, consent status).
+3. **No Vision Data Leakage**: Application contracts (`InteractionContext`, `InteractionSummary`, `InteractionState`) are pure Python frozen dataclasses containing zero image arrays, bounding boxes, landmarks, 128-D biometric embeddings, or database connection handles.
+4. **Thread-Safe Snapshot Access**: Context queries (`get_context()`, `get_last_summary()`) return immutable dataclasses protected by internal reentrant locking (`threading.RLock`), supporting safe concurrent queries from future HTTP or async worker threads.
+5. **Deterministic Summary Finalization**: When a `SessionEndedEvent` is received, `InteractionCoordinator` finalizes a historical `InteractionSummary` and resets the active context back to `IDLE` state.
+
 ---
 
 ## 6. Integration with Digital Health 360

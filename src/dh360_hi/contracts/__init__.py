@@ -9,9 +9,17 @@ from dh360_hi.contracts.events import (
     SessionEndedEvent,
     SessionStartedEvent,
 )
+from dh360_hi.contracts.interaction import (
+    InteractionContext,
+    InteractionState,
+    InteractionSummary,
+)
 
 __all__ = [
     "BaseEvent",
+    "InteractionContext",
+    "InteractionState",
+    "InteractionSummary",
     "PersonEnteredEvent",
     "PersonIdentifiedEvent",
     "PersonLeftEvent",
