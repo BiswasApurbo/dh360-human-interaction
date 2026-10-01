@@ -571,6 +571,45 @@ The `InteractionCoordinator` creates a clean, decoupled application-level bounda
 4. **Thread-Safe Snapshot Access**: Context queries (`get_context()`, `get_last_summary()`) return immutable dataclasses protected by internal reentrant locking (`threading.RLock`), supporting safe concurrent queries from future HTTP or async worker threads.
 5. **Deterministic Summary Finalization**: When a `SessionEndedEvent` is received, `InteractionCoordinator` finalizes a historical `InteractionSummary` and resets the active context back to `IDLE` state.
 
+### 5.6 Unified Application Service & Composition Root (`dh360_hi.application.service` & `factory`)
+
+The `HumanInteractionService` and its composition root `create_interaction_service` package the complete multi-layer subsystem into a cohesive, production-ready application facade:
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                         Future Application / Transport Layer                     │
+│               [ FastAPI REST API ]   [ CLI Runner ]   [ Robot Adapters ]         │
+└────────────────────────────────────────┬─────────────────────────────────────────┘
+                                         │ Calls Application Service Facade
+                                         ▼
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                             HumanInteractionService                              │
+│       • Lifecycle: start(), stop(), pause(), resume(), step_once()               │
+│       • Context Queries: get_interaction_context(), get_last_summary()           │
+│       • Person Queries: get_person(), list_persons()                             │
+│       • Metrics & State: get_runtime_metrics(), get_runtime_state()              │
+│       • Management: reload_gallery(), add_context_listener(), add_event_listener()│
+└───────┬──────────────┬──────────────┬──────────────┬──────────────┬──────────────┘
+        │              │              │              │              │
+        ▼              ▼              ▼              ▼              ▼
+┌──────────────┐┌──────────────┐┌──────────────┐┌──────────────┐┌──────────────┐
+│DatabaseManager││PersonService ││  GallerySync ││ EdgeRuntime  ││Coordinator   │
+│ & Repository ││  (Profiles)  ││  (Recognizer)││(Frame Pump)  ││ (Context)    │
+└──────────────┘└──────────────┘└──────────────┘└──────────────┘└──────────────┘
+```
+
+#### 5.6.1 Core Responsibilities & Dependency Direction
+
+1. **Thin Application Facade**: `HumanInteractionService` contains zero SQL, zero OpenCV image manipulation, and zero event-generation logic. It acts strictly as an in-process coordinator delegating to `EdgeInteractionRuntime`, `InteractionCoordinator`, `PersonService`, and `DatabaseManager`.
+2. **Composition Root (`create_interaction_service`)**: Builds and validates the entire dependency graph from a typed `HumanInteractionConfig` model in the correct architectural order (Database → Repositories → PersonService → GalleryLoader → Recognizer → Perception Pipeline → SessionManager → EventBus → Runtime → Coordinator → Service).
+3. **Safe, Deadlock-Free Teardown Sequence**: Enforces graceful, deterministic shutdown ordering on `service.stop()`:
+   - Signals and joins the `EdgeInteractionRuntime` frame pump thread.
+   - Signals and joins the background `BoundedEmbeddingWorker` thread.
+   - Unsubscribes coordinator listeners from the `EventBus`.
+   - Closes the `DatabaseManager` SQLite connection.
+4. **Deterministic Simulation & Test Step (`step_once()`)**: Executes a single frame cycle through perception and event dispatch, returning `tuple[InteractionContext, list[BaseEvent]]` without leaking raw vision tensors.
+5. **Zero-Leakage Privacy Boundary**: All external interactions traverse pure application contracts (`InteractionContext`, `InteractionSummary`, `PersonProfile`, `RuntimeMetrics`). Raw biometric feature vectors, model weights, OpenCV arrays, and database cursors remain strictly encapsulated.
+
 ---
 
 ## 6. Integration with Digital Health 360
