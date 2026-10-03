@@ -15,9 +15,9 @@ The Human Interaction Module is responsible for human perception and dialogue ma
 
 ## 🚀 Current Development Status
 
-- **Current Milestone**: **`M2 — Recognition, Session Supervision & Persistent Audit History (Completed M2.1 Tracking, M2.2 Quality Gate, M2.3 Alignment & Embeddings, M2.4 Recognition & Identity State Machine, M2.5a SQLite Persistence, M2.5b Face Enrollment, M2.5c Person Lifecycle, M2.6 Identity Stability & Two-Rate Pipeline, M2.7 Session Lifecycle Manager & Structured Event Bus, M2.8 Edge Interaction Runtime & Frame Pump, M2.9 Interaction Context Coordinator & Application Event Bridge, M2.10 Unified Application Service & Composition Root, M2.11 Persistent Interaction Session Store & Historical Audit Repository, M2.12 Session Analytics & Historical Query Layer, M2.13 Application Integration Boundary & Transport-Neutral Contracts)`**
+- **Current Milestone**: **`M2 — Recognition, Session Supervision & Persistent Audit History (Completed M2.1 Tracking, M2.2 Quality Gate, M2.3 Alignment & Embeddings, M2.4 Recognition & Identity State Machine, M2.5a SQLite Persistence, M2.5b Face Enrollment, M2.5c Person Lifecycle, M2.6 Identity Stability & Two-Rate Pipeline, M2.7 Session Lifecycle Manager & Structured Event Bus, M2.8 Edge Interaction Runtime & Frame Pump, M2.9 Interaction Context Coordinator & Application Event Bridge, M2.10 Unified Application Service & Composition Root, M2.11 Persistent Interaction Session Store & Historical Audit Repository, M2.12 Session Analytics & Historical Query Layer, M2.13 Application Integration Boundary & Transport-Neutral Contracts, M2.14 Unified Configuration & Local Operator CLI)`**
 - **Status**: Implemented & Verified
-- **Approach**: Built **incrementally** milestone by milestone. Core software foundation (M0), vision base & YuNet detection (M1), modular face tracking (M2.1), face quality gating (M2.2), face alignment + embedding evaluation (M2.3), real-time recognition + identity state machine (M2.4), SQLite persistence + Person Service (M2.5a), camera-based face enrollment (M2.5b), complete person lifecycle operations (M2.5c), two-rate perception pipeline with bounded async worker and identity stability (M2.6), session lifecycle manager with structured in-process event bus (M2.7), edge interaction runtime with continuous frame pump (M2.8), interaction context coordinator with application event bridge (M2.9), unified application service with composition root (M2.10), persistent interaction session store with historical audit repository (M2.11), session analytics with historical query layer (M2.12), and application integration boundary with transport-neutral contracts (M2.13) are established. Backend service endpoints and robot behavioral interfaces will follow incrementally.
+- **Approach**: Built **incrementally** milestone by milestone. Core software foundation (M0), vision base & YuNet detection (M1), modular face tracking (M2.1), face quality gating (M2.2), face alignment + embedding evaluation (M2.3), real-time recognition + identity state machine (M2.4), SQLite persistence + Person Service (M2.5a), camera-based face enrollment (M2.5b), complete person lifecycle operations (M2.5c), two-rate perception pipeline with bounded async worker and identity stability (M2.6), session lifecycle manager with structured in-process event bus (M2.7), edge interaction runtime with continuous frame pump (M2.8), interaction context coordinator with application event bridge (M2.9), unified application service with composition root (M2.10), persistent interaction session store with historical audit repository (M2.11), session analytics with historical query layer (M2.12), application integration boundary with transport-neutral contracts (M2.13), and unified configuration loader with local operator CLI (M2.14) are established. Backend service endpoints and robot behavioral interfaces will follow incrementally.
 
 
 ### Implemented Capabilities
@@ -164,6 +164,36 @@ print(f"Overall Service Health: {health.status.value}")
 service.stop()
 ```
 
+### 6. Local Operator CLI (`dh360-hi`)
+
+The repository installs a standalone operator CLI `dh360-hi` for runtime management, diagnostics, face enrollment, and profile administration:
+
+```bash
+# 1. Show active resolved configuration & presets
+dh360-hi config show --preset production
+dh360-hi config validate --config-file config.toml
+
+# 2. Inspect subsystem operational health
+dh360-hi health --preset development
+dh360-hi health --json
+
+# 3. Manage enrolled patient/staff profiles
+dh360-hi person create --display-name "Nurse Joy" --preferred-name "Joy" --status active --consent-status granted
+dh360-hi person list
+dh360-hi person get <person_id>
+
+# 4. Perform guided face enrollment session
+dh360-hi enroll <person_id> --source webcam
+
+# 5. Inspect historical interaction sessions & analytics
+dh360-hi session list
+dh360-hi session query --is-identified --min-duration 5.0
+dh360-hi session analytics
+dh360-hi session stats <person_id>
+
+# 6. Launch continuous edge runtime
+dh360-hi run --source webcam --target-fps 30.0 --json-events
+```
 
 > [!NOTE]
 > **Performance Disclaimer**:

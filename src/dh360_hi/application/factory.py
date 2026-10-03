@@ -22,7 +22,10 @@ from dh360_hi.edge.session_manager import SessionManager
 from dh360_hi.vision.aligner import BaseFaceAligner, FaceAligner
 from dh360_hi.vision.detector import BaseFaceDetector, YuNetFaceDetector
 from dh360_hi.vision.embedder import BaseFaceEmbedder, SFaceEmbedder
-from dh360_hi.vision.embedding_worker import BaseEmbeddingWorker, BoundedEmbeddingWorker
+from dh360_hi.vision.embedding_worker import (
+    BaseEmbeddingWorker,
+    BoundedEmbeddingWorker,
+)
 from dh360_hi.vision.enrollment import FaceEnrollmentController
 from dh360_hi.vision.frame import FrameSource, SyntheticFrameSource
 from dh360_hi.vision.identity_state import IdentityStateManager
@@ -58,6 +61,7 @@ def create_interaction_service(
     session_repository: BaseSessionRepository | None = None,
     persistence_worker: SessionPersistenceWorker | None = None,
     pipeline: TwoRatePerceptionPipeline | None = None,
+    enable_perception: bool = True,
 ) -> HumanInteractionService:
     """Composition root: instantiate, wire, and return a complete HumanInteractionService.
 
@@ -87,14 +91,16 @@ def create_interaction_service(
         persistence_worker: Session persistence worker instance (defaults to
             SessionPersistenceWorker).
         pipeline: Fully pre-constructed TwoRatePerceptionPipeline override, if provided.
-
+        enable_perception: Whether to construct and wire the edge perception pipeline and runtime
+            (defaults to True). If False, only storage, repository, gallery, coordinator, and
+            session components are initialized for offline operations.
 
     Returns:
         Configured and wired HumanInteractionService instance.
 
     Raises:
-        ValueError: If neither a detector instance nor a valid detector_model_path is provided
-            and pipeline is not overridden.
+        ValueError: If enable_perception is True and neither a detector instance nor a valid
+            detector_model_path is provided when pipeline is not overridden.
     """
     cfg = config or HumanInteractionConfig()
 
@@ -121,7 +127,31 @@ def create_interaction_service(
         model_version=cfg.model_version,
     )
 
-    # 3. Vision Perception Pipeline
+    # 3. Event Bus & Application Context Coordinator
+    bus = event_bus or EventBus()
+    coord = coordinator or InteractionCoordinator(
+        event_bus=bus,
+        person_service=svc,
+        session_repository=session_repo,
+        persistence_worker=pers_worker,
+    )
+
+    if not enable_perception:
+        return HumanInteractionService(
+            runtime=None,
+            coordinator=coord,
+            person_service=svc,
+            repository=repo,
+            recognizer=rec,
+            db_manager=db,
+            event_bus=bus,
+            session_repository=session_repo,
+            persistence_worker=pers_worker,
+            enrollment_controller=None,
+            config=cfg,
+        )
+
+    # 4. Vision Perception Pipeline
     if pipeline is not None:
         perc_pipeline = pipeline
         enrollment_ctrl = None
@@ -207,11 +237,8 @@ def create_interaction_service(
                 config=cfg.enrollment,
             )
 
-    # 4. Frame Source
+    # 5. Frame Source & Session Supervision
     src = frame_source or SyntheticFrameSource()
-
-    # 5. Edge Event Bus & Session Supervision
-    bus = event_bus or EventBus()
     sm = session_manager or SessionManager(event_bus=bus, config=cfg.session)
 
     # 6. Edge Interaction Runtime
@@ -223,15 +250,7 @@ def create_interaction_service(
         config=cfg.runtime,
     )
 
-    # 7. Application Context Coordinator
-    coord = coordinator or InteractionCoordinator(
-        event_bus=bus,
-        person_service=svc,
-        session_repository=session_repo,
-        persistence_worker=pers_worker,
-    )
-
-    # 8. Human Interaction Application Service
+    # 7. Human Interaction Application Service
     return HumanInteractionService(
         runtime=rt,
         coordinator=coord,

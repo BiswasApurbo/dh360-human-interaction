@@ -80,25 +80,25 @@ class HumanInteractionService:
 
     def __init__(
         self,
-        runtime: EdgeInteractionRuntime,
         coordinator: InteractionCoordinator,
         person_service: BasePersonService,
         repository: BasePersonRepository,
         recognizer: BaseFaceRecognizer,
         db_manager: DatabaseManager,
         event_bus: EventBus,
+        runtime: EdgeInteractionRuntime | None = None,
         session_repository: BaseSessionRepository | None = None,
         persistence_worker: SessionPersistenceWorker | None = None,
         enrollment_controller: FaceEnrollmentController | None = None,
         config: HumanInteractionConfig | None = None,
     ) -> None:
-        self._runtime = runtime
         self._coordinator = coordinator
         self._person_service = person_service
         self._repository = repository
         self._recognizer = recognizer
         self._db_manager = db_manager
         self._event_bus = event_bus
+        self._runtime = runtime
         self._session_repository = session_repository
         self._persistence_worker = persistence_worker
         self._enrollment_controller = enrollment_controller
@@ -146,12 +146,12 @@ class HumanInteractionService:
     @property
     def is_running(self) -> bool:
         """Whether the edge interaction runtime is actively running."""
-        return self._runtime.state == RuntimeState.RUNNING
+        return self._runtime.state == RuntimeState.RUNNING if self._runtime is not None else False
 
     @property
     def state(self) -> RuntimeState:
         """Current operational lifecycle state of the edge runtime."""
-        return self._runtime.state
+        return self._runtime.state if self._runtime is not None else RuntimeState.STOPPED
 
     @property
     def context(self) -> InteractionContextDTO:
@@ -161,11 +161,14 @@ class HumanInteractionService:
     @property
     def metrics(self) -> RuntimeMetrics:
         """Current operational telemetry metrics."""
+        if self._runtime is None:
+            msg = "Perception runtime is not enabled"
+            raise ServiceUnavailableError("runtime", msg)
         return self._runtime.metrics
 
     @property
-    def runtime(self) -> EdgeInteractionRuntime:
-        """Composed edge interaction runtime instance."""
+    def runtime(self) -> EdgeInteractionRuntime | None:
+        """Composed edge interaction runtime instance, if configured."""
         return self._runtime
 
     @property
@@ -208,11 +211,14 @@ class HumanInteractionService:
 
     def get_runtime_metrics(self) -> RuntimeMetricsDTO:
         """Retrieve current operational telemetry metrics snapshot DTO."""
+        if self._runtime is None:
+            msg = "Perception runtime is not enabled"
+            raise ServiceUnavailableError("runtime", msg)
         return RuntimeMetricsDTO.from_metrics(self._runtime.metrics)
 
     def get_runtime_state(self) -> RuntimeState:
         """Retrieve current runtime execution state."""
-        return self._runtime.state
+        return self._runtime.state if self._runtime is not None else RuntimeState.STOPPED
 
     # ------------------------------------------------------------------
     # Person & Profile Queries and Commands (DTO Boundary)
@@ -309,7 +315,11 @@ class HumanInteractionService:
         Returns:
             True if person was deleted, False if not found.
         """
-        id_mgr = getattr(getattr(self._runtime, "pipeline", None), "identity_manager", None)
+        id_mgr = (
+            getattr(getattr(self._runtime, "pipeline", None), "identity_manager", None)
+            if self._runtime is not None
+            else None
+        )
         from dh360_hi.vision.recognition import FaceRecognizer
 
         rec_inst = self._recognizer if isinstance(self._recognizer, FaceRecognizer) else None
@@ -328,7 +338,11 @@ class HumanInteractionService:
         Returns:
             Count of deleted biometric embedding records.
         """
-        id_mgr = getattr(getattr(self._runtime, "pipeline", None), "identity_manager", None)
+        id_mgr = (
+            getattr(getattr(self._runtime, "pipeline", None), "identity_manager", None)
+            if self._runtime is not None
+            else None
+        )
         from dh360_hi.vision.recognition import FaceRecognizer
 
         rec_inst = self._recognizer if isinstance(self._recognizer, FaceRecognizer) else None
@@ -547,6 +561,9 @@ class HumanInteractionService:
     def start(self, async_thread: bool = True) -> None:
         """Start the continuous edge interaction runtime frame pump and persistence worker."""
         with self._lock:
+            if self._runtime is None:
+                msg = "Cannot start service: perception runtime is not configured or enabled"
+                raise ServiceUnavailableError("runtime", msg)
             if self._persistence_worker is not None:
                 self._persistence_worker.start()
             self._runtime.start(async_thread=async_thread)
@@ -561,10 +578,11 @@ class HumanInteractionService:
                 except Exception:
                     logger.exception("Error unsubscribing domain event bridge")
 
-            try:
-                self._runtime.stop(timeout=timeout)
-            except Exception:
-                logger.exception("Error stopping EdgeInteractionRuntime")
+            if self._runtime is not None:
+                try:
+                    self._runtime.stop(timeout=timeout)
+                except Exception:
+                    logger.exception("Error stopping EdgeInteractionRuntime")
 
             if self._persistence_worker is not None:
                 try:
@@ -572,24 +590,32 @@ class HumanInteractionService:
                 except Exception:
                     logger.exception("Error stopping SessionPersistenceWorker")
 
-            try:
-                self._coordinator.close()
-            except Exception:
-                logger.exception("Error closing InteractionCoordinator")
+            if self._coordinator is not None:
+                try:
+                    self._coordinator.close()
+                except Exception:
+                    logger.exception("Error closing InteractionCoordinator")
 
-            try:
-                self._db_manager.close()
-            except Exception:
-                logger.exception("Error closing DatabaseManager")
+            if self._db_manager is not None:
+                try:
+                    self._db_manager.close()
+                except Exception:
+                    logger.exception("Error closing DatabaseManager")
 
     def pause(self) -> None:
         """Pause continuous frame pumping without resetting perception or session state."""
         with self._lock:
+            if self._runtime is None:
+                msg = "Perception runtime is not enabled"
+                raise ServiceUnavailableError("runtime", msg)
             self._runtime.pause()
 
     def resume(self) -> None:
         """Resume continuous frame pumping from PAUSED state."""
         with self._lock:
+            if self._runtime is None:
+                msg = "Perception runtime is not enabled"
+                raise ServiceUnavailableError("runtime", msg)
             self._runtime.resume()
 
     def step_once(self) -> StepResultDTO:
@@ -602,6 +628,9 @@ class HumanInteractionService:
             StepResultDTO containing InteractionContextDTO and list[BaseIntegrationEvent].
         """
         with self._lock:
+            if self._runtime is None:
+                msg = "Perception runtime is not enabled"
+                raise ServiceUnavailableError("runtime", msg)
             _frame_result, domain_events = self._runtime.step_once()
             ctx_dto = InteractionContextDTO.from_context(self._coordinator.get_context())
 

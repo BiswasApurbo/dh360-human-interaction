@@ -28,6 +28,9 @@ dependencies = [
     "opencv-python>=4.8.0",
 ]
 
+[project.scripts]
+dh360-hi = "dh360_hi.cli.main:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",

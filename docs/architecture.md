@@ -735,6 +735,62 @@ Milestone M2.13 establishes the formal application integration boundary, decoupl
   - Inspects `runtime`, `database`, `persistence_worker`, `recognizer`, and `enrollment` subsystems defensively without throwing exceptions.
   - Produces a `ServiceHealthSnapshot` with operational health tiers (`HEALTHY`, `DEGRADED`, `UNHEALTHY`, `DISABLED`) and real-time performance telemetry (`RuntimeMetricsDTO`).
 
+### 5.8 Unified Configuration & Local Operator CLI
+
+The local operator CLI (`dh360-hi`) and unified configuration loader provide a production-ready operational front-end for local runtime execution, administration, diagnostics, and testing.
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        Local Operator CLI                             │
+│       dh360-hi [run | health | person | enroll | session | config]     │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                    Unified Configuration Loader                        │
+│   Precedence: Defaults ──► Preset ──► TOML File ──► Env ──► Overrides  │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                      HumanInteractionService                           │
+│     (Application Integration Facade & Transport-Neutral DTOs)          │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                  Domain, Vision & Backend Subsystems                   │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.8.1 Configuration Precedence & Composition Architecture
+
+Configuration loading follows a strict 5-tier deterministic precedence hierarchy:
+1. **Built-in Defaults**: Canonical baseline specified in `HumanInteractionConfig`.
+2. **Configuration Presets (`get_preset`)**:
+   - `development`: Targets local rapid prototyping (`dh360_dev.db`, 30 FPS).
+   - `testing`: Headless in-memory execution (`:memory:`, 60 FPS, 1-frame patience).
+   - `production`: High-reliability production deployments (`dh360_hi.db`, 30 FPS, strict error tolerance).
+3. **TOML Configuration File**: Parsed via Python standard library `tomllib` (`--config-file` or `DH360_HI_CONFIG_FILE`).
+4. **Environment Variables**: Prefixed with `DH360_HI_*` supporting flat keys and double-underscore nesting (e.g. `DH360_HI_RUNTIME__TARGET_FPS=30.0`).
+5. **CLI / Programmatic Overrides**: Explicit arguments supplied via command line.
+
+#### 5.8.2 Operator CLI Subcommands (`dh360-hi`)
+
+- **`run`**: Launches continuous edge perception runtime with selectable frame source (`synthetic`, `webcam`, `video`), graceful signal handling (`SIGINT`, `SIGTERM`), and live integration event streaming.
+- **`health`**: Evaluates operational subsystem health (`runtime`, `database`, `persistence`, `recognizer`, `enrollment`) with human-readable table or `--json` formatting.
+- **`person`**: Manages patient/user profiles (`list`, `get`, `create`, `update`, `delete`, `reset-biometrics`).
+- **`enroll`**: Guided interactive camera enrollment session with real-time feedback and transactional commit.
+- **`session`**: Historical session inspection (`list`, `get`, `query`, `analytics`, `stats`).
+- **`config`**: Inspects resolved configurations (`show`, `validate`, `presets`).
+
+#### 5.8.3 Exit Code Specification
+
+- **`0`**: Successful command execution.
+- **`1`**: Expected domain/application/validation error (`ApplicationError`, `EntityNotFoundError`, `ValidationAppError`, `EnrollmentAppError`).
+- **`2`**: Unexpected runtime/system failure or command-line syntax error.
+- **`130`**: Clean exit on operator interrupt (`SIGINT` / `Ctrl+C`).
+
 ---
 
 ## 6. Integration with Digital Health 360

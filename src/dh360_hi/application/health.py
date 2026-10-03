@@ -68,36 +68,43 @@ def evaluate_service_health(service: HumanInteractionService) -> ServiceHealthSn
 
     # 1. Edge Perception Runtime
     try:
-        r_state = service.state
-        r_metrics = service.metrics
-        metrics_dto = RuntimeMetricsDTO.from_metrics(r_metrics)
-        if r_state == RuntimeState.RUNNING:
-            subsystems["runtime"] = SubsystemHealth(
-                name="runtime",
-                status=SubsystemHealthStatus.HEALTHY,
-                message="Perception runtime active",
-                details={"state": r_state.value, "fps": r_metrics.current_fps},
-            )
-        elif r_state == RuntimeState.PAUSED:
-            subsystems["runtime"] = SubsystemHealth(
-                name="runtime",
-                status=SubsystemHealthStatus.DEGRADED,
-                message="Perception runtime paused",
-                details={"state": r_state.value},
-            )
-        elif r_state == RuntimeState.ERROR:
-            subsystems["runtime"] = SubsystemHealth(
-                name="runtime",
-                status=SubsystemHealthStatus.UNHEALTHY,
-                message=r_metrics.last_error or "Runtime encountered an error",
-                details={"state": r_state.value, "error": r_metrics.last_error},
-            )
+        if service.runtime is not None:
+            r_state = service.state
+            r_metrics = service.metrics
+            metrics_dto = RuntimeMetricsDTO.from_metrics(r_metrics)
+            if r_state == RuntimeState.RUNNING:
+                subsystems["runtime"] = SubsystemHealth(
+                    name="runtime",
+                    status=SubsystemHealthStatus.HEALTHY,
+                    message="Perception runtime active",
+                    details={"state": r_state.value, "fps": r_metrics.current_fps},
+                )
+            elif r_state == RuntimeState.PAUSED:
+                subsystems["runtime"] = SubsystemHealth(
+                    name="runtime",
+                    status=SubsystemHealthStatus.DEGRADED,
+                    message="Perception runtime paused",
+                    details={"state": r_state.value},
+                )
+            elif r_state == RuntimeState.ERROR:
+                subsystems["runtime"] = SubsystemHealth(
+                    name="runtime",
+                    status=SubsystemHealthStatus.UNHEALTHY,
+                    message=r_metrics.last_error or "Runtime encountered an error",
+                    details={"state": r_state.value, "error": r_metrics.last_error},
+                )
+            else:
+                subsystems["runtime"] = SubsystemHealth(
+                    name="runtime",
+                    status=SubsystemHealthStatus.HEALTHY,
+                    message=f"Runtime state: {r_state.value}",
+                    details={"state": r_state.value},
+                )
         else:
             subsystems["runtime"] = SubsystemHealth(
                 name="runtime",
-                status=SubsystemHealthStatus.HEALTHY,
-                message=f"Runtime state: {r_state.value}",
-                details={"state": r_state.value},
+                status=SubsystemHealthStatus.DISABLED,
+                message="Perception runtime not configured",
             )
     except Exception as exc:
         subsystems["runtime"] = SubsystemHealth(

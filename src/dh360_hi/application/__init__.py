@@ -1,6 +1,10 @@
 """Application layer coordinating interaction contexts and high-level service boundaries."""
 
-from dh360_hi.application.config import HumanInteractionConfig
+from dh360_hi.application.config import (
+    ConfigurationPreset,
+    HumanInteractionConfig,
+    get_preset,
+)
 from dh360_hi.application.coordinator import InteractionCoordinator
 from dh360_hi.application.factory import create_interaction_service
 from dh360_hi.application.health import (
@@ -9,6 +13,7 @@ from dh360_hi.application.health import (
     SubsystemHealthStatus,
     evaluate_service_health,
 )
+from dh360_hi.application.loader import load_config, validate_config
 from dh360_hi.application.service import HumanInteractionService
 from dh360_hi.backend.models import (
     PersonEngagementStats,
@@ -17,6 +22,7 @@ from dh360_hi.backend.models import (
 )
 
 __all__ = [
+    "ConfigurationPreset",
     "HumanInteractionConfig",
     "HumanInteractionService",
     "InteractionCoordinator",
@@ -28,4 +34,7 @@ __all__ = [
     "SubsystemHealthStatus",
     "create_interaction_service",
     "evaluate_service_health",
+    "get_preset",
+    "load_config",
+    "validate_config",
 ]
