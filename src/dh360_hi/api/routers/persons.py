@@ -4,18 +4,27 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
-from dh360_hi.api.security import OperatorPrincipal, OperatorScope, require_scope
+from dh360_hi.api.security import (
+    OperatorPrincipal,
+    OperatorScope,
+    OperatorSecurityError,
+    require_scope,
+)
 from dh360_hi.application.service import HumanInteractionService
+from dh360_hi.backend.exceptions import PersonNotFoundError
 from dh360_hi.backend.models import ConsentStatus, PersonStatus
-from dh360_hi.contracts.dto import CreatePersonCommand
-from dh360_hi.contracts.errors import EntityNotFoundError
+from dh360_hi.contracts.dto import CreatePersonCommand, UpdatePersonCommand
+from dh360_hi.contracts.errors import EntityNotFoundError, ValidationAppError
 
 router = APIRouter(prefix="/persons", tags=["persons"])
 _person_read = Depends(require_scope(OperatorScope.PERSONS_READ))
 _person_create = Depends(require_scope(OperatorScope.PERSONS_CREATE))
+_person_update = Depends(require_scope(OperatorScope.PERSONS_UPDATE))
+_person_delete = Depends(require_scope(OperatorScope.PERSONS_DELETE))
+_biometrics_reset = Depends(require_scope(OperatorScope.BIOMETRICS_RESET))
 
 
 class PersonCreateRequest(BaseModel):
@@ -25,6 +34,17 @@ class PersonCreateRequest(BaseModel):
 
     display_name: StrictStr = Field(min_length=1)
     preferred_name: StrictStr | None = None
+
+
+class PersonUpdateRequest(BaseModel):
+    """Strict profile update payload; notes and biometric fields are not accepted."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: StrictStr | None = Field(default=None, min_length=1)
+    preferred_name: StrictStr | None = Field(default=None, min_length=1)
+    status: PersonStatus | None = None
+    consent_status: ConsentStatus | None = None
 
 
 def _get_service(request: Request) -> HumanInteractionService:
@@ -80,3 +100,82 @@ def create_person(
         person_id=None,
     )
     return _get_service(request).create_person(command).to_dict()
+
+
+@router.patch("/{person_id}")
+def update_person(
+    person_id: str,
+    payload: PersonUpdateRequest,
+    request: Request,
+    operator: OperatorPrincipal = _person_update,
+) -> dict[str, Any]:
+    """Update profile fields through the existing application service."""
+    if all(
+        value is None
+        for value in (
+            payload.display_name,
+            payload.preferred_name,
+            payload.status,
+            payload.consent_status,
+        )
+    ):
+        raise ValidationAppError("At least one profile field must be provided", field="body")
+
+    if payload.display_name is not None and not payload.display_name.strip():
+        raise ValidationAppError(
+            "display_name cannot be empty or whitespace",
+            field="display_name",
+        )
+    if payload.preferred_name is not None and not payload.preferred_name.strip():
+        raise ValidationAppError(
+            "preferred_name cannot be empty or whitespace",
+            field="preferred_name",
+        )
+
+    if payload.consent_status is not None and OperatorScope.CONSENT_MANAGE not in operator.scopes:
+        raise OperatorSecurityError(
+            403,
+            "INSUFFICIENT_SCOPE",
+            "The operator credential does not grant the required scope",
+        )
+    command = UpdatePersonCommand(
+        display_name=payload.display_name,
+        preferred_name=payload.preferred_name,
+        status=payload.status,
+        consent_status=payload.consent_status,
+        notes=None,
+    )
+    try:
+        return _get_service(request).update_person(person_id, command).to_dict()
+    except PersonNotFoundError as exc:
+        raise EntityNotFoundError("person", person_id) from exc
+
+
+@router.delete("/{person_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_person(
+    person_id: str,
+    request: Request,
+    _operator: OperatorPrincipal = _person_delete,
+) -> Response:
+    """Delete a person profile and its associated biometrics."""
+    try:
+        deleted = _get_service(request).delete_person(person_id)
+    except PersonNotFoundError as exc:
+        raise EntityNotFoundError("person", person_id) from exc
+    if not deleted:
+        raise EntityNotFoundError("person", person_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/{person_id}/biometrics", status_code=status.HTTP_204_NO_CONTENT)
+def reset_person_biometrics(
+    person_id: str,
+    request: Request,
+    _operator: OperatorPrincipal = _biometrics_reset,
+) -> Response:
+    """Remove a person's biometric records without deleting the profile."""
+    try:
+        _get_service(request).reset_person_biometrics(person_id)
+    except PersonNotFoundError as exc:
+        raise EntityNotFoundError("person", person_id) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

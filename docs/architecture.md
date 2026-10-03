@@ -804,6 +804,24 @@ The M3.2.1 FastAPI boundary protects only the person-profile routes with a confi
 
 This milestone does not add person update/delete, consent mutation, enrollment, biometric reset or replacement, embedding operations, or persistent audit storage. Operator authentication does not constitute subject consent or clinical authorization.
 
+#### 5.8.5 Lifecycle-Safe Person Mutations (M3.2.2)
+
+M3.2.2 extends the same authenticated `/persons` boundary with:
+
+- `PATCH /persons/{person_id}` (`persons:update`; also `consent:manage` when changing consent).
+- `DELETE /persons/{person_id}` (`persons:delete`).
+- `DELETE /persons/{person_id}/biometrics` (`biometrics:reset`).
+
+All operations delegate through `HumanInteractionService`; the API does not access repositories or database connections. Requests use the existing `UpdatePersonCommand` semantics and responses remain sanitized `PersonProfileDTO` values. PATCH requires at least one non-null supported field; null/omitted values mean unchanged, and clearing `preferred_name` is unsupported by the existing command contract. Notes, embedding counts/metadata, vectors, camera frames, landmarks, tracker IDs, and frame IDs remain outside the transport contract.
+
+The application facade serializes only person mutations. When a runtime exists, it acquires a bounded frame-boundary barrier that blocks new cycles and waits for the active pipeline, session, and event-bus work to finish. It then quiesces queued/in-progress embedding work and discards stale recognition results before changing the gallery. The barrier does not hold a global lock during normal perception; it is released after in-memory identity/session reconciliation.
+
+Profile metadata/eligibility changes reload the gallery and invalidate affected live identity state through the existing `PersonLostIdentityEvent` semantics. Biometric reset retains the profile and historical session association. Person deletion detaches the person ID from the active session before it can be persisted, clears deleted profile references from live/cached coordinator state, and preserves historical display name and identity-known information as the schema already does. Pending session persistence is flushed and checked before deletion.
+
+SQLite mutations and in-memory gallery/context updates are not one atomic transaction. A timeout before the database operation aborts without mutation. If persistent mutation succeeds but gallery or runtime reconciliation fails, the operation returns unavailable and a running runtime remains paused; success is never reported while live state may be stale. Recovery requires rebuilding the in-memory service state before resuming recognition.
+
+Use one live service owner per database. SQLite persistence can be shared across processes, but process-local recognizer galleries, identity states, sessions, and mutation locks are not; M3.2.2 does not provide cross-process invalidation or audit-log persistence. The current M3.1 FastAPI lifespan composes its service with perception disabled, so immediate camera/runtime synchronization applies only when the API and runtime share the same `HumanInteractionService` instance in one process. Do not run a second live CLI/runtime service against the API database. Preferred-name clearing is not supported by the existing `UpdatePersonCommand` because `None` means unchanged; this milestone does not invent a replacement contract. Camera enrollment and arbitrary embedding APIs remain excluded until M3.2.3 or a separately approved scope.
+
 ---
 
 ## 6. Integration with Digital Health 360

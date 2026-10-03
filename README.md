@@ -107,6 +107,8 @@ uvicorn --factory dh360_hi.api.app:create_app --host 127.0.0.1 --port 8000
 
 Send the token only in the `Authorization: Bearer` header. The profile API fails closed if the token or scopes are not configured. M3.1 health, runtime, interaction, and session routes retain their existing access behavior and are not made authenticated by M3.2.1. Keep the service bound to loopback unless a separately secured network deployment is configured.
 
+M3.2.2 adds `persons:update`, `persons:delete`, `biometrics:reset`, and `consent:manage`. Consent changes require both `persons:update` and `consent:manage`. Profile updates, person deletion, and biometric reset briefly pause frame processing at a completed frame boundary, quiesce recognition work, reconcile the in-memory gallery and active identity/session state, then restore the prior runtime state. Run one live service owner per database; process-local gallery/runtime state is not synchronized across multiple API/CLI processes. Person deletion detaches historical session person IDs but retains their display names and identity-known history.
+
 ### 4. Run Functional Face Detection Validation & Benchmark
 ```bash
 # 1. Functional Face Detection Validation (exercises detector on reference fixture)

@@ -98,6 +98,10 @@ class BaseEmbeddingWorker(ABC):
         """Poll and retrieve completed recognition results non-blockingly."""
 
     @abstractmethod
+    def quiesce(self, timeout: float = 5.0) -> bool:
+        """Wait for queued/in-progress work and discard buffered recognition results."""
+
+    @abstractmethod
     def is_busy_or_pending(self, track_id: int) -> bool:
         """Check if an embedding task for this track is pending or currently processing."""
 
@@ -228,6 +232,27 @@ class BoundedEmbeddingWorker(BaseEmbeddingWorker):
 
         return results
 
+    def quiesce(self, timeout: float = 5.0) -> bool:
+        """Drain active work and discard results produced against the current gallery."""
+        deadline = time.monotonic() + timeout
+        with self._condition:
+            if not self._running:
+                self._pending_tasks.clear()
+                self._queue_order.clear()
+
+            while self._pending_tasks or self._in_progress_tracks:
+                if not self._running:
+                    self._pending_tasks.clear()
+                    self._queue_order.clear()
+
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    return False
+                self._condition.wait(timeout=remaining)
+
+            self._results_queue.clear()
+            return True
+
     def is_busy_or_pending(self, track_id: int) -> bool:
         """Check if an embedding task for this track is pending or in progress."""
         with self._lock:
@@ -334,6 +359,7 @@ class BoundedEmbeddingWorker(BaseEmbeddingWorker):
                             age,
                             self._config.max_request_age_sec,
                         )
+                        self._condition.notify_all()
                         continue
 
                 self._in_progress_tracks.add(task.track_id)
@@ -345,3 +371,4 @@ class BoundedEmbeddingWorker(BaseEmbeddingWorker):
             with self._lock:
                 self._in_progress_tracks.discard(task.track_id)
                 self._results_queue.append(result)
+                self._condition.notify_all()

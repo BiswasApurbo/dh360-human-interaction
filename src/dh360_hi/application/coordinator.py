@@ -11,6 +11,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from dh360_hi.contracts.events import (
@@ -113,6 +114,47 @@ class InteractionCoordinator:
     def get_last_summary(self) -> InteractionSummary | None:
         """Retrieve most recently completed interaction session summary."""
         return self.last_summary
+
+    def forget_deleted_person(self, person_id: str) -> None:
+        """Detach a deleted profile from live context and the cached latest summary.
+
+        Historical display names and identity-known state remain unchanged.
+        """
+        snapshot: InteractionContext | None = None
+        with self._lock:
+            context = self._context
+            if context.person_id == person_id or context.last_known_person_id == person_id:
+                current_match = context.person_id == person_id
+                self._context = InteractionContext(
+                    session_id=context.session_id,
+                    person_id=None if current_match else context.person_id,
+                    display_name=None if current_match else context.display_name,
+                    person_profile=None if current_match else context.person_profile,
+                    state=context.state,
+                    started_at=context.started_at,
+                    last_updated_at=time.time(),
+                    identity_known=False if current_match else context.identity_known,
+                    last_known_person_id=(
+                        None
+                        if context.last_known_person_id == person_id
+                        else context.last_known_person_id
+                    ),
+                    identity_transitions_count=context.identity_transitions_count,
+                )
+                snapshot = self._context
+
+            summary = self._last_summary
+            if summary is not None and (
+                summary.person_id == person_id
+                or (
+                    summary.person_profile is not None
+                    and summary.person_profile.person_id == person_id
+                )
+            ):
+                self._last_summary = replace(summary, person_id=None, person_profile=None)
+
+        if snapshot is not None:
+            self._notify_listeners(snapshot)
 
     # ------------------------------------------------------------------
     # Listener Registration

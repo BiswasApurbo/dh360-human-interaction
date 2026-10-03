@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import uuid
 from unittest.mock import MagicMock
 
@@ -41,7 +42,7 @@ from dh360_hi.contracts.dto import (
     StepResultDTO,
     UpdatePersonCommand,
 )
-from dh360_hi.contracts.errors import ServiceUnavailableError
+from dh360_hi.contracts.errors import ConflictAppError, ServiceUnavailableError
 from dh360_hi.contracts.events import (
     PersonEnteredEvent,
     SessionEndedEvent,
@@ -59,6 +60,7 @@ from dh360_hi.contracts.interaction import (
 )
 from dh360_hi.edge.event_bus import EventBus
 from dh360_hi.edge.runtime import EdgeInteractionRuntime, RuntimeMetrics, RuntimeState
+from dh360_hi.edge.session_manager import SessionManager
 from dh360_hi.vision.enrollment import (
     EnrollmentMode,
     EnrollmentProgress,
@@ -66,7 +68,10 @@ from dh360_hi.vision.enrollment import (
     EnrollmentState,
     FaceEnrollmentController,
 )
+from dh360_hi.vision.frame import SyntheticFrameSource
 from dh360_hi.vision.recognition import BaseFaceRecognizer
+from dh360_hi.vision.target_selector import TargetSelectionResult
+from dh360_hi.vision.two_rate_pipeline import TwoRateFrameResult, TwoRatePerceptionPipeline
 
 
 def _mk_service_harness(
@@ -76,6 +81,8 @@ def _mk_service_harness(
     runtime = MagicMock(spec=EdgeInteractionRuntime)
     runtime.state = runtime_state
     runtime.metrics = RuntimeMetrics(frames_processed=42, current_fps=30.0)
+    runtime.begin_mutation_barrier.return_value = runtime_state
+    runtime.pipeline.worker.quiesce.return_value = True
 
     coordinator = MagicMock(spec=InteractionCoordinator)
     coordinator.get_context.return_value = InteractionContext(
@@ -102,6 +109,8 @@ def _mk_service_harness(
     event_bus = MagicMock(spec=EventBus)
     session_repository = MagicMock()
     persistence_worker = MagicMock()
+    persistence_worker.error_count = 0
+    persistence_worker.flush.return_value = True
     enrollment_controller = MagicMock(spec=FaceEnrollmentController) if with_enrollment else None
 
     config = HumanInteractionConfig()
@@ -240,12 +249,154 @@ class TestServicePropertiesAndQueries:
         # Delete
         del_res = svc.delete_person(pid)
         assert del_res is True
-        mocks["person_service"].delete_person.assert_called_once()
+        mocks["person_service"].delete_person.assert_called_once_with(person_id=pid)
+        mocks["runtime"].session_manager.invalidate_person_identity.assert_any_call(
+            pid,
+            deleted=True,
+        )
+        mocks["coordinator"].forget_deleted_person.assert_called_once_with(pid)
 
         # Reset biometrics
         reset_res = svc.reset_person_biometrics(pid)
         assert reset_res == 3
-        mocks["person_service"].delete_person_embeddings.assert_called_once()
+        mocks["person_service"].delete_person_embeddings.assert_called_once_with(person_id=pid)
+        mocks["runtime"].session_manager.invalidate_person_identity.assert_any_call(
+            pid,
+            deleted=False,
+        )
+        mocks["recognizer"].replace_gallery.assert_called()
+        mocks["runtime"].end_mutation_barrier.assert_called_with(
+            RuntimeState.STOPPED,
+            resume=True,
+        )
+
+    def test_mutation_aborts_before_database_write_when_worker_cannot_quiesce(self) -> None:
+        """A failed worker barrier leaves the profile and runtime state untouched."""
+        svc, mocks = _mk_service_harness(runtime_state=RuntimeState.RUNNING)
+        mocks["runtime"].pipeline.worker.quiesce.return_value = False
+
+        with pytest.raises(ServiceUnavailableError):
+            svc.delete_person(str(uuid.uuid4()))
+
+        mocks["person_service"].delete_person.assert_not_called()
+        mocks["runtime"].end_mutation_barrier.assert_called_once_with(
+            RuntimeState.RUNNING,
+            resume=True,
+        )
+
+    def test_mutation_aborts_with_503_when_worker_quiescence_raises(self) -> None:
+        """Unexpected worker-barrier errors are normalized and prevent database mutation."""
+        svc, mocks = _mk_service_harness(runtime_state=RuntimeState.RUNNING)
+        mocks["runtime"].pipeline.worker.quiesce.side_effect = RuntimeError("worker failed")
+
+        with pytest.raises(ServiceUnavailableError):
+            svc.delete_person(str(uuid.uuid4()))
+
+        mocks["person_service"].delete_person.assert_not_called()
+        mocks["runtime"].end_mutation_barrier.assert_called_once_with(
+            RuntimeState.RUNNING,
+            resume=True,
+        )
+
+    def test_delete_aborts_when_persistence_flush_reports_write_error(self) -> None:
+        """A queued session write failure prevents deletion before the DB mutation."""
+        svc, mocks = _mk_service_harness(runtime_state=RuntimeState.RUNNING)
+
+        def fail_flush(*, timeout: float) -> bool:
+            del timeout
+            mocks["persistence_worker"].error_count = 1
+            return True
+
+        mocks["persistence_worker"].flush.side_effect = fail_flush
+        with pytest.raises(ServiceUnavailableError):
+            svc.delete_person(str(uuid.uuid4()))
+
+        mocks["person_service"].delete_person.assert_not_called()
+        mocks["runtime"].end_mutation_barrier.assert_called_once_with(
+            RuntimeState.RUNNING,
+            resume=True,
+        )
+
+    def test_delete_aborts_with_503_when_persistence_flush_raises(self) -> None:
+        """Unexpected persistence barrier errors prevent person deletion."""
+        svc, mocks = _mk_service_harness(runtime_state=RuntimeState.RUNNING)
+        mocks["persistence_worker"].flush.side_effect = RuntimeError("flush failed")
+
+        with pytest.raises(ServiceUnavailableError):
+            svc.delete_person(str(uuid.uuid4()))
+
+        mocks["person_service"].delete_person.assert_not_called()
+        mocks["runtime"].end_mutation_barrier.assert_called_once_with(
+            RuntimeState.RUNNING,
+            resume=True,
+        )
+
+    def test_postcommit_gallery_failure_leaves_runtime_paused(self) -> None:
+        """A committed update is not reported successful when gallery reconciliation fails."""
+        svc, mocks = _mk_service_harness(runtime_state=RuntimeState.RUNNING)
+        person_id = str(uuid.uuid4())
+        profile = PersonProfile(
+            person_id=person_id,
+            display_name="Before",
+            preferred_name=None,
+            status=PersonStatus.ACTIVE,
+            consent_status=ConsentStatus.GRANTED,
+            consent_timestamp="2026-10-01T12:00:00Z",
+            notes=None,
+            created_at="2026-10-01T12:00:00Z",
+            updated_at="2026-10-01T12:00:00Z",
+        )
+        mocks["person_service"].get_person.return_value = profile
+        mocks["person_service"].update_person.return_value = profile
+        svc.reload_gallery = MagicMock(side_effect=RuntimeError("gallery unavailable"))
+
+        with pytest.raises(ServiceUnavailableError, match="runtime remains paused"):
+            svc.update_person(person_id, UpdatePersonCommand(display_name="After"))
+
+        mocks["person_service"].update_person.assert_called_once()
+        mocks["runtime"].end_mutation_barrier.assert_called_once_with(
+            RuntimeState.RUNNING,
+            resume=False,
+        )
+
+    @pytest.mark.parametrize(
+        ("config", "command"),
+        [
+            (
+                HumanInteractionConfig(require_active_for_gallery=False),
+                UpdatePersonCommand(status=PersonStatus.INACTIVE),
+            ),
+            (
+                HumanInteractionConfig(require_consent_for_gallery=False),
+                UpdatePersonCommand(consent_status=ConsentStatus.WITHDRAWN),
+            ),
+        ],
+    )
+    def test_eligibility_update_rejected_when_gallery_policy_cannot_enforce_it(
+        self,
+        config: HumanInteractionConfig,
+        command: UpdatePersonCommand,
+    ) -> None:
+        """Status/consent removal cannot succeed under a gallery policy that ignores it."""
+        svc, mocks = _mk_service_harness()
+        svc._config = config
+        person_id = str(uuid.uuid4())
+        mocks["person_service"].get_person.return_value = PersonProfile(
+            person_id=person_id,
+            display_name="Current",
+            preferred_name=None,
+            status=PersonStatus.ACTIVE,
+            consent_status=ConsentStatus.GRANTED,
+            consent_timestamp="2026-10-01T12:00:00Z",
+            notes=None,
+            created_at="2026-10-01T12:00:00Z",
+            updated_at="2026-10-01T12:00:00Z",
+        )
+
+        with pytest.raises(ConflictAppError):
+            svc.update_person(person_id, command)
+
+        mocks["person_service"].update_person.assert_not_called()
 
     def test_historical_session_queries(self) -> None:
         """Verify get_session, list_sessions, and count_sessions return DTOs."""
@@ -546,6 +697,53 @@ class TestServiceEnrollmentCommands:
 
 
 class TestServiceGalleryAndListeners:
+    def test_mutation_lock_does_not_serialize_ordinary_perception(self) -> None:
+        """The API-only mutation lock is not acquired by the normal frame loop."""
+        service, _ = _mk_service_harness()
+        frame_processed = threading.Event()
+        pipeline = MagicMock(spec=TwoRatePerceptionPipeline)
+
+        def process_frame(_frame: object) -> TwoRateFrameResult:
+            frame_processed.set()
+            return TwoRateFrameResult(
+                frame_id=1,
+                timestamp=1.0,
+                detections=[],
+                tracks=[],
+                quality_results={},
+                identity_states={},
+                target_result=TargetSelectionResult(
+                    primary_target=None,
+                    candidates=[],
+                    target_changed=False,
+                    previous_target_track_id=None,
+                    frame_id=1,
+                ),
+                presence_transitions=[],
+                completed_recognitions=[],
+                ambiguous_crossing_track_ids=set(),
+                pending_worker_tasks=0,
+                frame_latency_ms=0.1,
+                total_pipeline_latency_ms=0.1,
+            )
+
+        pipeline.process_frame.side_effect = process_frame
+        runtime = EdgeInteractionRuntime(
+            SyntheticFrameSource(num_frames=100, fps=1000.0),
+            pipeline,
+            SessionManager(),
+            EventBus(),
+        )
+        service._runtime = runtime
+        assert service._person_mutation_lock.acquire(timeout=0.1)
+        try:
+            runtime.start(async_thread=True)
+            assert frame_processed.wait(timeout=1.0)
+            assert runtime.state == RuntimeState.RUNNING
+        finally:
+            service._person_mutation_lock.release()
+            runtime.stop(timeout=1.0)
+
     def test_reload_gallery_syncs_with_repository(self) -> None:
         """Verify reload_gallery extracts records from repository and replaces gallery."""
         svc, mocks = _mk_service_harness()

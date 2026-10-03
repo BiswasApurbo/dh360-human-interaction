@@ -737,6 +737,82 @@ class TestSessionManagerWithEventBus:
         events = mgr.process_frame_result(frame)
         assert any(isinstance(e, SessionStartedEvent) for e in events)
 
+    def test_person_invalidation_emits_one_loss_and_detaches_deleted_id(self) -> None:
+        person_id = "person-1"
+        bus = EventBus()
+        lost_events: list[PersonLostIdentityEvent] = []
+        bus.subscribe(PersonLostIdentityEvent, lost_events.append)
+        mgr = SessionManager(event_bus=bus, config=SessionConfig(require_confirmed_presence=False))
+        mgr.process_frame_result(
+            _mk_frame(
+                frame_id=1,
+                primary_track_id=7,
+                identity_states={
+                    7: _mk_id_state(
+                        7,
+                        IdentityState.IDENTIFIED,
+                        person_id=person_id,
+                        display_name="Riley",
+                    )
+                },
+            )
+        )
+        session = mgr.active_session
+        assert session is not None
+        assert session.last_emitted_person_id == person_id
+
+        lost = mgr.invalidate_person_identity(person_id, deleted=True, timestamp=2.0)
+        assert lost is not None
+        assert len(lost_events) == 1
+        assert lost_events[0].previous_person_id == person_id
+        assert session.person_id is None
+        assert session.display_name == "Riley"
+        assert session.last_emitted_person_id is None
+
+        next_events = mgr.process_frame_result(
+            _mk_frame(
+                frame_id=2,
+                primary_track_id=7,
+                identity_states={7: _mk_id_state(7, IdentityState.UNREGISTERED)},
+            )
+        )
+        assert not any(isinstance(event, PersonLostIdentityEvent) for event in next_events)
+
+        ended = mgr.process_frame_result(
+            _mk_frame(
+                frame_id=3,
+                presence_transitions=[
+                    _mk_transition(PresenceEvent.PERSON_LEFT, track_id=7, timestamp=3.0)
+                ],
+            )
+        )
+        end_event = next(event for event in ended if isinstance(event, SessionEndedEvent))
+        assert end_event.final_person_id is None
+        assert end_event.final_display_name == "Riley"
+
+    def test_biometric_reset_preserves_session_history_link(self) -> None:
+        person_id = "person-2"
+        mgr = SessionManager(config=SessionConfig(require_confirmed_presence=False))
+        mgr.process_frame_result(
+            _mk_frame(
+                frame_id=1,
+                primary_track_id=8,
+                identity_states={
+                    8: _mk_id_state(
+                        8,
+                        IdentityState.IDENTIFIED,
+                        person_id=person_id,
+                        display_name="Morgan",
+                    )
+                },
+            )
+        )
+
+        mgr.invalidate_person_identity(person_id, deleted=False, timestamp=2.0)
+        assert mgr.active_session is not None
+        assert mgr.active_session.person_id == person_id
+        assert mgr.active_session.display_name == "Morgan"
+
 
 # ---------------------------------------------------------------------------
 # Reset

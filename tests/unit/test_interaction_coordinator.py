@@ -419,6 +419,72 @@ class TestCoordinatorLifecycleTransitions:
 
         coordinator.close()
 
+    def test_forget_deleted_person_detaches_live_context_and_summary(self) -> None:
+        bus = EventBus()
+        profile = _mk_person_profile(person_id="p-delete")
+        person_service = MagicMock(spec=BasePersonService)
+        person_service.get_person.return_value = profile
+        coordinator = InteractionCoordinator(bus, person_service=person_service)
+
+        bus.publish(
+            SessionStartedEvent(
+                session_id="s-delete",
+                track_id=7,
+                person_id="p-delete",
+                display_name="Alice",
+                timestamp=100.0,
+            )
+        )
+        bus.publish(
+            PersonIdentifiedEvent(
+                session_id="s-delete",
+                track_id=7,
+                person_id="p-delete",
+                display_name="Alice",
+                timestamp=101.0,
+            )
+        )
+        bus.publish(
+            PersonLostIdentityEvent(
+                session_id="s-delete",
+                track_id=7,
+                previous_person_id="p-delete",
+                timestamp=102.0,
+            )
+        )
+
+        assert coordinator.get_context().last_known_person_id == "p-delete"
+        coordinator.forget_deleted_person("p-delete")
+        assert coordinator.get_context().last_known_person_id is None
+
+        bus.publish(
+            SessionStartedEvent(
+                session_id="s-summary",
+                track_id=8,
+                person_id="p-delete",
+                display_name="Alice",
+                timestamp=200.0,
+            )
+        )
+        bus.publish(
+            SessionEndedEvent(
+                session_id="s-summary",
+                track_id=8,
+                final_person_id="p-delete",
+                final_display_name="Alice Smith",
+                timestamp=210.0,
+            )
+        )
+
+        coordinator.forget_deleted_person("p-delete")
+        summary = coordinator.get_last_summary()
+        assert summary is not None
+        assert summary.person_id is None
+        assert summary.person_profile is None
+        assert summary.display_name == "Alice"
+        assert summary.identity_was_known is True
+        coordinator.close()
+
 
 # ---------------------------------------------------------------------------
 # Multiple Sessions & Listeners Tests

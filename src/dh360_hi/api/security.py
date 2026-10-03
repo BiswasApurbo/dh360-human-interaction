@@ -18,6 +18,10 @@ class OperatorScope(StrEnum):
 
     PERSONS_READ = "persons:read"
     PERSONS_CREATE = "persons:create"
+    PERSONS_UPDATE = "persons:update"
+    PERSONS_DELETE = "persons:delete"
+    BIOMETRICS_RESET = "biometrics:reset"
+    CONSENT_MANAGE = "consent:manage"
 
 
 @dataclass(frozen=True)
@@ -51,6 +55,13 @@ _bearer_credentials = Depends(_bearer_scheme)
 
 def require_scope(scope: OperatorScope) -> Callable[..., Awaitable[OperatorPrincipal]]:
     """Authenticate the request and require one configured operator scope."""
+    return require_scopes(scope)
+
+
+def require_scopes(
+    *required_scopes: OperatorScope,
+) -> Callable[..., Awaitable[OperatorPrincipal]]:
+    """Authenticate the request and require every listed operator scope."""
 
     async def authorize(
         request: Request,
@@ -84,7 +95,7 @@ def require_scope(scope: OperatorScope) -> Callable[..., Awaitable[OperatorPrinc
             )
 
         scopes = frozenset(OperatorScope(value) for value in config.operator_scopes)
-        if scope not in scopes:
+        if not set(required_scopes).issubset(scopes):
             raise OperatorSecurityError(
                 403,
                 "INSUFFICIENT_SCOPE",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from unittest.mock import MagicMock
 
@@ -51,6 +52,26 @@ class MockAligner(BaseFaceAligner):
             method="similarity",
             output_size=(112, 112),
         )
+
+
+class BlockingMockAligner(MockAligner):
+    """Aligner that lets tests hold a worker task in progress deterministically."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def align(
+        self,
+        frame: object,
+        target: object,
+        landmarks: object = None,
+    ) -> AlignmentResult:
+        self.started.set()
+        if not self.release.wait(timeout=3.0):
+            raise TimeoutError("test alignment release timed out")
+        return super().align(frame, target, landmarks)
 
 
 class MockEmbedder(BaseFaceEmbedder):
@@ -303,6 +324,32 @@ def test_worker_bounded_results_queue_drops_oldest_on_backlog() -> None:
         assert polled_track_ids == [3, 4, 5]
 
     finally:
+        worker.stop()
+
+
+def test_worker_quiesce_waits_for_queued_and_in_progress_work_and_discards_results() -> None:
+    """Quiescence covers running inference, pending tasks, and completed stale results."""
+    aligner = BlockingMockAligner()
+    worker = BoundedEmbeddingWorker(
+        aligner=aligner,
+        embedder=MockEmbedder(),
+        recognizer=MockRecognizer(),
+        config=EmbeddingWorkerConfig(max_queue_size=3),
+    )
+    worker.start()
+
+    try:
+        assert worker.submit(_make_task(track_id=1, frame_id=1)) is True
+        assert aligner.started.wait(timeout=1.0)
+        assert worker.submit(_make_task(track_id=2, frame_id=2)) is True
+        assert worker.quiesce(timeout=0.01) is False
+
+        aligner.release.set()
+        assert worker.quiesce(timeout=2.0) is True
+        assert worker.pending_count == 0
+        assert worker.poll_results(max_results=10) == []
+    finally:
+        aligner.release.set()
         worker.stop()
 
 

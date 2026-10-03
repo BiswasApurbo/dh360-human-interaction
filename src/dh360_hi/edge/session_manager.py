@@ -56,6 +56,7 @@ Event ordering guarantees (per-frame)
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from dataclasses import dataclass
 
@@ -185,6 +186,44 @@ class SessionManager:
         """Reset all internal session state (e.g. between test runs)."""
         self._active_session = None
         self._present_tracks.clear()
+
+    def invalidate_person_identity(
+        self,
+        person_id: str,
+        *,
+        deleted: bool = False,
+        timestamp: float | None = None,
+    ) -> PersonLostIdentityEvent | None:
+        """Reconcile an operator mutation with the active session without ending it.
+
+        Deletion detaches the person ID so a later session summary cannot violate
+        the person foreign key. Reset/update preserve the historical association.
+        """
+        session = self._active_session
+        if session is None:
+            return None
+
+        was_emitted = session.last_emitted_person_id == person_id
+        if session.person_id != person_id and not was_emitted:
+            return None
+
+        event = None
+        if was_emitted:
+            event = PersonLostIdentityEvent(
+                timestamp=timestamp if timestamp is not None else time.time(),
+                session_id=session.session_id,
+                track_id=session.track_id,
+                previous_person_id=person_id,
+            )
+            session.is_identified = False
+            session.last_emitted_person_id = None
+
+        if deleted:
+            session.person_id = None
+
+        if event is not None and self._bus is not None:
+            self._bus.publish(event)
+        return event
 
     def process_frame_result(self, result: TwoRateFrameResult) -> list[BaseEvent]:
         """Process a single pipeline frame result and return ordered domain events.

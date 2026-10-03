@@ -285,6 +285,12 @@ class DirectEmbeddingWorker(BaseEmbeddingWorker):
             results.append(self._completed_results.popleft())
         return results
 
+    def quiesce(self, timeout: float = 5.0) -> bool:
+        """Discard inline results at a deterministic lifecycle boundary."""
+        del timeout
+        self._completed_results.clear()
+        return True
+
     def is_busy_or_pending(self, track_id: int) -> bool:
         """In synchronous execution, tasks never block."""
         _ = track_id

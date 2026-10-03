@@ -132,6 +132,8 @@ class EdgeInteractionRuntime:
         self._pause_condition = threading.Condition(self._lock)
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._active_cycles = 0
+        self._mutation_barrier = False
 
         # State tracking
         self._state = RuntimeState.STOPPED
@@ -222,6 +224,9 @@ class EdgeInteractionRuntime:
             RuntimeError: If runtime is already in RUNNING or PAUSED state.
         """
         with self._lock:
+            if self._mutation_barrier:
+                msg = "Cannot start runtime while a person mutation barrier is active"
+                raise RuntimeError(msg)
             if self._state in (RuntimeState.RUNNING, RuntimeState.PAUSED):
                 msg = f"Cannot start runtime: already in state {self._state.value}"
                 raise RuntimeError(msg)
@@ -308,6 +313,57 @@ class EdgeInteractionRuntime:
             self._state = RuntimeState.PAUSED
             logger.info("EdgeInteractionRuntime paused")
 
+    def begin_mutation_barrier(self, timeout: float = 5.0) -> RuntimeState | None:
+        """Prevent frame cycles from starting and wait for all active cycles to finish.
+
+        Returns the state to restore with :meth:`end_mutation_barrier`, or ``None``
+        when another barrier is active or the frame boundary could not be reached.
+        """
+        deadline = time.monotonic() + timeout
+        with self._pause_condition:
+            if self._mutation_barrier:
+                return None
+
+            prior_state = self._state
+            self._mutation_barrier = True
+            if self._state == RuntimeState.RUNNING:
+                self._state = RuntimeState.PAUSED
+            self._pause_condition.notify_all()
+
+            while self._active_cycles > 0:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    self._mutation_barrier = False
+                    if not self._stop_event.is_set() and self._state != RuntimeState.ERROR:
+                        self._state = prior_state
+                    self._pause_condition.notify_all()
+                    return None
+                self._pause_condition.wait(timeout=remaining)
+
+            if self._state == RuntimeState.ERROR:
+                return RuntimeState.ERROR
+            return prior_state
+
+    def end_mutation_barrier(
+        self,
+        prior_state: RuntimeState,
+        resume: bool = True,
+    ) -> None:
+        """Release a mutation barrier and restore or preserve the runtime state."""
+        with self._pause_condition:
+            if not self._mutation_barrier:
+                return
+            self._mutation_barrier = False
+            if self._stop_event.is_set() or self._state == RuntimeState.STOPPED:
+                self._state = RuntimeState.STOPPED
+                self._pause_condition.notify_all()
+                return
+            if resume:
+                self._state = prior_state
+            elif prior_state == RuntimeState.RUNNING and self._state != RuntimeState.ERROR:
+                self._state = RuntimeState.PAUSED
+            self._pause_condition.notify_all()
+
     def resume(self) -> None:
         """Resume continuous execution from PAUSED state.
 
@@ -315,6 +371,9 @@ class EdgeInteractionRuntime:
             RuntimeError: If runtime is not currently PAUSED.
         """
         with self._lock:
+            if self._mutation_barrier:
+                msg = "Cannot resume runtime while a person mutation barrier is active"
+                raise RuntimeError(msg)
             if self._state != RuntimeState.PAUSED:
                 msg = f"Cannot resume runtime from state {self._state.value}"
                 raise RuntimeError(msg)
@@ -340,8 +399,8 @@ class EdgeInteractionRuntime:
             RuntimeError: If runtime is in PAUSED or ERROR state, or if the
                 FrameSource returns no frame (end of stream).
         """
-        with self._lock:
-            if self._state == RuntimeState.PAUSED:
+        with self._pause_condition:
+            if self._mutation_barrier or self._state == RuntimeState.PAUSED:
                 msg = "Cannot execute step_once() while runtime is PAUSED"
                 raise RuntimeError(msg)
             if self._state == RuntimeState.ERROR:
@@ -358,34 +417,38 @@ class EdgeInteractionRuntime:
             # Start worker if configured and not running
             if self._config.auto_start_worker and not self._pipeline.worker.is_running:
                 self._pipeline.start()
+            self._active_cycles += 1
 
-        t_start = time.monotonic()
-        frame = self._frame_source.read()
-        if frame is None:
-            msg = "FrameSource returned None (end of stream or capture failure)"
-            raise RuntimeError(msg)
+        try:
+            t_start = time.monotonic()
+            frame = self._frame_source.read()
+            if frame is None:
+                msg = "FrameSource returned None (end of stream or capture failure)"
+                raise RuntimeError(msg)
 
-        # 1. Vision Perception Fast-Path
-        frame_result = self._pipeline.process_frame(frame)
+            # 1. Vision Perception Fast-Path
+            frame_result = self._pipeline.process_frame(frame)
 
-        # 2. Session Lifecycle Supervision
-        events = self._session_manager.process_frame_result(frame_result)
+            # 2. Session Lifecycle Supervision
+            events = self._session_manager.process_frame_result(frame_result)
 
-        # 3. Event Bus Publication (ensuring delivery without duplicate publish)
-        if self._session_manager._bus is not self._event_bus:
-            for event in events:
-                self._event_bus.publish(event)
+            # 3. Event Bus Publication (ensuring delivery without duplicate publish)
+            if self._session_manager._bus is not self._event_bus:
+                for event in events:
+                    self._event_bus.publish(event)
 
-        t_end = time.monotonic()
-        latency_ms = (t_end - t_start) * 1000.0
+            t_end = time.monotonic()
+            latency_ms = (t_end - t_start) * 1000.0
 
-        with self._lock:
-            self._frames_processed += 1
-            self._total_latency_ms += latency_ms
-            self._consecutive_errors = 0
-            self._frame_timestamps.append(t_end)
+            with self._lock:
+                self._frames_processed += 1
+                self._total_latency_ms += latency_ms
+                self._consecutive_errors = 0
+                self._frame_timestamps.append(t_end)
 
-        return frame_result, events
+            return frame_result, events
+        finally:
+            self._finish_frame_cycle()
 
     # ------------------------------------------------------------------
     # Internal Loop & Pacing
@@ -397,13 +460,15 @@ class EdgeInteractionRuntime:
         next_deadline = time.monotonic()
 
         while not self._stop_event.is_set():
-            # Handle PAUSED state
+            # Wait before starting a cycle while paused or during lifecycle mutation.
             with self._pause_condition:
-                while self._state == RuntimeState.PAUSED and not self._stop_event.is_set():
+                while (
+                    self._state == RuntimeState.PAUSED or self._mutation_barrier
+                ) and not self._stop_event.is_set():
                     self._pause_condition.wait(timeout=0.1)
-
-            if self._stop_event.is_set() or self._state != RuntimeState.RUNNING:
-                break
+                if self._stop_event.is_set() or self._state != RuntimeState.RUNNING:
+                    break
+                self._active_cycles += 1
 
             # Execute single frame cycle with error isolation
             try:
@@ -435,6 +500,8 @@ class EdgeInteractionRuntime:
                 self._handle_frame_error(exc)
                 if self.state == RuntimeState.ERROR:
                     break
+            finally:
+                self._finish_frame_cycle()
 
             # Frame rate pacing toward target_fps
             next_deadline += target_interval
@@ -445,6 +512,12 @@ class EdgeInteractionRuntime:
             else:
                 # Behind schedule: reset deadline to prevent accumulated burst processing
                 next_deadline = now
+
+    def _finish_frame_cycle(self) -> None:
+        """Signal completion of a frame/session/event cycle to lifecycle waiters."""
+        with self._pause_condition:
+            self._active_cycles -= 1
+            self._pause_condition.notify_all()
 
     def _handle_frame_error(self, exc: Exception) -> None:
         """Record transient frame exception and trigger ERROR transition if threshold exceeded."""

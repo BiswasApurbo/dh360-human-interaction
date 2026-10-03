@@ -14,11 +14,12 @@ from dh360_hi.backend.session_repository import (
     SessionPersistenceWorker,
     SQLiteSessionRepository,
 )
+from dh360_hi.contracts.dto import CreatePersonCommand
 from dh360_hi.contracts.interaction import InteractionState, InteractionSummary
 from dh360_hi.edge.runtime import EdgeRuntimeConfig
 from dh360_hi.edge.session_manager import SessionConfig
 from dh360_hi.vision.frame import SyntheticFrameSource
-from dh360_hi.vision.identity_state import IdentityState, TrackIdentityState
+from dh360_hi.vision.identity_state import IdentityState, IdentityStateManager, TrackIdentityState
 from dh360_hi.vision.presence_debouncer import PresenceEvent, PresenceTransition
 from dh360_hi.vision.target_selector import TargetCandidate, TargetSelectionResult
 from dh360_hi.vision.two_rate_pipeline import TwoRateFrameResult, TwoRatePerceptionPipeline
@@ -117,6 +118,73 @@ def _mk_scripted_frame_result(
 
 
 class TestSessionPersistenceIntegration:
+    def test_deleting_identified_person_detaches_active_session_before_persistence(self) -> None:
+        """A session ending after person deletion persists without a dangling person FK."""
+        pipeline = MagicMock(spec=TwoRatePerceptionPipeline)
+        pipeline.worker.is_running = True
+        pipeline.worker.quiesce.return_value = True
+        identity_manager = IdentityStateManager()
+        identity_manager._tracks[1] = TrackIdentityState(
+            track_id=1,
+            state=IdentityState.IDENTIFIED,
+            current_person_id="pending-person-id",
+            current_display_name="Jordan",
+        )
+        pipeline.identity_manager = identity_manager
+
+        service = create_interaction_service(
+            config=HumanInteractionConfig(),
+            pipeline=pipeline,
+            enable_perception=True,
+        )
+        person = service.create_person(
+            CreatePersonCommand(display_name="Jordan", consent_status=ConsentStatus.GRANTED)
+        )
+        identity_manager._tracks[1].current_person_id = person.person_id
+
+        try:
+            runtime = service.runtime
+            assert runtime is not None
+            runtime.session_manager.process_frame_result(
+                _mk_scripted_frame_result(
+                    frame_id=1,
+                    person_id=person.person_id,
+                    display_name=person.display_name,
+                    total_frames=10,
+                )
+            )
+
+            assert service.delete_person(person.person_id) is True
+            active_session = runtime.session_manager.active_session
+            assert active_session is not None
+            assert active_session.person_id is None
+            assert active_session.display_name == "Jordan"
+
+            ended_events = runtime.session_manager.process_frame_result(
+                _mk_scripted_frame_result(
+                    frame_id=10,
+                    person_id=person.person_id,
+                    display_name="Jordan",
+                    total_frames=10,
+                )
+            )
+            session_ended = next(
+                event for event in ended_events if event.__class__.__name__ == "SessionEndedEvent"
+            )
+            assert session_ended.final_person_id is None
+            assert session_ended.final_display_name == "Jordan"
+            assert service.flush_session_persistence(timeout=2.0) is True
+
+            summary = service.get_last_summary()
+            assert summary is not None
+            persisted = service.get_session(summary.session_id)
+            assert persisted is not None
+            assert persisted.person_id is None
+            assert persisted.display_name == "Jordan"
+            assert persisted.identity_was_known is True
+        finally:
+            service.stop()
+
     def test_single_anonymous_session_persisted_to_sqlite(self) -> None:
         """Verify single anonymous session runs through pipeline, finishes, and saves to SQLite."""
         source = SyntheticFrameSource(num_frames=5, fps=100.0)

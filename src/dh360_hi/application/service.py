@@ -24,6 +24,12 @@ import numpy as np
 from dh360_hi.application.config import HumanInteractionConfig
 from dh360_hi.application.coordinator import InteractionCoordinator
 from dh360_hi.application.health import ServiceHealthSnapshot, evaluate_service_health
+from dh360_hi.backend.exceptions import (
+    PersonNotFoundError,
+)
+from dh360_hi.backend.exceptions import (
+    ValidationError as BackendValidationError,
+)
 from dh360_hi.backend.gallery_loader import load_gallery_from_repository
 from dh360_hi.contracts.dto import (
     CreatePersonCommand,
@@ -39,7 +45,7 @@ from dh360_hi.contracts.dto import (
     StepResultDTO,
     UpdatePersonCommand,
 )
-from dh360_hi.contracts.errors import ServiceUnavailableError
+from dh360_hi.contracts.errors import ConflictAppError, ServiceUnavailableError
 from dh360_hi.contracts.events import (
     BaseEvent,
     PersonIdentifiedEvent,
@@ -110,6 +116,7 @@ class HumanInteractionService:
         self._enrollment_controller = enrollment_controller
         self._config = config or HumanInteractionConfig()
         self._lock = threading.RLock()
+        self._person_mutation_lock = threading.Lock()
 
         # Integration event subscribers
         self._integration_listeners: dict[int, Callable[[BaseIntegrationEvent], None]] = {}
@@ -310,15 +317,53 @@ class HumanInteractionService:
         Returns:
             Updated PersonProfileDTO.
         """
-        profile = self._person_service.update_person(
-            person_id=person_id,
-            display_name=command.display_name,
-            preferred_name=command.preferred_name,
-            status=command.status,
-            consent_status=command.consent_status,
-            notes=command.notes,
-        )
-        return PersonProfileDTO.from_profile(profile)
+        prior_state = self._begin_person_mutation()
+        resume_runtime = True
+        mutation_started = False
+        try:
+            with self._lock:
+                existing = self._person_service.get_person(person_id)
+                if existing is None:
+                    raise PersonNotFoundError(f"Person '{person_id}' not found")
+
+                self._validate_gallery_eligibility_update(command)
+                mutation_started = True
+                try:
+                    profile = self._person_service.update_person(
+                        person_id=person_id,
+                        display_name=command.display_name,
+                        preferred_name=command.preferred_name,
+                        status=command.status,
+                        consent_status=command.consent_status,
+                        notes=command.notes,
+                    )
+                except (BackendValidationError, PersonNotFoundError):
+                    raise
+                except Exception as exc:
+                    resume_runtime = False
+                    raise ServiceUnavailableError(
+                        "person_mutation",
+                        "Profile update outcome is uncertain; runtime remains paused",
+                    ) from exc
+
+                self._synchronize_person_mutation(person_id, deleted=False)
+                return PersonProfileDTO.from_profile(profile)
+        except Exception as exc:
+            if mutation_started and not isinstance(
+                exc,
+                (BackendValidationError, PersonNotFoundError, ServiceUnavailableError),
+            ):
+                resume_runtime = False
+                raise ServiceUnavailableError(
+                    "person_mutation",
+                    "Profile was updated but runtime synchronization failed; "
+                    "runtime remains paused",
+                ) from exc
+            if isinstance(exc, ServiceUnavailableError):
+                resume_runtime = False
+            raise
+        finally:
+            self._finish_person_mutation(prior_state, resume=resume_runtime)
 
     def delete_person(self, person_id: str) -> bool:
         """Delete a person profile, stored embeddings, and synchronize runtime identity state.
@@ -329,19 +374,40 @@ class HumanInteractionService:
         Returns:
             True if person was deleted, False if not found.
         """
-        id_mgr = (
-            getattr(getattr(self._runtime, "pipeline", None), "identity_manager", None)
-            if self._runtime is not None
-            else None
-        )
-        from dh360_hi.vision.recognition import FaceRecognizer
+        prior_state = self._begin_person_mutation(flush_session_records=True)
+        resume_runtime = True
+        mutation_started = False
+        try:
+            with self._lock:
+                try:
+                    deleted = self._person_service.delete_person(person_id=person_id)
+                except (BackendValidationError, PersonNotFoundError):
+                    raise
+                except Exception as exc:
+                    resume_runtime = False
+                    raise ServiceUnavailableError(
+                        "person_mutation",
+                        "Person deletion outcome is uncertain; runtime remains paused",
+                    ) from exc
 
-        rec_inst = self._recognizer if isinstance(self._recognizer, FaceRecognizer) else None
-        return self._person_service.delete_person(
-            person_id=person_id,
-            recognizer=rec_inst,
-            identity_manager=id_mgr,
-        )
+                if not deleted:
+                    return False
+                mutation_started = True
+                self._synchronize_person_mutation(person_id, deleted=True)
+                return True
+        except Exception as exc:
+            if mutation_started and not isinstance(exc, ServiceUnavailableError):
+                resume_runtime = False
+                raise ServiceUnavailableError(
+                    "person_mutation",
+                    "Person deletion committed but runtime synchronization failed; "
+                    "runtime remains paused",
+                ) from exc
+            if isinstance(exc, ServiceUnavailableError):
+                resume_runtime = False
+            raise
+        finally:
+            self._finish_person_mutation(prior_state, resume=resume_runtime)
 
     def reset_person_biometrics(self, person_id: str) -> int:
         """Delete all biometric embeddings for a person and update runtime recognizer gallery.
@@ -352,19 +418,152 @@ class HumanInteractionService:
         Returns:
             Count of deleted biometric embedding records.
         """
-        id_mgr = (
-            getattr(getattr(self._runtime, "pipeline", None), "identity_manager", None)
-            if self._runtime is not None
-            else None
-        )
-        from dh360_hi.vision.recognition import FaceRecognizer
+        prior_state = self._begin_person_mutation()
+        resume_runtime = True
+        mutation_started = False
+        try:
+            with self._lock:
+                try:
+                    deleted_count = self._person_service.delete_person_embeddings(
+                        person_id=person_id
+                    )
+                except (BackendValidationError, PersonNotFoundError):
+                    raise
+                except Exception as exc:
+                    resume_runtime = False
+                    raise ServiceUnavailableError(
+                        "person_mutation",
+                        "Biometric reset outcome is uncertain; runtime remains paused",
+                    ) from exc
 
-        rec_inst = self._recognizer if isinstance(self._recognizer, FaceRecognizer) else None
-        return self._person_service.delete_person_embeddings(
-            person_id=person_id,
-            recognizer=rec_inst,
-            identity_manager=id_mgr,
+                mutation_started = True
+                self._synchronize_person_mutation(person_id, deleted=False)
+                return deleted_count
+        except Exception as exc:
+            if mutation_started and not isinstance(exc, ServiceUnavailableError):
+                resume_runtime = False
+                raise ServiceUnavailableError(
+                    "person_mutation",
+                    "Biometric reset committed but runtime synchronization failed; "
+                    "runtime remains paused",
+                ) from exc
+            if isinstance(exc, ServiceUnavailableError):
+                resume_runtime = False
+            raise
+        finally:
+            self._finish_person_mutation(prior_state, resume=resume_runtime)
+
+    def _begin_person_mutation(self, flush_session_records: bool = False) -> RuntimeState | None:
+        """Serialize operator writes, quiesce vision, and optionally flush session history."""
+        if not self._person_mutation_lock.acquire(timeout=5.0):
+            raise ConflictAppError("Another person mutation is already in progress")
+
+        prior_state: RuntimeState | None = None
+        barrier_started = False
+        try:
+            if self._runtime is not None:
+                try:
+                    prior_state = self._runtime.begin_mutation_barrier(timeout=5.0)
+                except Exception as exc:
+                    raise ServiceUnavailableError(
+                        "runtime", "Could not establish a safe frame boundary"
+                    ) from exc
+                if prior_state is None:
+                    raise ServiceUnavailableError(
+                        "runtime", "Could not reach a frame boundary before timeout"
+                    )
+                barrier_started = True
+                try:
+                    worker_quiesced = self._runtime.pipeline.worker.quiesce(timeout=5.0)
+                except Exception as exc:
+                    raise ServiceUnavailableError(
+                        "recognition_worker", "Could not quiesce recognition work"
+                    ) from exc
+                if not worker_quiesced:
+                    raise ServiceUnavailableError(
+                        "recognition_worker", "Could not quiesce recognition work before timeout"
+                    )
+
+            if flush_session_records and self._persistence_worker is not None:
+                try:
+                    errors_before_flush = self._persistence_worker.error_count
+                    flushed = self.flush_session_persistence(timeout=5.0)
+                    errors_after_flush = self._persistence_worker.error_count
+                except Exception as exc:
+                    raise ServiceUnavailableError(
+                        "session_persistence", "Could not verify pending session writes"
+                    ) from exc
+                if not flushed or errors_after_flush != errors_before_flush:
+                    raise ServiceUnavailableError(
+                        "session_persistence", "Could not safely flush pending session records"
+                    )
+            return prior_state
+        except Exception:
+            try:
+                if barrier_started and self._runtime is not None and prior_state is not None:
+                    self._runtime.end_mutation_barrier(prior_state, resume=True)
+            finally:
+                self._person_mutation_lock.release()
+            raise
+
+    def _finish_person_mutation(
+        self,
+        prior_state: RuntimeState | None,
+        resume: bool,
+    ) -> None:
+        """Release the mutation gate and restore or preserve the prior runtime state."""
+        try:
+            if self._runtime is not None and prior_state is not None:
+                try:
+                    self._runtime.end_mutation_barrier(prior_state, resume=resume)
+                except Exception as exc:
+                    raise ServiceUnavailableError(
+                        "runtime", "Could not restore the runtime mutation barrier state"
+                    ) from exc
+        finally:
+            self._person_mutation_lock.release()
+
+    def _validate_gallery_eligibility_update(self, command: UpdatePersonCommand) -> None:
+        """Reject consent/status changes that configured gallery policy cannot enforce."""
+        if command.status is not None:
+            status_value = (
+                command.status.value if hasattr(command.status, "value") else str(command.status)
+            )
+            if status_value != "active" and not self._config.require_active_for_gallery:
+                raise ConflictAppError(
+                    "Cannot deactivate a person while inactive profiles are allowed "
+                    "in the recognition gallery"
+                )
+        if command.consent_status is not None:
+            consent_value = (
+                command.consent_status.value
+                if hasattr(command.consent_status, "value")
+                else str(command.consent_status)
+            )
+            if consent_value != "granted" and not self._config.require_consent_for_gallery:
+                raise ConflictAppError(
+                    "Cannot withdraw consent while consent is not required for the "
+                    "recognition gallery"
+                )
+
+    def _synchronize_person_mutation(self, person_id: str, deleted: bool) -> None:
+        """Reload gallery and reconcile live identity/session state at a safe point."""
+        self.reload_gallery()
+
+        identity_manager = (
+            self._runtime.pipeline.identity_manager if self._runtime is not None else None
         )
+        if identity_manager is not None:
+            identity_manager.invalidate_person(person_id)
+
+        if self._runtime is not None:
+            self._runtime.session_manager.invalidate_person_identity(
+                person_id,
+                deleted=deleted,
+            )
+
+        if deleted:
+            self._coordinator.forget_deleted_person(person_id)
 
     # ------------------------------------------------------------------
     # Face Enrollment Workflow Commands (DTO Boundary)
@@ -574,7 +773,7 @@ class HumanInteractionService:
 
     def start(self, async_thread: bool = True) -> None:
         """Start the continuous edge interaction runtime frame pump and persistence worker."""
-        with self._lock:
+        with self._person_mutation_lock, self._lock:
             if self._runtime is None:
                 msg = "Cannot start service: perception runtime is not configured or enabled"
                 raise ServiceUnavailableError("runtime", msg)
@@ -584,7 +783,7 @@ class HumanInteractionService:
 
     def stop(self, timeout: float = 3.0) -> None:
         """Gracefully stop the runtime, terminate background workers, and release resources."""
-        with self._lock:
+        with self._person_mutation_lock, self._lock:
             if self._domain_sub_ids:
                 for sid in self._domain_sub_ids:
                     try:
@@ -619,7 +818,7 @@ class HumanInteractionService:
 
     def pause(self) -> None:
         """Pause continuous frame pumping without resetting perception or session state."""
-        with self._lock:
+        with self._person_mutation_lock, self._lock:
             if self._runtime is None:
                 msg = "Perception runtime is not enabled"
                 raise ServiceUnavailableError("runtime", msg)
@@ -627,7 +826,7 @@ class HumanInteractionService:
 
     def resume(self) -> None:
         """Resume continuous frame pumping from PAUSED state."""
-        with self._lock:
+        with self._person_mutation_lock, self._lock:
             if self._runtime is None:
                 msg = "Perception runtime is not enabled"
                 raise ServiceUnavailableError("runtime", msg)

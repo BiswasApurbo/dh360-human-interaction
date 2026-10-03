@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from unittest.mock import MagicMock
 
@@ -185,6 +186,101 @@ class TestRuntimeLifecycleTransitions:
 
         runtime.stop()
         assert runtime.state == RuntimeState.STOPPED
+
+    def test_mutation_barrier_waits_for_inflight_frame_and_restores_state(self) -> None:
+        """A mutation barrier does not return until frame, session, and event work finish."""
+        source = StubFrameSource(infinite=True)
+        pipeline = MagicMock(spec=TwoRatePerceptionPipeline)
+        frame_started = threading.Event()
+        release_frame = threading.Event()
+
+        def block_frame(_frame: Frame) -> TwoRateFrameResult:
+            frame_started.set()
+            if not release_frame.wait(timeout=2.0):
+                raise TimeoutError("test frame release timed out")
+            return _mk_frame_result(1)
+
+        pipeline.process_frame.side_effect = block_frame
+        manager = SessionManager()
+        runtime = EdgeInteractionRuntime(
+            source,
+            pipeline,
+            manager,
+            EventBus(),
+            EdgeRuntimeConfig(target_fps=1000.0),
+        )
+        runtime.start(async_thread=True)
+        assert frame_started.wait(timeout=1.0)
+
+        def release_after_wait() -> None:
+            deadline = time.monotonic() + 1.0
+            while runtime.state != RuntimeState.PAUSED and time.monotonic() < deadline:
+                time.sleep(0.001)
+            assert runtime.state == RuntimeState.PAUSED
+            time.sleep(0.05)
+            release_frame.set()
+
+        release_thread = threading.Thread(target=release_after_wait)
+        release_thread.start()
+        prior_state = runtime.begin_mutation_barrier(timeout=1.0)
+
+        try:
+            assert prior_state == RuntimeState.RUNNING
+            assert runtime.state == RuntimeState.PAUSED
+            runtime.end_mutation_barrier(prior_state)
+            assert runtime.state == RuntimeState.RUNNING
+        finally:
+            release_frame.set()
+            release_thread.join(timeout=1.0)
+            runtime.stop(timeout=1.0)
+
+    def test_mutation_barrier_timeout_restores_running_state(self) -> None:
+        """A frame-boundary timeout releases the barrier without mutating runtime state."""
+        source = StubFrameSource(infinite=True)
+        pipeline = MagicMock(spec=TwoRatePerceptionPipeline)
+        frame_started = threading.Event()
+        release_frame = threading.Event()
+
+        def block_frame(_frame: Frame) -> TwoRateFrameResult:
+            frame_started.set()
+            release_frame.wait(timeout=2.0)
+            return _mk_frame_result(1)
+
+        pipeline.process_frame.side_effect = block_frame
+        runtime = EdgeInteractionRuntime(
+            source,
+            pipeline,
+            SessionManager(),
+            EventBus(),
+            EdgeRuntimeConfig(target_fps=1000.0),
+        )
+        runtime.start(async_thread=True)
+        try:
+            assert frame_started.wait(timeout=1.0)
+            assert runtime.begin_mutation_barrier(timeout=0.01) is None
+            assert runtime.state == RuntimeState.RUNNING
+        finally:
+            release_frame.set()
+            runtime.stop(timeout=1.0)
+
+    def test_mutation_barrier_preserves_preexisting_paused_state(self) -> None:
+        """A successful mutation barrier does not resume a runtime paused by its operator."""
+        runtime = EdgeInteractionRuntime(
+            StubFrameSource(infinite=True),
+            MagicMock(spec=TwoRatePerceptionPipeline),
+            SessionManager(),
+            EventBus(),
+        )
+        runtime.start(async_thread=True)
+        runtime.pause()
+
+        prior_state = runtime.begin_mutation_barrier(timeout=1.0)
+        assert prior_state == RuntimeState.PAUSED
+        runtime.end_mutation_barrier(prior_state)
+
+        assert runtime.state == RuntimeState.PAUSED
+        runtime.resume()
+        runtime.stop(timeout=1.0)
 
     def test_stop_is_idempotent(self) -> None:
         source = StubFrameSource(infinite=True, delay_s=0.01)

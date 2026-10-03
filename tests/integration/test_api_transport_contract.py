@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import secrets
+from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
 from dh360_hi.api.app import create_app
 from dh360_hi.backend.models import SessionRecord
+from dh360_hi.contracts.errors import ServiceUnavailableError
 
 
 def _configure_operator(monkeypatch: pytest.MonkeyPatch, scopes: str) -> str:
@@ -305,3 +308,203 @@ def test_person_get_not_found_uses_existing_error_contract(
 
     assert response.status_code == 404
     assert response.json()["code"] == "ENTITY_NOT_FOUND"
+
+
+def test_person_mutations_require_their_specific_scopes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Update scope does not grant consent management, delete, or biometric reset."""
+    token = _configure_operator(monkeypatch, "persons:create,persons:update")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with TestClient(create_app()) as client:
+        created = client.post("/persons", headers=headers, json={"display_name": "Casey"})
+        person_id = created.json()["person_id"]
+        updated = client.patch(
+            f"/persons/{person_id}",
+            headers=headers,
+            json={"display_name": "Casey Updated"},
+        )
+        consent_update = client.patch(
+            f"/persons/{person_id}",
+            headers=headers,
+            json={"consent_status": "granted"},
+        )
+        deletion = client.delete(f"/persons/{person_id}", headers=headers)
+        reset = client.delete(f"/persons/{person_id}/biometrics", headers=headers)
+        unknown_field = client.patch(
+            f"/persons/{person_id}",
+            headers=headers,
+            json={"notes": "not exposed"},
+        )
+        empty_update = client.patch(
+            f"/persons/{person_id}",
+            headers=headers,
+            json={},
+        )
+        invalid_status = client.patch(
+            f"/persons/{person_id}",
+            headers=headers,
+            json={"status": "suspended"},
+        )
+        blank_preferred_name = client.patch(
+            f"/persons/{person_id}",
+            headers=headers,
+            json={"preferred_name": "   "},
+        )
+
+    assert created.status_code == 201
+    assert updated.status_code == 200
+    assert updated.json()["display_name"] == "Casey Updated"
+    assert consent_update.status_code == 403
+    assert consent_update.json()["code"] == "INSUFFICIENT_SCOPE"
+    assert deletion.status_code == 403
+    assert reset.status_code == 403
+    assert unknown_field.status_code == 422
+    assert empty_update.status_code == 422
+    assert invalid_status.status_code == 422
+    assert blank_preferred_name.status_code == 422
+
+
+def test_authorized_reset_retains_profile_and_delete_returns_not_found_afterward(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reset removes biometric records only; delete removes the profile afterward."""
+    token = _configure_operator(
+        monkeypatch,
+        "persons:read,persons:create,persons:update,persons:delete,biometrics:reset,consent:manage",
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    app = create_app()
+
+    with TestClient(app) as client:
+        created = client.post("/persons", headers=headers, json={"display_name": "Taylor"})
+        assert created.status_code == 201
+        person_id = created.json()["person_id"]
+        app.state.service.person_service.add_person_embedding(
+            person_id,
+            np.ones(128, dtype=np.float32),
+        )
+        assert app.state.service._recognizer.gallery.get_entry(person_id) is None
+
+        grant_consent = client.patch(
+            f"/persons/{person_id}",
+            headers=headers,
+            json={"consent_status": "granted"},
+        )
+        assert app.state.service._recognizer.gallery.get_entry(person_id) is not None
+        withdraw_consent = client.patch(
+            f"/persons/{person_id}",
+            headers=headers,
+            json={"consent_status": "withdrawn"},
+        )
+        assert app.state.service._recognizer.gallery.get_entry(person_id) is None
+        restore_consent = client.patch(
+            f"/persons/{person_id}",
+            headers=headers,
+            json={"consent_status": "granted"},
+        )
+        assert app.state.service._recognizer.gallery.get_entry(person_id) is not None
+        deactivate = client.patch(
+            f"/persons/{person_id}",
+            headers=headers,
+            json={"status": "inactive"},
+        )
+        assert app.state.service._recognizer.gallery.get_entry(person_id) is None
+        reset = client.delete(f"/persons/{person_id}/biometrics", headers=headers)
+        profile_after_reset = client.get(f"/persons/{person_id}", headers=headers)
+        embeddings_after_reset = app.state.service.person_service.get_person_embeddings(person_id)
+        delete = client.delete(f"/persons/{person_id}", headers=headers)
+        missing = client.get(f"/persons/{person_id}", headers=headers)
+
+    assert grant_consent.status_code == 200
+    assert grant_consent.json()["consent_status"] == "granted"
+    assert withdraw_consent.status_code == 200
+    assert withdraw_consent.json()["consent_status"] == "withdrawn"
+    assert restore_consent.status_code == 200
+    assert deactivate.status_code == 200
+    assert deactivate.json()["status"] == "inactive"
+    assert reset.status_code == 204
+    assert profile_after_reset.status_code == 200
+    assert profile_after_reset.json()["person_id"] == person_id
+    assert embeddings_after_reset == []
+    assert delete.status_code == 204
+    assert missing.status_code == 404
+    assert missing.json()["code"] == "ENTITY_NOT_FOUND"
+
+
+def test_missing_person_mutations_return_existing_not_found_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Update, delete, and reset map missing records to the existing 404 contract."""
+    token = _configure_operator(
+        monkeypatch,
+        "persons:update,persons:delete,biometrics:reset",
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    person_id = "00000000-0000-4000-8000-000000000099"
+
+    with TestClient(create_app()) as client:
+        updated = client.patch(
+            f"/persons/{person_id}",
+            headers=headers,
+            json={"display_name": "Missing"},
+        )
+        deleted = client.delete(f"/persons/{person_id}", headers=headers)
+        reset = client.delete(f"/persons/{person_id}/biometrics", headers=headers)
+
+    for response in (updated, deleted, reset):
+        assert response.status_code == 404
+        assert response.json()["code"] == "ENTITY_NOT_FOUND"
+
+
+def test_consent_update_rejected_when_gallery_policy_ignores_consent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Consent withdrawal cannot be reported successful if gallery policy ignores it."""
+    token = _configure_operator(
+        monkeypatch,
+        "persons:read,persons:create,persons:update,consent:manage",
+    )
+    monkeypatch.setenv("DH360_HI_REQUIRE_CONSENT_FOR_GALLERY", "false")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with TestClient(create_app()) as client:
+        created = client.post("/persons", headers=headers, json={"display_name": "Pending"})
+        person_id = created.json()["person_id"]
+        response = client.patch(
+            f"/persons/{person_id}",
+            headers=headers,
+            json={"consent_status": "withdrawn"},
+        )
+        current = client.get(
+            f"/persons/{person_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "CONFLICT_ERROR"
+    assert current.status_code == 200
+    assert current.json()["consent_status"] == "pending"
+
+
+def test_mutation_service_unavailable_uses_existing_503_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Safe-point failures retain the existing application service-unavailable mapping."""
+    token = _configure_operator(monkeypatch, "persons:create,persons:update")
+    headers = {"Authorization": f"Bearer {token}"}
+    app = create_app()
+
+    with TestClient(app) as client:
+        created = client.post("/persons", headers=headers, json={"display_name": "Unavailable"})
+        person_id = created.json()["person_id"]
+        app.state.service.update_person = MagicMock(
+            side_effect=ServiceUnavailableError("person_mutation", "safe point timeout")
+        )
+        response = client.patch(
+            f"/persons/{person_id}",
+            headers=headers,
+            json={"display_name": "Unavailable Updated"},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "SERVICE_UNAVAILABLE"
