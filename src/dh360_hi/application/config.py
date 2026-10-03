@@ -52,6 +52,7 @@ class HumanInteractionConfig:
     Attributes:
         db_path: Path to SQLite database file or ":memory:".
         auto_init_db: Whether to automatically run schema migrations on DB open.
+        camera_index: Index of the server camera used by HTTP enrollment capture.
         detector_model_path: Path to YuNet ONNX detection model weights.
         embedder_model_path: Path to SFace ONNX embedding model weights.
         detector_input_size: Resolution (width, height) for detector inference.
@@ -105,6 +106,9 @@ class HumanInteractionConfig:
     aligner_output_size: tuple[int, int] = (112, 112)
     aligner_fallback_to_bbox: bool = True
 
+    # Server-side Camera Capture (HTTP enrollment sessions always use this camera)
+    camera_index: int = 0
+
     # Subsystem Configurations
     quality: FaceQualityThresholds = field(default_factory=FaceQualityThresholds)
     runtime: EdgeRuntimeConfig = field(default_factory=EdgeRuntimeConfig)
@@ -134,12 +138,16 @@ class HumanInteractionConfig:
         if not self.model_version.strip():
             msg = "model_version must not be empty"
             raise ValueError(msg)
+        if self.camera_index < 0:
+            msg = "camera_index must be non-negative"
+            raise ValueError(msg)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert configuration to a nested JSON/serialization-safe dictionary."""
         return {
             "db_path": str(self.db_path),
             "auto_init_db": self.auto_init_db,
+            "camera_index": self.camera_index,
             "detector_model_path": str(self.detector_model_path)
             if self.detector_model_path is not None
             else None,

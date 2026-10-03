@@ -358,11 +358,10 @@ def test_minimum_sample_requirement_on_commit(mock_pipeline: tuple) -> None:
     assert service.repository.count_embeddings(person.person_id) == 0
 
 
-def test_successful_enrollment_and_gallery_auto_reload(mock_pipeline: tuple) -> None:
-    """Test complete enrollment flow, transactional persistence, and automatic gallery reload."""
+def test_successful_enrollment_and_single_gallery_sync(mock_pipeline: tuple) -> None:
+    """Commit persists transactionally; gallery sync happens once at the app boundary."""
     detector, quality_gate, _, embedder, service, controller = mock_pipeline
     recognizer = FaceRecognizer()
-    controller._recognizer = recognizer
 
     person = service.create_person("Alice Smith")
     controller.start_session(person.person_id)
@@ -394,7 +393,12 @@ def test_successful_enrollment_and_gallery_auto_reload(mock_pipeline: tuple) -> 
     assert len(batch_ids) == 1
     assert res.enrollment_batch_id in batch_ids
 
-    # Check that in-memory recognizer gallery was automatically updated
+    # Check that in-memory recognizer gallery was NOT synchronized by the controller:
+    # the ApplicationService mutation barrier owns the single post-commit reload.
+    assert len(recognizer.gallery) == 0
+
+    # The single application-boundary synchronization produces the complete entry.
+    recognizer.replace_gallery(service.load_recognition_gallery())
     assert len(recognizer.gallery) == 1
     gallery_entry = recognizer.gallery.get_entry(person.person_id)
     assert gallery_entry is not None
@@ -443,11 +447,10 @@ def test_enrollment_add_samples_mode_and_existing_duplicate_protection(
     assert service.repository.count_embeddings(person.person_id) == 4
 
 
-def test_staged_replacement_success_and_gallery_replacement(mock_pipeline: tuple) -> None:
-    """Test REPLACE mode replaces old embeddings atomically and updates recognizer gallery."""
+def test_staged_replacement_success_and_deferred_gallery_sync(mock_pipeline: tuple) -> None:
+    """REPLACE persists atomically; gallery sync happens once at the app boundary."""
     detector, quality_gate, _, embedder, service, controller = mock_pipeline
     recognizer = FaceRecognizer()
-    controller._recognizer = recognizer
 
     person = service.create_person("Old Enrollment Person")
     dummy_frame = Frame(image=np.zeros((480, 640, 3), dtype=np.uint8), frame_id=1, timestamp=0.0)
@@ -460,7 +463,7 @@ def test_staged_replacement_success_and_gallery_replacement(mock_pipeline: tuple
             person.person_id,
             normalize_l2(np.random.randn(128).astype(np.float32)),
         )
-    recognizer._gallery = service.load_recognition_gallery()
+    recognizer.replace_gallery(service.load_recognition_gallery())
     assert service.repository.count_embeddings(person.person_id) == 3
     assert len(recognizer.gallery.get_entry(person.person_id).embeddings) == 3
 
@@ -495,7 +498,14 @@ def test_staged_replacement_success_and_gallery_replacement(mock_pipeline: tuple
     assert len(records) == 4
     assert {r.enrollment_batch_id for r in records} == {res.enrollment_batch_id}
 
-    # Verify gallery updated
+    # Verify the controller did NOT sync the gallery itself: the stale entry still
+    # reflects the pre-commit state, proving the single sync lives at the app boundary.
+    stale_entry = recognizer.gallery.get_entry(person.person_id)
+    assert stale_entry is not None
+    assert len(stale_entry.embeddings) == 3
+
+    # The application-boundary synchronization refreshes to the committed state.
+    recognizer.replace_gallery(service.load_recognition_gallery())
     gallery_entry = recognizer.gallery.get_entry(person.person_id)
     assert gallery_entry is not None
     assert len(gallery_entry.embeddings) == 4
@@ -543,3 +553,50 @@ def test_invalid_enrollment_mode_raises_validation_error(mock_pipeline: tuple) -
 
     with pytest.raises(ValidationError, match="Invalid enrollment mode"):
         controller.start_session(person.person_id, mode="unknown_mode")  # type: ignore[arg-type]
+
+
+def test_controller_persists_only_through_person_service(
+    mock_pipeline: tuple, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M3.2.3: the controller must reach persistence only through PersonService.
+
+    Poisoning the public ``repository`` property proves the controller persists via the
+    service's transactional public methods (get vectors / add / replace) and never reaches
+    directly into the persistence layer.
+    """
+    detector, quality_gate, _, embedder, service, controller = mock_pipeline
+
+    def _forbid(_self: object) -> object:
+        raise AssertionError("FaceEnrollmentController accessed PersonService.repository")
+
+    monkeypatch.setattr(PersonService, "repository", property(_forbid))
+
+    person = service.create_person("Boundary Person")
+    # Pre-seed one embedding so ADD_SAMPLES exercises the vector-retrieval path.
+    service.add_person_embedding(
+        person.person_id, normalize_l2(np.random.randn(128).astype(np.float32))
+    )
+
+    dummy_frame = Frame(image=np.zeros((480, 640, 3), dtype=np.uint8), frame_id=1, timestamp=0.0)
+    detector.set_detections([FaceDetection(bbox=(10.0, 10.0, 50.0, 50.0), confidence=0.95)])
+    quality_gate.set_acceptable(True)
+
+    # ADD_SAMPLES: uses get_person_embedding_vectors + add_person_embeddings.
+    controller.start_session(person.person_id, mode=EnrollmentMode.ADD_SAMPLES)
+    rng = np.random.default_rng(seed=99)
+    for _ in range(5):
+        embedder.set_vector(normalize_l2(rng.standard_normal(128).astype(np.float32)))
+        controller.process_frame(dummy_frame)
+    add_res = controller.commit_session()
+    assert add_res.is_success is True
+    assert service._repo.count_embeddings(person.person_id) == 6  # 1 seeded + 5 new
+
+    # REPLACE: uses replace_person_embeddings.
+    controller.start_session(person.person_id, mode=EnrollmentMode.REPLACE)
+    rng2 = np.random.default_rng(seed=100)
+    for _ in range(5):
+        embedder.set_vector(normalize_l2(rng2.standard_normal(128).astype(np.float32)))
+        controller.process_frame(dummy_frame)
+    replace_res = controller.commit_session()
+    assert replace_res.is_success is True
+    assert service._repo.count_embeddings(person.person_id) == 5

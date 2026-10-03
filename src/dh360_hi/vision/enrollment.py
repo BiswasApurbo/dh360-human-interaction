@@ -15,10 +15,7 @@ import numpy as np
 from dh360_hi.backend.exceptions import PersonNotFoundError, ValidationError
 from dh360_hi.backend.models import (
     ConsentStatus,
-    EmbeddingRecord,
     PersonStatus,
-    utc_now_iso,
-    vector_to_blob,
 )
 from dh360_hi.backend.person_service import BasePersonService
 from dh360_hi.vision.aligner import BaseFaceAligner
@@ -30,7 +27,6 @@ from dh360_hi.vision.embedder import (
 )
 from dh360_hi.vision.frame import Frame
 from dh360_hi.vision.quality_gate import BaseFaceQualityGate
-from dh360_hi.vision.recognition import FaceRecognizer
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +182,7 @@ class BaseFaceEnrollment(ABC):
 
     @abstractmethod
     def commit_session(self) -> EnrollmentResult:
-        """Persist collected embeddings transactionally and reload gallery."""
+        """Persist collected embeddings transactionally (gallery sync happens elsewhere)."""
 
     @property
     @abstractmethod
@@ -210,7 +206,6 @@ class FaceEnrollmentController(BaseFaceEnrollment):
         embedder: BaseFaceEmbedder,
         person_service: BasePersonService,
         config: EnrollmentConfig | None = None,
-        recognizer: FaceRecognizer | None = None,
     ) -> None:
         self._detector = detector
         self._quality_gate = quality_gate
@@ -218,7 +213,6 @@ class FaceEnrollmentController(BaseFaceEnrollment):
         self._embedder = embedder
         self._person_service = person_service
         self._config = config or EnrollmentConfig()
-        self._recognizer = recognizer
         self._session: _ActiveSessionData | None = None
 
     @property
@@ -301,10 +295,9 @@ class FaceEnrollmentController(BaseFaceEnrollment):
         existing_vectors: list[np.ndarray] = []
         if mode_enum == EnrollmentMode.ADD_SAMPLES:
             try:
-                existing_records = self._person_service.repository.get_embeddings_for_person(
+                existing_vectors = self._person_service.get_person_embedding_vectors(
                     person.person_id
                 )
-                existing_vectors = [r.vector for r in existing_records]
             except Exception as exc:
                 logger.warning("Could not preload existing embeddings for duplicate check: %s", exc)
 
@@ -537,34 +530,29 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             self._session = None
             return result
 
-        # 2. Build Transactional Embedding Records
-        now_str = utc_now_iso()
-        records: list[EmbeddingRecord] = []
-        for sample in s.samples:
-            blob = vector_to_blob(sample.embedding, expected_dim=128)
-            records.append(
-                EmbeddingRecord(
-                    embedding_id=sample.sample_id,
-                    person_id=s.person_id,
-                    embedding=blob,
-                    dimension=128,
-                    model_name=self._config.model_name,
-                    model_version=self._config.model_version,
-                    quality_score=sample.quality_score,
-                    enrollment_batch_id=s.enrollment_batch_id,
-                    created_at=now_str,
-                )
-            )
-
-        # 3. Transactional Persistence via Repository
+        # 2 & 3. Transactional Persistence via PersonService (repository not accessed directly)
+        embeddings = [sample.embedding for sample in s.samples]
+        quality_scores: list[float | None] = [sample.quality_score for sample in s.samples]
         try:
             if s.mode == EnrollmentMode.REPLACE:
-                persisted = self._person_service.repository.replace_embeddings_for_person(
-                    s.person_id, records
+                persisted = self._person_service.replace_person_embeddings(
+                    s.person_id,
+                    embeddings,
+                    quality_scores=quality_scores,
+                    model_name=self._config.model_name,
+                    model_version=self._config.model_version,
+                    enrollment_batch_id=s.enrollment_batch_id,
                 )
             else:
-                persisted = self._person_service.repository.add_embeddings(records)
-            persisted_ids = [r.embedding_id for r in persisted]
+                persisted = self._person_service.add_person_embeddings(
+                    s.person_id,
+                    embeddings,
+                    quality_scores=quality_scores,
+                    model_name=self._config.model_name,
+                    model_version=self._config.model_version,
+                    enrollment_batch_id=s.enrollment_batch_id,
+                )
+            persisted_ids = [m.embedding_id for m in persisted]
         except Exception as exc:
             s.state = EnrollmentState.FAILED
             err_msg = f"Database persistence failed during enrollment commit: {exc}"
@@ -586,17 +574,7 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             self._session = None
             return result
 
-        # 4. Atomic Gallery Reload
-        try:
-            new_gallery = self._person_service.load_recognition_gallery(
-                model_name=self._config.model_name,
-                model_version=self._config.model_version,
-            )
-            if self._recognizer is not None:
-                self._recognizer.replace_gallery(new_gallery)
-        except Exception as exc:
-            logger.warning("Gallery reload encountered non-fatal error: %s", exc)
-
+        # 4. Gallery synchronization is owned by the ApplicationService mutation barrier.
         s.state = EnrollmentState.COMPLETED
         result = EnrollmentResult(
             session_id=s.session_id,

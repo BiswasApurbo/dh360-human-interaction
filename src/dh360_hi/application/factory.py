@@ -39,6 +39,64 @@ from dh360_hi.vision.two_rate_pipeline import TwoRatePerceptionPipeline
 logger = logging.getLogger(__name__)
 
 
+def _try_build_enrollment_controller(
+    cfg: HumanInteractionConfig,
+    person_service: BasePersonService,
+    detector: BaseFaceDetector | None = None,
+    embedder: BaseFaceEmbedder | None = None,
+    aligner: BaseFaceAligner | None = None,
+    quality_gate: BaseFaceQualityGate | None = None,
+) -> FaceEnrollmentController | None:
+    """Best-effort construction of a FaceEnrollmentController for on-demand capture.
+
+    Decouples enrollment capability from the continuous perception runtime: the API
+    control plane constructs an enrollment pipeline even when perception is disabled,
+    so operator-driven camera enrollment can run on demand. Returns None when the
+    required detector/embedder cannot be resolved, letting the service degrade
+    gracefully (enrollment endpoints then report 503).
+    """
+    if embedder is not None:
+        emb: BaseFaceEmbedder | None = embedder
+    elif cfg.embedder_model_path is not None:
+        emb = SFaceEmbedder(
+            model_path=cfg.embedder_model_path,
+            model_name=cfg.model_name,
+            model_version=cfg.model_version,
+        )
+    else:
+        emb = None
+
+    if detector is not None:
+        det: BaseFaceDetector | None = detector
+    elif cfg.detector_model_path is not None:
+        det = YuNetFaceDetector(
+            model_path=cfg.detector_model_path,
+            input_size=cfg.detector_input_size,
+            score_threshold=cfg.detector_score_threshold,
+            nms_threshold=cfg.detector_nms_threshold,
+            top_k=cfg.detector_top_k,
+        )
+    else:
+        det = None
+
+    if emb is None or det is None:
+        return None
+
+    al = aligner or FaceAligner(
+        output_size=cfg.aligner_output_size,
+        fallback_to_bbox=cfg.aligner_fallback_to_bbox,
+    )
+    qg = quality_gate or FaceQualityGate(cfg.quality)
+    return FaceEnrollmentController(
+        person_service=person_service,
+        detector=det,
+        aligner=al,
+        embedder=emb,
+        quality_gate=qg,
+        config=cfg.enrollment,
+    )
+
+
 def create_interaction_service(
     config: HumanInteractionConfig | None = None,
     frame_source: FrameSource | None = None,
@@ -137,6 +195,12 @@ def create_interaction_service(
     )
 
     if not enable_perception:
+        enrollment_ctrl = _try_build_enrollment_controller(
+            cfg=cfg,
+            person_service=svc,
+            detector=detector,
+            embedder=embedder,
+        )
         return HumanInteractionService(
             runtime=None,
             coordinator=coord,
@@ -147,7 +211,7 @@ def create_interaction_service(
             event_bus=bus,
             session_repository=session_repo,
             persistence_worker=pers_worker,
-            enrollment_controller=None,
+            enrollment_controller=enrollment_ctrl,
             config=cfg,
         )
 
@@ -226,14 +290,12 @@ def create_interaction_service(
 
         enrollment_ctrl = None
         if emb is not None:
-            rec_inst = rec if isinstance(rec, FaceRecognizer) else None
             enrollment_ctrl = FaceEnrollmentController(
                 person_service=svc,
                 detector=det,
                 aligner=al,
                 embedder=emb,
                 quality_gate=qg,
-                recognizer=rec_inst,
                 config=cfg.enrollment,
             )
 

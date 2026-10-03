@@ -85,7 +85,6 @@ def test_full_person_lifecycle_pipeline(tmp_path: Path) -> None:
         embedder=embedder,
         person_service=person_service,
         config=config,
-        recognizer=recognizer,
     )
 
     # 2. Create Person
@@ -120,6 +119,8 @@ def test_full_person_lifecycle_pipeline(tmp_path: Path) -> None:
     initial_sample_count = commit_res.samples_enrolled
     assert initial_sample_count >= 3
     assert person_service.repository.count_embeddings(person.person_id) == initial_sample_count
+    # The application service performs the single post-commit gallery synchronization.
+    recognizer.replace_gallery(person_service.load_recognition_gallery())
     assert len(recognizer.gallery) == 1
 
     # 4. Recognition Loop: Confirm Identification
@@ -157,6 +158,7 @@ def test_full_person_lifecycle_pipeline(tmp_path: Path) -> None:
     assert add_res.samples_enrolled >= 3
     new_total = initial_sample_count + add_res.samples_enrolled
     assert person_service.repository.count_embeddings(person.person_id) == new_total
+    recognizer.replace_gallery(person_service.load_recognition_gallery())
     assert len(recognizer.gallery.get_entry(person.person_id).embeddings) == new_total
 
     # 6. Staged Replacement (REPLACE mode)
@@ -187,6 +189,7 @@ def test_full_person_lifecycle_pipeline(tmp_path: Path) -> None:
     # Verify old embeddings wiped out, exactly replace_res.samples_enrolled remain
     persisted_count = person_service.repository.count_embeddings(person.person_id)
     assert persisted_count == replace_res.samples_enrolled
+    recognizer.replace_gallery(person_service.load_recognition_gallery())
     gallery_entry = recognizer.gallery.get_entry(person.person_id)
     assert gallery_entry is not None
     assert len(gallery_entry.embeddings) == replace_res.samples_enrolled

@@ -59,7 +59,7 @@ from dh360_hi.contracts.integration import (
 )
 from dh360_hi.edge.event_bus import EventBus
 from dh360_hi.edge.runtime import EdgeInteractionRuntime, RuntimeMetrics, RuntimeState
-from dh360_hi.vision.frame import Frame
+from dh360_hi.vision.frame import Frame, FrameSource
 
 if TYPE_CHECKING:
     from dh360_hi.backend.database import DatabaseManager
@@ -114,6 +114,7 @@ class HumanInteractionService:
         self._session_repository = session_repository
         self._persistence_worker = persistence_worker
         self._enrollment_controller = enrollment_controller
+        self._enrollment_capture: FrameSource | None = None
         self._config = config or HumanInteractionConfig()
         self._lock = threading.RLock()
         self._person_mutation_lock = threading.Lock()
@@ -573,24 +574,70 @@ class HumanInteractionService:
         self,
         person_id: str,
         mode: EnrollmentMode | str = "add_samples",
+        capture_source: FrameSource | None = None,
     ) -> EnrollmentProgressDTO:
         """Start a guided face enrollment session for an enrolled, consented person.
 
         Args:
             person_id: Target person UUID.
             mode: Enrollment mode ('add_samples' or 'replace').
+            capture_source: Optional server-side FrameSource to open and drive via
+                step_enrollment(). When omitted, the caller feeds frames directly through
+                process_enrollment_frame() (existing CLI behavior).
 
         Returns:
             Initial EnrollmentProgressDTO.
 
         Raises:
-            ServiceUnavailableError: If enrollment controller is not configured.
+            ServiceUnavailableError: If the enrollment controller or capture source is
+                unavailable.
         """
         if self._enrollment_controller is None:
             msg = "FaceEnrollmentController is not configured"
             raise ServiceUnavailableError("enrollment", msg)
-        progress = self._enrollment_controller.start_session(person_id=person_id, mode=mode)
-        return EnrollmentProgressDTO.from_progress(progress)
+
+        with self._lock:
+            if capture_source is not None:
+                self._release_enrollment_capture()
+                try:
+                    capture_source.open()
+                except Exception as exc:
+                    raise ServiceUnavailableError(
+                        "enrollment_capture", f"Failed to open capture source: {exc}"
+                    ) from exc
+                self._enrollment_capture = capture_source
+
+            try:
+                progress = self._enrollment_controller.start_session(person_id=person_id, mode=mode)
+            except Exception:
+                self._release_enrollment_capture()
+                raise
+            return EnrollmentProgressDTO.from_progress(progress)
+
+    def step_enrollment(self) -> EnrollmentProgressDTO:
+        """Pull one frame from the active server-side capture source and advance the session.
+
+        Returns:
+            Updated EnrollmentProgressDTO after processing exactly one captured frame.
+
+        Raises:
+            ServiceUnavailableError: If the enrollment controller, capture source, or
+                frame capture is unavailable.
+        """
+        if self._enrollment_controller is None:
+            msg = "FaceEnrollmentController is not configured"
+            raise ServiceUnavailableError("enrollment", msg)
+
+        with self._lock:
+            if self._enrollment_capture is None:
+                msg = "No active server-side capture source for this enrollment session"
+                raise ServiceUnavailableError("enrollment_capture", msg)
+            frame = self._enrollment_capture.read()
+            if frame is None:
+                msg = "Camera capture failed or reached end of stream"
+                raise ServiceUnavailableError("enrollment_capture", msg)
+            progress = self._enrollment_controller.process_frame(frame)
+            return EnrollmentProgressDTO.from_progress(progress)
 
     def process_enrollment_frame(
         self,
@@ -634,26 +681,75 @@ class HumanInteractionService:
         if self._enrollment_controller is None:
             msg = "FaceEnrollmentController is not configured"
             raise ServiceUnavailableError("enrollment", msg)
-        _ = reason
-        self._enrollment_controller.cancel_session()
-        return True
+        with self._lock:
+            _ = reason
+            self._enrollment_controller.cancel_session()
+            self._release_enrollment_capture()
+            return True
 
     def commit_enrollment(self) -> EnrollmentResultDTO:
-        """Persist collected enrollment samples transactionally and reload recognizer gallery.
+        """Persist collected enrollment samples within a safe person-mutation barrier.
+
+        Reuses the M3.2.2 mutation barrier: live perception is paused (when enabled), the
+        recognition embedding worker is quiesced, the samples are persisted through the
+        person service, and the recognition gallery plus live identity/session state are
+        reconciled at a stable frame boundary before the runtime is restored.
 
         Returns:
             EnrollmentResultDTO outcome.
 
         Raises:
-            ServiceUnavailableError: If enrollment controller is not configured.
+            ServiceUnavailableError: If the enrollment controller is not configured or the
+                barrier could not be established / synchronized.
         """
         if self._enrollment_controller is None:
             msg = "FaceEnrollmentController is not configured"
             raise ServiceUnavailableError("enrollment", msg)
-        res = self._enrollment_controller.commit_session()
-        if res.is_success:
-            self.reload_gallery()
-        return EnrollmentResultDTO.from_result(res)
+
+        prior_state = self._begin_person_mutation()
+        resume_runtime = True
+        mutation_started = False
+        try:
+            with self._lock:
+                try:
+                    res = self._enrollment_controller.commit_session()
+                except Exception as exc:
+                    if isinstance(exc, (ServiceUnavailableError, ConflictAppError)):
+                        raise
+                    resume_runtime = False
+                    raise ServiceUnavailableError(
+                        "person_mutation",
+                        "Enrollment commit outcome is uncertain; runtime remains paused",
+                    ) from exc
+
+                mutation_started = True
+                if res.is_success:
+                    self._synchronize_person_mutation(res.person_id, deleted=False)
+                self._release_enrollment_capture()
+                return EnrollmentResultDTO.from_result(res)
+        except Exception as exc:
+            if mutation_started and not isinstance(exc, ServiceUnavailableError):
+                resume_runtime = False
+                raise ServiceUnavailableError(
+                    "person_mutation",
+                    "Enrollment committed but runtime synchronization failed; "
+                    "runtime remains paused",
+                ) from exc
+            if isinstance(exc, ServiceUnavailableError):
+                resume_runtime = False
+            raise
+        finally:
+            self._finish_person_mutation(prior_state, resume=resume_runtime)
+
+    def _release_enrollment_capture(self) -> None:
+        """Release and clear any active server-side enrollment capture source."""
+        capture = self._enrollment_capture
+        self._enrollment_capture = None
+        if capture is not None:
+            try:
+                capture.release()
+            except Exception:
+                logger.exception("Error releasing enrollment capture source")
 
     def get_enrollment_progress(self) -> EnrollmentProgressDTO | None:
         """Retrieve current progress of the active enrollment session, if any."""

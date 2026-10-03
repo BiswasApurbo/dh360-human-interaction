@@ -104,6 +104,23 @@ class BasePersonService(ABC):
         """Atomically replace all face embeddings for a person with a new set."""
 
     @abstractmethod
+    def add_person_embeddings(
+        self,
+        person_id: str,
+        embeddings: list[np.ndarray],
+        model_name: str = "SFace",
+        model_version: str = "2021dec",
+        quality_scores: list[float | None] | None = None,
+        enrollment_batch_id: str | None = None,
+        recognizer: FaceRecognizer | None = None,
+    ) -> list[EmbeddingMetadata]:
+        """Atomically append a batch of face embeddings for a person in one transaction."""
+
+    @abstractmethod
+    def get_person_embedding_vectors(self, person_id: str) -> list[np.ndarray]:
+        """Retrieve the raw embedding vectors for all of a person's samples."""
+
+    @abstractmethod
     def get_person_embeddings(self, person_id: str) -> list[EmbeddingMetadata]:
         """Retrieve metadata for all embeddings associated with a person."""
 
@@ -394,6 +411,82 @@ class PersonService(BasePersonService):
             )
             for r in persisted
         ]
+
+    def add_person_embeddings(
+        self,
+        person_id: str,
+        embeddings: list[np.ndarray],
+        model_name: str = "SFace",
+        model_version: str = "2021dec",
+        quality_scores: list[float | None] | None = None,
+        enrollment_batch_id: str | None = None,
+        recognizer: FaceRecognizer | None = None,
+    ) -> list[EmbeddingMetadata]:
+        """Atomically append a batch of face embeddings for a person.
+
+        Persists all supplied vectors in a single transaction (via the repository's
+        batch writer) and, when a recognizer is supplied, reloads the recognition
+        gallery exactly once so the in-memory index stays consistent with storage.
+        """
+        existing = self._repo.get_person(person_id)
+        if existing is None:
+            msg = f"Cannot add embeddings: person '{person_id}' not found"
+            raise PersonNotFoundError(msg)
+
+        batch_id = enrollment_batch_id or str(uuid.uuid4())
+        now_str = utc_now_iso()
+        records: list[EmbeddingRecord] = []
+        for idx, emb in enumerate(embeddings):
+            eid = str(uuid.uuid4())
+            blob = vector_to_blob(emb, expected_dim=128)
+            q_score = (
+                quality_scores[idx]
+                if quality_scores is not None and idx < len(quality_scores)
+                else None
+            )
+            records.append(
+                EmbeddingRecord(
+                    embedding_id=eid,
+                    person_id=existing.person_id,
+                    embedding=blob,
+                    dimension=128,
+                    model_name=model_name,
+                    model_version=model_version,
+                    quality_score=q_score,
+                    enrollment_batch_id=batch_id,
+                    created_at=now_str,
+                )
+            )
+
+        persisted = self._repo.add_embeddings(records)
+        if recognizer is not None:
+            new_gallery = self.load_recognition_gallery(
+                model_name=model_name,
+                model_version=model_version,
+            )
+            recognizer.replace_gallery(new_gallery)
+
+        return [
+            EmbeddingMetadata(
+                embedding_id=r.embedding_id,
+                person_id=r.person_id,
+                dimension=r.dimension,
+                model_name=r.model_name,
+                model_version=r.model_version,
+                quality_score=r.quality_score,
+                enrollment_batch_id=r.enrollment_batch_id,
+                created_at=r.created_at,
+            )
+            for r in persisted
+        ]
+
+    def get_person_embedding_vectors(self, person_id: str) -> list[np.ndarray]:
+        """Retrieve the raw embedding vectors for all of a person's samples."""
+        existing = self._repo.get_person(person_id)
+        if existing is None:
+            msg = f"Person '{person_id}' not found"
+            raise PersonNotFoundError(msg)
+        return [r.vector for r in self._repo.get_embeddings_for_person(person_id)]
 
     def get_person_embeddings(self, person_id: str) -> list[EmbeddingMetadata]:
         """Retrieve metadata for all embeddings associated with a person."""

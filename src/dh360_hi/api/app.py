@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from dh360_hi.api.routers.enrollment import router as enrollment_router
 from dh360_hi.api.routers.health import router as health_router
 from dh360_hi.api.routers.interaction import router as interaction_router
 from dh360_hi.api.routers.persons import router as persons_router
@@ -49,6 +50,8 @@ def create_app() -> FastAPI:
             status = 404
         elif exc.__class__.__name__ in {"ConflictAppError"}:
             status = 409
+        elif exc.__class__.__name__ in {"EnrollmentAppError"}:
+            status = 422
         return JSONResponse(status_code=status, content=exc.to_dict())
 
     @app.exception_handler(RequestValidationError)
@@ -87,4 +90,5 @@ def create_app() -> FastAPI:
     app.include_router(interaction_router)
     app.include_router(sessions_router)
     app.include_router(persons_router)
+    app.include_router(enrollment_router)
     return app

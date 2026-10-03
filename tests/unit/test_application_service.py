@@ -827,3 +827,71 @@ class TestServiceGalleryAndListeners:
         svc, _ = _mk_service_harness()
         snap = svc.get_health_snapshot()
         assert snap.status in (SubsystemHealthStatus.HEALTHY, SubsystemHealthStatus.DEGRADED)
+
+
+def test_step_enrollment_drives_server_capture_source() -> None:
+    """Verify start/step/cancel drive a server-side FrameSource through the facade."""
+    svc, mocks = _mk_service_harness(with_enrollment=True)
+    ctrl = mocks["enrollment_controller"]
+    progress = EnrollmentProgress(
+        session_id="esess-capture",
+        enrollment_batch_id="batch-capture",
+        person_id="p-1",
+        display_name="Capture",
+        mode=EnrollmentMode.ADD_SAMPLES,
+        state=EnrollmentState.COLLECTING,
+        samples_collected=0,
+        target_samples=5,
+        minimum_samples=3,
+        total_attempts=0,
+        last_rejection_reason=None,
+        last_rejection_details=None,
+        rejection_counts={},
+        is_viable=False,
+        is_complete=False,
+    )
+    ctrl.start_session.return_value = progress
+    ctrl.process_frame.return_value = progress
+
+    source = SyntheticFrameSource(fps=30.0, num_frames=10)
+    started = svc.start_enrollment("p-1", mode="add_samples", capture_source=source)
+    assert started.session_id == "esess-capture"
+    assert source.is_opened is True
+    ctrl.start_session.assert_called_once_with(person_id="p-1", mode="add_samples")
+
+    stepped = svc.step_enrollment()
+    assert stepped.session_id == "esess-capture"
+    ctrl.process_frame.assert_called_once()
+
+    assert svc.cancel_enrollment() is True
+    assert source.is_opened is False
+
+
+def test_commit_enrollment_releases_capture_and_uses_barrier() -> None:
+    """Verify a successful commit traverses the mutation barrier and releases capture."""
+    svc, mocks = _mk_service_harness(runtime_state=RuntimeState.RUNNING, with_enrollment=True)
+    ctrl = mocks["enrollment_controller"]
+    ctrl.commit_session.return_value = EnrollmentResult(
+        session_id="esess-capture",
+        enrollment_batch_id="batch-capture",
+        person_id="p-1",
+        display_name="Capture",
+        mode=EnrollmentMode.ADD_SAMPLES,
+        is_success=True,
+        state=EnrollmentState.COMPLETED,
+        samples_enrolled=5,
+        persisted_embedding_ids=["e1", "e2"],
+        total_attempts=5,
+        error_message=None,
+        rejection_counts={},
+    )
+
+    source = SyntheticFrameSource(fps=30.0, num_frames=10)
+    svc.start_enrollment("p-1", capture_source=source)
+    assert source.is_opened is True
+
+    result = svc.commit_enrollment()
+    assert result.is_success is True
+    assert source.is_opened is False
+    mocks["runtime"].begin_mutation_barrier.assert_called_once()
+    mocks["runtime"].end_mutation_barrier.assert_called_once()

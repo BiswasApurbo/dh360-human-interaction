@@ -10,6 +10,7 @@ from dh360_hi.backend.exceptions import PersonNotFoundError, ValidationError
 from dh360_hi.backend.models import ConsentStatus, PersonStatus
 from dh360_hi.backend.person_service import PersonService
 from dh360_hi.backend.repository import SQLitePersonRepository
+from dh360_hi.vision.recognition import FaceRecognizer
 
 
 @pytest.fixture
@@ -177,3 +178,59 @@ def test_load_recognition_gallery_filtering(service: PersonService) -> None:
     assert len(entry.embeddings) == 1
     norm = np.linalg.norm(entry.embeddings[0])
     assert np.isclose(norm, 1.0, atol=1e-5)
+
+
+def test_batch_add_and_vector_retrieval(service: PersonService) -> None:
+    """Test M3.2.3 batch persistence, single-batch attribution, and raw vector retrieval."""
+    profile = service.create_person("Batch Patient")
+
+    vectors = [np.random.randn(128).astype(np.float32) for _ in range(3)]
+    metas = service.add_person_embeddings(
+        profile.person_id,
+        vectors,
+        quality_scores=[0.9, 0.8, 0.7],
+        enrollment_batch_id="11111111-1111-1111-1111-111111111111",
+        model_name="SFace",
+        model_version="2021dec",
+    )
+    assert len(metas) == 3
+    assert {m.enrollment_batch_id for m in metas} == {"11111111-1111-1111-1111-111111111111"}
+    assert all(not hasattr(m, "embedding") for m in metas)
+    assert service.get_person(profile.person_id).embedding_count == 3  # type: ignore[union-attr]
+
+    # Raw vectors are retrievable for diversity/duplicate checks and are additive.
+    raw = service.get_person_embedding_vectors(profile.person_id)
+    assert len(raw) == 3
+    assert all(v.shape == (128,) for v in raw)
+
+    extra = service.add_person_embeddings(
+        profile.person_id, [np.random.randn(128).astype(np.float32)]
+    )
+    assert len(extra) == 1
+    assert service.get_person(profile.person_id).embedding_count == 4  # type: ignore[union-attr]
+
+
+def test_batch_add_reloads_gallery_via_recognizer(service: PersonService) -> None:
+    """Test that a supplied recognizer receives a single gallery refresh after batch add."""
+    profile = service.create_person("Gallery Batch")
+    recognizer = FaceRecognizer(gallery=service.load_recognition_gallery())
+
+    metas = service.add_person_embeddings(
+        profile.person_id,
+        [np.random.randn(128).astype(np.float32) for _ in range(2)],
+        enrollment_batch_id="22222222-2222-2222-2222-222222222222",
+        recognizer=recognizer,
+    )
+    assert len(metas) == 2
+    entry = recognizer.gallery.get_entry(profile.person_id)
+    assert entry is not None
+    assert len(entry.embeddings) == 2
+
+
+def test_vector_retrieval_missing_person_raises(service: PersonService) -> None:
+    """Test that vector retrieval and batch add raise for an unknown person."""
+    missing = "99999999-9999-9999-9999-999999999999"
+    with pytest.raises(PersonNotFoundError):
+        service.get_person_embedding_vectors(missing)
+    with pytest.raises(PersonNotFoundError):
+        service.add_person_embeddings(missing, [np.random.randn(128).astype(np.float32)])

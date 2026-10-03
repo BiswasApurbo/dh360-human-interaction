@@ -22,6 +22,7 @@ class OperatorScope(StrEnum):
     PERSONS_DELETE = "persons:delete"
     BIOMETRICS_RESET = "biometrics:reset"
     CONSENT_MANAGE = "consent:manage"
+    ENROLLMENT_MANAGE = "enrollment:manage"
 
 
 @dataclass(frozen=True)

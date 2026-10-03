@@ -81,7 +81,6 @@ def test_full_camera_enrollment_to_recognition_integration(tmp_path: Path) -> No
         embedder=embedder,
         person_service=person_service,
         config=config,
-        recognizer=recognizer,
     )
 
     # 1. Create a consented person in PersonService
@@ -133,7 +132,8 @@ def test_full_camera_enrollment_to_recognition_integration(tmp_path: Path) -> No
     assert len(batch_ids) == 1
     assert commit_result.enrollment_batch_id in batch_ids
 
-    # 6. Verify Recognition Using Automatically Reloaded Gallery
+    # 6. Verify Recognition After the Single Application-Service Gallery Sync
+    recognizer.replace_gallery(person_service.load_recognition_gallery())
     assert len(recognizer.gallery) == 1
     gallery_entry = recognizer.gallery.get_entry(person.person_id)
     assert gallery_entry is not None
