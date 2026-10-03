@@ -40,7 +40,13 @@ from dh360_hi.contracts.dto import (
     UpdatePersonCommand,
 )
 from dh360_hi.contracts.errors import ServiceUnavailableError
-from dh360_hi.contracts.events import BaseEvent, SessionEndedEvent
+from dh360_hi.contracts.events import (
+    BaseEvent,
+    PersonIdentifiedEvent,
+    PersonLostIdentityEvent,
+    SessionEndedEvent,
+    SessionStartedEvent,
+)
 from dh360_hi.contracts.integration import (
     BaseIntegrationEvent,
     map_domain_event_to_integration,
@@ -111,10 +117,18 @@ class HumanInteractionService:
         self._context_listener_adapters: dict[int, Callable[[InteractionContext], None]] = {}
 
         # Subscribe to internal domain events to broadcast sanitized integration events
-        self._domain_sub_id: int | None = self._event_bus.subscribe(
-            BaseEvent,
-            self._handle_domain_event_for_integration,
-        )
+        self._domain_sub_ids: list[int] = [
+            self._event_bus.subscribe(
+                ev_cls,
+                self._handle_domain_event_for_integration,
+            )
+            for ev_cls in (
+                SessionStartedEvent,
+                PersonIdentifiedEvent,
+                PersonLostIdentityEvent,
+                SessionEndedEvent,
+            )
+        ]
 
     def _handle_domain_event_for_integration(self, event: BaseEvent) -> None:
         """Bridge internal domain events to external integration event subscribers."""
@@ -571,12 +585,13 @@ class HumanInteractionService:
     def stop(self, timeout: float = 3.0) -> None:
         """Gracefully stop the runtime, terminate background workers, and release resources."""
         with self._lock:
-            if self._domain_sub_id is not None:
-                try:
-                    self._event_bus.unsubscribe(self._domain_sub_id)
-                    self._domain_sub_id = None
-                except Exception:
-                    logger.exception("Error unsubscribing domain event bridge")
+            if self._domain_sub_ids:
+                for sid in self._domain_sub_ids:
+                    try:
+                        self._event_bus.unsubscribe(sid)
+                    except Exception:
+                        logger.exception("Error unsubscribing domain event bridge")
+                self._domain_sub_ids.clear()
 
             if self._runtime is not None:
                 try:

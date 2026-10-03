@@ -1,0 +1,120 @@
+{
+  "scenario_name": "known_person_lifecycle",
+  "description": "Single enrolled person (Alice) arrives, presence confirmed, recognized, and session completes upon departure.",
+  "config_overrides": {
+    "tracker_min_hits": 1,
+    "presence_enter_frames": 3,
+    "presence_exit_frames": 5,
+    "identity_min_observations": 2
+  },
+  "initial_persons": [
+    {
+      "person_id": "00000000-0000-0000-0000-000000000001",
+      "display_name": "Alice Smith",
+      "status": "active",
+      "consent_status": "granted",
+      "embedding_index": 1
+    }
+  ],
+  "frames": [
+    {
+      "frame_id": 1,
+      "timestamp": 1.0,
+      "detections": [
+        {
+          "bbox": [100.0, 100.0, 80.0, 80.0],
+          "confidence": 0.95,
+          "embedding_label": "00000000-0000-0000-0000-000000000001"
+        }
+      ]
+    },
+    {
+      "frame_id": 2,
+      "timestamp": 2.0,
+      "detections": [
+        {
+          "bbox": [100.0, 100.0, 80.0, 80.0],
+          "confidence": 0.95,
+          "embedding_label": "00000000-0000-0000-0000-000000000001"
+        }
+      ]
+    },
+    {
+      "frame_id": 3,
+      "timestamp": 3.0,
+      "detections": [
+        {
+          "bbox": [100.0, 100.0, 80.0, 80.0],
+          "confidence": 0.95,
+          "embedding_label": "00000000-0000-0000-0000-000000000001"
+        }
+      ]
+    },
+    {
+      "frame_id": 4,
+      "timestamp": 4.0,
+      "detections": [
+        {
+          "bbox": [100.0, 100.0, 80.0, 80.0],
+          "confidence": 0.95,
+          "embedding_label": "00000000-0000-0000-0000-000000000001"
+        }
+      ]
+    },
+    {
+      "frame_id": 5,
+      "timestamp": 5.0,
+      "detections": [
+        {
+          "bbox": [100.0, 100.0, 80.0, 80.0],
+          "confidence": 0.95,
+          "embedding_label": "00000000-0000-0000-0000-000000000001"
+        }
+      ]
+    },
+    {
+      "frame_id": 6,
+      "timestamp": 6.0,
+      "detections": []
+    },
+    {
+      "frame_id": 7,
+      "timestamp": 7.0,
+      "detections": []
+    },
+    {
+      "frame_id": 8,
+      "timestamp": 8.0,
+      "detections": []
+    },
+    {
+      "frame_id": 9,
+      "timestamp": 9.0,
+      "detections": []
+    },
+    {
+      "frame_id": 10,
+      "timestamp": 10.0,
+      "detections": []
+    }
+  ],
+  "expected_events": [
+    {
+      "event_type": "session_started",
+      "person_id": "00000000-0000-0000-0000-000000000001",
+      "display_name": "Alice Smith"
+    },
+    {
+      "event_type": "person_identified",
+      "person_id": "00000000-0000-0000-0000-000000000001",
+      "display_name": "Alice Smith"
+    },
+    {
+      "event_type": "session_ended",
+      "person_id": "00000000-0000-0000-0000-000000000001",
+      "display_name": "Alice Smith",
+      "min_duration_seconds": 1.0
+    }
+  ],
+  "expected_persisted_sessions": 1
+}
