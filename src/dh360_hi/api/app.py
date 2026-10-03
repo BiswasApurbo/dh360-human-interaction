@@ -11,7 +11,9 @@ from fastapi.responses import JSONResponse
 
 from dh360_hi.api.routers.health import router as health_router
 from dh360_hi.api.routers.interaction import router as interaction_router
+from dh360_hi.api.routers.persons import router as persons_router
 from dh360_hi.api.routers.sessions import router as sessions_router
+from dh360_hi.api.security import OperatorSecurityError
 from dh360_hi.application.factory import create_interaction_service
 from dh360_hi.application.loader import load_config
 from dh360_hi.backend.exceptions import ValidationError as BackendValidationError
@@ -24,6 +26,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     cfg = load_config(validate=True)
     service = create_interaction_service(config=cfg, enable_perception=False)
     app.state.service = service
+    app.state.operator_auth = cfg.api
     try:
         yield
     finally:
@@ -58,6 +61,18 @@ def create_app() -> FastAPI:
             content={"error": "VALIDATION_ERROR", "details": exc.errors()},
         )
 
+    @app.exception_handler(OperatorSecurityError)
+    async def handle_operator_security_error(
+        _request: Request,
+        exc: OperatorSecurityError,
+    ) -> JSONResponse:
+        headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else None
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=exc.to_dict(),
+            headers=headers,
+        )
+
     @app.exception_handler(BackendValidationError)
     async def handle_backend_validation_error(
         _request: Request,
@@ -71,4 +86,5 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(interaction_router)
     app.include_router(sessions_router)
+    app.include_router(persons_router)
     return app

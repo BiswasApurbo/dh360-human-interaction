@@ -94,6 +94,19 @@ mypy
 pytest
 ```
 
+### Operator Profile API (M3.2.1)
+
+The person-profile endpoints require an operator bearer token and explicit scopes. Configure the token only through the environment; configuration serialization and logs must not contain it. Generate a new local token without printing it to the terminal:
+
+```bash
+export DH360_HI_API__OPERATOR_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export DH360_HI_API__OPERATOR_SCOPES="persons:read,persons:create"
+export DH360_HI_DB_PATH="dh360_hi.db"
+uvicorn --factory dh360_hi.api.app:create_app --host 127.0.0.1 --port 8000
+```
+
+Send the token only in the `Authorization: Bearer` header. The profile API fails closed if the token or scopes are not configured. M3.1 health, runtime, interaction, and session routes retain their existing access behavior and are not made authenticated by M3.2.1. Keep the service bound to loopback unless a separately secured network deployment is configured.
+
 ### 4. Run Functional Face Detection Validation & Benchmark
 ```bash
 # 1. Functional Face Detection Validation (exercises detector on reference fixture)

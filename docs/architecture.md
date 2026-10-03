@@ -791,6 +791,19 @@ Configuration loading follows a strict 5-tier deterministic precedence hierarchy
 - **`2`**: Unexpected runtime/system failure or command-line syntax error.
 - **`130`**: Clean exit on operator interrupt (`SIGINT` / `Ctrl+C`).
 
+#### 5.8.4 Protected Operator Profile API (M3.2.1)
+
+The M3.2.1 FastAPI boundary protects only the person-profile routes with a configured local operator bearer token. The token is read raw from `DH360_HI_API__OPERATOR_TOKEN`; it is never accepted in a URL or request body, serialized with resolved configuration, or logged. Operator scopes are configured using the existing loader precedence through `DH360_HI_API__OPERATOR_SCOPES` or `[api].operator_scopes` in TOML. Only `persons:read` and `persons:create` are defined for this milestone.
+
+- `GET /persons` and `GET /persons/{person_id}` require `persons:read`.
+- `POST /persons` requires `persons:create`; the request accepts only display and preferred names, and creation explicitly sets status to `ACTIVE` and consent to `PENDING`.
+- Responses use `PersonProfileDTO`, which omits notes, embedding counts, model metadata, and raw vectors.
+- Missing or invalid configured credentials fail closed. Missing server-side auth configuration returns 503; invalid/missing credentials return 401; insufficient scope returns 403.
+- Authentication is independent of the perception runtime. No identity or recognition result is an operator credential.
+- The service should bind to `127.0.0.1` by default. M3.1 health, runtime, interaction, and session routes keep their prior access behavior; M3.2.1 does not claim API-wide authentication.
+
+This milestone does not add person update/delete, consent mutation, enrollment, biometric reset or replacement, embedding operations, or persistent audit storage. Operator authentication does not constitute subject consent or clinical authorization.
+
 ---
 
 ## 6. Integration with Digital Health 360

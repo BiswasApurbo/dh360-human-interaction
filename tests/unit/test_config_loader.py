@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 from pathlib import Path
 from unittest.mock import patch
 
@@ -201,6 +202,42 @@ def test_load_config_precedence(tmp_path: Path) -> None:
         assert config.quality.min_confidence == 0.78
         # Preset defaults preserved where untouched
         assert config.auto_init_db is True
+
+
+def test_api_operator_config_preserves_and_hides_environment_token() -> None:
+    """API auth config preserves raw tokens but never includes them in repr/serialization."""
+    token = secrets.token_urlsafe(32)
+    mock_env = {
+        "DH360_HI_API__OPERATOR_TOKEN": token,
+        "DH360_HI_API__OPERATOR_SCOPES": "persons:read,persons:create",
+    }
+
+    with patch.dict(os.environ, mock_env, clear=True):
+        config = load_config()
+
+    assert config.api.operator_token == token
+    assert config.api.operator_scopes == ("persons:read", "persons:create")
+    assert token not in repr(config)
+    assert token not in repr(config.api)
+    assert token not in str(config.to_dict())
+    assert "operator_token" not in config.to_dict()["api"]
+
+
+def test_operator_token_is_rejected_from_toml_and_programmatic_overrides(
+    tmp_path: Path,
+) -> None:
+    """Operator credentials must use the environment rather than serialized config sources."""
+    token = secrets.token_urlsafe(32)
+    config_file = tmp_path / "operator-token.toml"
+    config_file.write_text(f'[api]\noperator_token = "{token}"\n')
+
+    with pytest.raises(ValidationAppError) as file_error:
+        load_config(config_file=config_file)
+    assert token not in str(file_error.value)
+
+    with pytest.raises(ValidationAppError) as override_error:
+        load_config(overrides={"api": {"operator_token": token}})
+    assert token not in str(override_error.value)
 
 
 def test_validate_config_success() -> None:

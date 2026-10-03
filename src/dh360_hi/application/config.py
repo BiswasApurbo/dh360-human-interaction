@@ -27,6 +27,21 @@ class ConfigurationPreset(StrEnum):
 
 
 @dataclass(frozen=True)
+class ApiConfig:
+    """API operator authentication settings.
+
+    The operator token is intentionally excluded from repr and serialization.
+    """
+
+    operator_token: str | None = field(default=None, repr=False, compare=False)
+    operator_scopes: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return non-secret API settings for configuration serialization."""
+        return {"operator_scopes": list(self.operator_scopes)}
+
+
+@dataclass(frozen=True)
 class HumanInteractionConfig:
     """Unified application-level configuration for the Human Interaction subsystem.
 
@@ -106,6 +121,7 @@ class HumanInteractionConfig:
     model_version: str = "2021dec"
     require_active_for_gallery: bool = True
     require_consent_for_gallery: bool = True
+    api: ApiConfig = field(default_factory=ApiConfig)
 
     def __post_init__(self) -> None:
         """Validate top-level configuration values."""
@@ -210,6 +226,7 @@ class HumanInteractionConfig:
             "model_version": self.model_version,
             "require_active_for_gallery": self.require_active_for_gallery,
             "require_consent_for_gallery": self.require_consent_for_gallery,
+            "api": self.api.to_dict(),
         }
 
     @classmethod
@@ -336,6 +353,22 @@ class HumanInteractionConfig:
                 model_version=str(enrollment_data.get("model_version", "2021dec")),
             )
             d["enrollment"] = enrollment
+
+        api_data = d.get("api")
+        if isinstance(api_data, dict):
+            scopes_data = api_data.get("operator_scopes", ())
+            if isinstance(scopes_data, str):
+                scopes = tuple(scope.strip() for scope in scopes_data.split(",") if scope.strip())
+            elif isinstance(scopes_data, (list, tuple)):
+                scopes = tuple(str(scope) for scope in scopes_data)
+            else:
+                msg = "api.operator_scopes must be a list or comma-separated string"
+                raise ValueError(msg)
+            token = api_data.get("operator_token")
+            if token is not None and not isinstance(token, str):
+                msg = "api.operator_token must be a string"
+                raise ValueError(msg)
+            d["api"] = ApiConfig(operator_token=token, operator_scopes=scopes)
 
         # Convert tuples
         if "detector_input_size" in d and isinstance(d["detector_input_size"], list):

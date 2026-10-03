@@ -126,7 +126,7 @@ def parse_env_vars(prefix: str = "DH360_HI_") -> dict[str, Any]:
         if not raw_key:
             continue
 
-        parsed_val = _parse_env_val(val)
+        parsed_val = val if raw_key == "api__operator_token" else _parse_env_val(val)
 
         # 1. Double underscore separator (e.g. RUNTIME__TARGET_FPS)
         if "__" in raw_key:
@@ -343,6 +343,7 @@ def load_config(
     )
     if active_config_file:
         file_dict = load_toml_file(active_config_file)
+        _reject_operator_token_source(file_dict, "TOML configuration")
         merged_dict = deep_merge(merged_dict, file_dict)
 
     # 4. Environment variable overrides
@@ -356,6 +357,7 @@ def load_config(
 
     # 5. Programmatic / CLI explicit overrides
     if overrides:
+        _reject_operator_token_source(overrides, "programmatic overrides")
         merged_dict = deep_merge(merged_dict, overrides)
 
     # Construct final config
@@ -370,3 +372,13 @@ def load_config(
         validate_config(config)
 
     return config
+
+
+def _reject_operator_token_source(config_data: dict[str, Any], source: str) -> None:
+    """Require operator credentials to come from the environment, not serialized config."""
+    api_data = config_data.get("api")
+    if isinstance(api_data, dict) and "operator_token" in api_data:
+        raise ValidationAppError(
+            message=f"api.operator_token must be configured through the environment, not {source}",
+            field="api.operator_token",
+        )
