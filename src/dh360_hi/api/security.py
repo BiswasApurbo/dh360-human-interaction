@@ -23,6 +23,7 @@ class OperatorScope(StrEnum):
     BIOMETRICS_RESET = "biometrics:reset"
     CONSENT_MANAGE = "consent:manage"
     ENROLLMENT_MANAGE = "enrollment:manage"
+    INTERACTION_READ = "interaction:read"
 
 
 @dataclass(frozen=True)

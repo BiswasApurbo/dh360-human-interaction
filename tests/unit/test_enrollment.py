@@ -600,3 +600,79 @@ def test_controller_persists_only_through_person_service(
     replace_res = controller.commit_session()
     assert replace_res.is_success is True
     assert service._repo.count_embeddings(person.person_id) == 5
+
+
+def test_first_frame_resets_timeout_clock(
+    mock_pipeline: tuple,
+) -> None:
+    """Regression: the 30s timeout must measure active collection time, not the gap
+    between session creation and the operator's first step call.
+
+    A live webcam can take 5-10s to open (cv2.VideoCapture), plus operator setup
+    time. The timeout clock should reset on the first frame so that the 30s window
+    gives the operator 30 seconds of *active* sample collection, not 30 seconds
+    from session creation (which may include idle time while the camera warms up
+    and the operator positions the subject).
+    """
+    import time
+
+    detector, _, _, _, service, controller = mock_pipeline
+    person = service.create_person("Timed Person")
+    controller.start_session(person.person_id)
+
+    # Simulate 15 seconds having elapsed since start_session (beyond the
+    # fixture's timeout_seconds=10.0) — e.g. camera open + operator setup.
+    assert controller._session is not None
+    controller._session.start_time = time.monotonic() - 15.0
+
+    frame = Frame(image=np.zeros((480, 640, 3), dtype=np.uint8), frame_id=1, timestamp=0.0)
+    detector.set_detections([FaceDetection(bbox=(10.0, 10.0, 50.0, 50.0), confidence=0.95)])
+
+    # Without the fix, the first process_frame would immediately hit the
+    # timeout check (15s > 10s) and mark the session FAILED with TIMEOUT.
+    # With the fix, start_time is reset on the first frame (attempts==0),
+    # so the frame is processed normally.
+    prog = controller.process_frame(frame)
+
+    assert prog.state == EnrollmentState.COLLECTING, (
+        f"Expected COLLECTING but got {prog.state} — "
+        f"first frame should reset the timeout clock, not immediately timeout"
+    )
+    assert prog.total_attempts == 1
+    assert (
+        prog.last_rejection_reason == SampleRejectionReason.NO_FACE or prog.samples_collected == 1
+    )
+
+    controller.cancel_session()
+
+
+def test_timeout_still_fires_after_active_collection(
+    mock_pipeline: tuple,
+) -> None:
+    """The timeout still fires when >timeout_seconds elapse *after* the first step."""
+    import time
+
+    detector, _, _, _, service, controller = mock_pipeline
+    person = service.create_person("Timeout Person")
+    controller.start_session(person.person_id)
+
+    frame = Frame(image=np.zeros((480, 640, 3), dtype=np.uint8), frame_id=1, timestamp=0.0)
+    detector.set_detections([])  # No face → frame processed but no sample
+
+    # First frame: resets the clock, increments attempts to 1.
+    prog1 = controller.process_frame(frame)
+    assert prog1.total_attempts == 1
+    assert prog1.state == EnrollmentState.COLLECTING
+
+    # Simulate 15 seconds of active stepping (beyond timeout_seconds=10.0)
+    # with no samples collected.
+    assert controller._session is not None
+    controller._session.start_time = time.monotonic() - 15.0
+
+    # Second frame: should hit the timeout now.
+    prog2 = controller.process_frame(frame)
+    assert prog2.state == EnrollmentState.FAILED
+    assert prog2.last_rejection_reason == SampleRejectionReason.TIMEOUT
+    assert prog2.samples_collected == 0
+
+    controller.cancel_session()

@@ -632,12 +632,17 @@ class HumanInteractionService:
             if self._enrollment_capture is None:
                 msg = "No active server-side capture source for this enrollment session"
                 raise ServiceUnavailableError("enrollment_capture", msg)
-            frame = self._enrollment_capture.read()
-            if frame is None:
-                msg = "Camera capture failed or reached end of stream"
-                raise ServiceUnavailableError("enrollment_capture", msg)
-            progress = self._enrollment_controller.process_frame(frame)
-            return EnrollmentProgressDTO.from_progress(progress)
+            try:
+                frame = self._enrollment_capture.read()
+                if frame is None:
+                    msg = "Camera capture failed or reached end of stream"
+                    raise ServiceUnavailableError("enrollment_capture", msg)
+                progress = self._enrollment_controller.process_frame(frame)
+                return EnrollmentProgressDTO.from_progress(progress)
+            except Exception:
+                # Ensure capture source is released on any error (including timeout)
+                self._release_enrollment_capture()
+                raise
 
     def process_enrollment_frame(
         self,
@@ -739,6 +744,7 @@ class HumanInteractionService:
                 resume_runtime = False
             raise
         finally:
+            self._release_enrollment_capture()
             self._finish_person_mutation(prior_state, resume=resume_runtime)
 
     def _release_enrollment_capture(self) -> None:
@@ -911,6 +917,8 @@ class HumanInteractionService:
                     self._db_manager.close()
                 except Exception:
                     logger.exception("Error closing DatabaseManager")
+
+            self._release_enrollment_capture()
 
     def pause(self) -> None:
         """Pause continuous frame pumping without resetting perception or session state."""

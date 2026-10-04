@@ -331,6 +331,12 @@ class FaceEnrollmentController(BaseFaceEnrollment):
         if s.state != EnrollmentState.COLLECTING:
             return self._build_progress(s)
 
+        # Reset the timeout clock on the first frame so the timeout measures
+        # active collection time, not the gap between session creation and
+        # the operator's first step call (camera open, operator setup, etc.).
+        if s.attempts == 0:
+            s.start_time = time.monotonic()
+
         # 1. Check Timeout
         elapsed = time.monotonic() - s.start_time
         if elapsed > self._config.timeout_seconds:

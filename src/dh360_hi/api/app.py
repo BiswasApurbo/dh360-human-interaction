@@ -9,7 +9,9 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from dh360_hi.api.event_hub import InteractionEventHub
 from dh360_hi.api.routers.enrollment import router as enrollment_router
+from dh360_hi.api.routers.events import router as events_router
 from dh360_hi.api.routers.health import router as health_router
 from dh360_hi.api.routers.interaction import router as interaction_router
 from dh360_hi.api.routers.persons import router as persons_router
@@ -26,11 +28,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Create and tear down the application service for the API lifecycle."""
     cfg = load_config(validate=True)
     service = create_interaction_service(config=cfg, enable_perception=False)
+    hub = InteractionEventHub()
+    hub.attach(service)
     app.state.service = service
+    app.state.event_hub = hub
     app.state.operator_auth = cfg.api
     try:
         yield
     finally:
+        hub.detach()
         with suppress(Exception):
             service.stop(timeout=3.0)
 
@@ -91,4 +97,5 @@ def create_app() -> FastAPI:
     app.include_router(sessions_router)
     app.include_router(persons_router)
     app.include_router(enrollment_router)
+    app.include_router(events_router)
     return app
