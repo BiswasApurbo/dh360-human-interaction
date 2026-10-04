@@ -33,17 +33,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.service = service
     app.state.event_hub = hub
     app.state.operator_auth = cfg.api
+
     try:
         yield
     finally:
-        hub.detach()
-        with suppress(Exception):
-            service.stop(timeout=3.0)
+        hub = getattr(app.state, "event_hub", None)  # type: ignore[assignment]
+        if hub:
+            hub.detach()
+        service = getattr(app.state, "service", None)  # type: ignore[assignment]
+        if service:
+            with suppress(Exception):
+                service.stop(timeout=3.0)
 
 
 def create_app() -> FastAPI:
     """Construct the FastAPI application with the existing service wired in."""
     app = FastAPI(title="dh360-human-interaction API", lifespan=lifespan)
+    cfg = load_config(validate=True)
+    service = create_interaction_service(config=cfg, enable_perception=False)
+    hub = InteractionEventHub()
+    hub.attach(service)
+    app.state.service = service
+    app.state.event_hub = hub
+    app.state.operator_auth = cfg.api
 
     @app.exception_handler(ApplicationError)
     async def handle_app_error(_request: Request, exc: ApplicationError) -> JSONResponse:
