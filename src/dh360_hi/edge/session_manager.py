@@ -58,6 +58,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from dh360_hi.contracts.events import (
@@ -168,6 +169,9 @@ class SessionManager:
         # Set of track IDs currently confirmed present by presence debouncer
         self._present_tracks: set[int] = set()
 
+        # Per-frame observers receive the raw pipeline result after normal processing.
+        self._observers: list[Callable[[TwoRateFrameResult], None]] = []
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -186,6 +190,18 @@ class SessionManager:
         """Reset all internal session state (e.g. between test runs)."""
         self._active_session = None
         self._present_tracks.clear()
+
+    def add_observer(self, callback: Callable[[TwoRateFrameResult], None]) -> None:
+        """Register a post-processing observer for raw frame results."""
+        if callback not in self._observers:
+            self._observers.append(callback)
+
+    def remove_observer(self, callback: Callable[[TwoRateFrameResult], None]) -> None:
+        """Unregister a frame-result observer if present."""
+        try:
+            self._observers.remove(callback)
+        except ValueError:
+            return
 
     def invalidate_person_identity(
         self,
@@ -398,5 +414,12 @@ class SessionManager:
         if self._bus is not None:
             for event in events:
                 self._bus.publish(event)
+
+        # 6. Notify raw frame-result observers after normal processing.
+        for observer in list(self._observers):
+            try:
+                observer(result)
+            except Exception:
+                logger.exception("SessionManager observer raised an unhandled exception")
 
         return events

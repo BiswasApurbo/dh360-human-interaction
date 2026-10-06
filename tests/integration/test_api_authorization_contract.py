@@ -1,0 +1,291 @@
+"""Integration tests for authorization API endpoints and composition wiring."""
+
+from __future__ import annotations
+
+import secrets
+from unittest import mock
+
+import pytest
+from fastapi.testclient import TestClient
+
+from dh360_hi.api.app import create_app
+from dh360_hi.edge.authorization_controller import AuthorizationController
+from dh360_hi.edge.session_manager import SessionConfig, SessionManager
+from dh360_hi.vision.identity_state import IdentityState, TrackIdentityState
+from dh360_hi.vision.target_selector import TargetCandidate, TargetSelectionResult
+from dh360_hi.vision.two_rate_pipeline import TwoRateFrameResult
+
+_AUTH_SESSIONS_PATH = "/authorization/sessions"
+_AUTH_CURRENT_PATH = "/authorization/sessions/current"
+
+
+def _configure_operator(monkeypatch: pytest.MonkeyPatch, scopes: str) -> str:
+    """Configure one ephemeral operator credential for an API test."""
+    token = secrets.token_urlsafe(32)
+    monkeypatch.setenv("DH360_HI_API__OPERATOR_TOKEN", token)
+    monkeypatch.setenv("DH360_HI_API__OPERATOR_SCOPES", scopes)
+    monkeypatch.delenv("DH360_HI_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("DH360_HI_CONFIG_PATH", raising=False)
+    return token
+
+
+def _mk_session_manager() -> SessionManager:
+    return SessionManager(config=SessionConfig(require_confirmed_presence=True))
+
+
+def _mk_id_state(
+    track_id: int,
+    state: IdentityState = IdentityState.IDENTIFIED,
+    person_id: str | None = None,
+    display_name: str | None = None,
+) -> TrackIdentityState:
+    return TrackIdentityState(
+        track_id=track_id,
+        state=state,
+        current_person_id=person_id,
+        current_display_name=display_name,
+    )
+
+
+def _mk_frame(
+    frame_id: int = 1,
+    timestamp: float = 1.0,
+    primary_track_id: int | None = None,
+    identity_states: dict[int, TrackIdentityState] | None = None,
+) -> TwoRateFrameResult:
+    primary = None
+    if primary_track_id is not None:
+        primary = TargetCandidate(
+            track_id=primary_track_id,
+            score=1.0,
+            centrality_score=1.0,
+            size_score=1.0,
+            identity_state_score=1.0,
+            dwell_score=1.0,
+            is_identified=True,
+            identity_state=IdentityState.IDENTIFIED,
+            person_id=None,
+            display_name=None,
+            bbox=(0.0, 0.0, 100.0, 100.0),
+            center=(50.0, 50.0),
+        )
+    target_result = TargetSelectionResult(
+        primary_target=primary,
+        candidates=[primary] if primary else [],
+        target_changed=False,
+        previous_target_track_id=None,
+        frame_id=frame_id,
+    )
+    return TwoRateFrameResult(
+        frame_id=frame_id,
+        timestamp=timestamp,
+        detections=[],
+        tracks=[],
+        quality_results={},
+        identity_states=identity_states or {},
+        target_result=target_result,
+        presence_transitions=[],
+        completed_recognitions=[],
+        ambiguous_crossing_track_ids=set(),
+        pending_worker_tasks=0,
+        frame_latency_ms=0.0,
+        total_pipeline_latency_ms=0.0,
+    )
+
+
+class TestAuthorizationApiAuthentication:
+    def test_missing_bearer_token_returns_401(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _configure_operator(monkeypatch, "authorization:manage")
+        app = create_app()
+        with TestClient(app) as client:
+            resp_post = client.post(_AUTH_SESSIONS_PATH)
+            assert resp_post.status_code == 401
+            assert resp_post.headers.get("WWW-Authenticate") == "Bearer"
+
+            resp_get = client.get(_AUTH_CURRENT_PATH)
+            assert resp_get.status_code == 401
+            assert resp_get.headers.get("WWW-Authenticate") == "Bearer"
+
+    def test_wrong_scope_returns_403(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        token = _configure_operator(monkeypatch, "interaction:read")
+        app = create_app()
+        headers = {"Authorization": f"Bearer {token}"}
+        with TestClient(app) as client:
+            resp_post = client.post(_AUTH_SESSIONS_PATH, headers=headers)
+            assert resp_post.status_code == 403
+            assert resp_post.json()["code"] == "INSUFFICIENT_SCOPE"
+
+            resp_get = client.get(_AUTH_CURRENT_PATH, headers=headers)
+            assert resp_get.status_code == 403
+            assert resp_get.json()["code"] == "INSUFFICIENT_SCOPE"
+
+    def test_authorization_manage_scope_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        token = _configure_operator(monkeypatch, "authorization:manage")
+        sm = _mk_session_manager()
+        ctrl = AuthorizationController(session_manager=sm, timeout_seconds=5.0)
+        app = create_app(authorization_controller=ctrl)
+        headers = {"Authorization": f"Bearer {token}"}
+        with TestClient(app) as client:
+            resp = client.get(_AUTH_CURRENT_PATH, headers=headers)
+            assert resp.status_code == 200
+            assert resp.json() is None
+
+
+class TestAuthorizationSessionLifecycleEndpoints:
+    def test_controller_unavailable_returns_503(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        token = _configure_operator(monkeypatch, "authorization:manage")
+        app = create_app()  # Perception disabled, controller is None
+        headers = {"Authorization": f"Bearer {token}"}
+        with TestClient(app) as client:
+            resp_post = client.post(_AUTH_SESSIONS_PATH, headers=headers)
+            assert resp_post.status_code == 503
+            assert "not enabled" in resp_post.json()["detail"]
+
+            resp_get = client.get(_AUTH_CURRENT_PATH, headers=headers)
+            assert resp_get.status_code == 503
+            assert "not enabled" in resp_get.json()["detail"]
+
+    def test_post_starts_session_returns_201_with_sanitized_dto(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        token = _configure_operator(monkeypatch, "authorization:manage")
+        sm = _mk_session_manager()
+        ctrl = AuthorizationController(session_manager=sm, timeout_seconds=5.0)
+        app = create_app(authorization_controller=ctrl)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        with TestClient(app) as client:
+            resp = client.post(_AUTH_SESSIONS_PATH, headers=headers)
+            assert resp.status_code == 201
+            payload = resp.json()
+
+            # Verify public sanitized fields
+            assert "authorization_id" in payload
+            assert payload["status"] == "active"
+            assert payload["person_id"] is None
+            assert payload["display_name"] is None
+            assert payload["ended_at_iso"] is None
+            assert "created_at_iso" in payload
+            assert "updated_at_iso" in payload
+
+            # Verify privacy / no internal leaked fields
+            forbidden_fields = [
+                "track_id",
+                "frame_id",
+                "embeddings",
+                "embedding",
+                "bbox",
+                "recognition",
+                "RecognitionResult",
+            ]
+            for f in forbidden_fields:
+                assert f not in payload
+
+    def test_second_active_post_returns_409_conflict(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        token = _configure_operator(monkeypatch, "authorization:manage")
+        sm = _mk_session_manager()
+        ctrl = AuthorizationController(session_manager=sm, timeout_seconds=5.0)
+        app = create_app(authorization_controller=ctrl)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        with TestClient(app) as client:
+            resp1 = client.post(_AUTH_SESSIONS_PATH, headers=headers)
+            assert resp1.status_code == 201
+
+            resp2 = client.post(_AUTH_SESSIONS_PATH, headers=headers)
+            assert resp2.status_code == 409
+            assert "already exists" in resp2.json()["detail"]
+
+    def test_get_current_before_session_returns_null(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        token = _configure_operator(monkeypatch, "authorization:manage")
+        sm = _mk_session_manager()
+        ctrl = AuthorizationController(session_manager=sm, timeout_seconds=5.0)
+        app = create_app(authorization_controller=ctrl)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        with TestClient(app) as client:
+            resp = client.get(_AUTH_CURRENT_PATH, headers=headers)
+            assert resp.status_code == 200
+            assert resp.json() is None
+
+    def test_get_current_after_start_returns_active_snapshot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        token = _configure_operator(monkeypatch, "authorization:manage")
+        sm = _mk_session_manager()
+        ctrl = AuthorizationController(session_manager=sm, timeout_seconds=5.0)
+        app = create_app(authorization_controller=ctrl)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        with TestClient(app) as client:
+            start_resp = client.post(_AUTH_SESSIONS_PATH, headers=headers)
+            assert start_resp.status_code == 201
+            start_payload = start_resp.json()
+
+            get_resp = client.get(_AUTH_CURRENT_PATH, headers=headers)
+            assert get_resp.status_code == 200
+            get_payload = get_resp.json()
+            assert get_payload == start_payload
+            assert get_payload["status"] == "active"
+
+
+class TestCompositionAndLifecycle:
+    def test_same_controller_instance_used_by_router(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        token = _configure_operator(monkeypatch, "authorization:manage")
+        sm = _mk_session_manager()
+        ctrl = AuthorizationController(session_manager=sm, timeout_seconds=5.0)
+        app = create_app(authorization_controller=ctrl)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        with TestClient(app) as client:
+            # Router must mutate the exact controller instance passed into create_app
+            assert ctrl.get_current() is None
+            client.post(_AUTH_SESSIONS_PATH, headers=headers)
+            assert ctrl.get_current() is not None
+            assert ctrl.get_current().status.value == "active"  # type: ignore[union-attr]
+
+            id_state = _mk_id_state(
+                1, IdentityState.IDENTIFIED, person_id="p-42", display_name="Bob"
+            )
+            frame = _mk_frame(primary_track_id=1, identity_states={1: id_state})
+            sm.process_frame_result(frame)
+
+            # GET through API router observes the frame-driven state transition
+            resp = client.get(_AUTH_CURRENT_PATH, headers=headers)
+            assert resp.status_code == 200
+            payload = resp.json()
+            assert payload["status"] == "authorized"
+            assert payload["person_id"] == "p-42"
+            assert payload["display_name"] == "Bob"
+
+    def test_lifespan_closes_authorization_controller(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _configure_operator(monkeypatch, "authorization:manage")
+        sm = _mk_session_manager()
+        ctrl = AuthorizationController(session_manager=sm, timeout_seconds=5.0)
+        app = create_app(authorization_controller=ctrl)
+
+        with mock.patch.object(ctrl, "close", wraps=ctrl.close) as mock_close:
+            with TestClient(app):
+                assert mock_close.call_count == 0
+            # On exiting TestClient context, lifespan finally block runs
+            assert mock_close.call_count == 1
+            # Observer should be unregistered from SessionManager
+            assert ctrl._on_frame not in sm._observers
+
+    def test_no_perception_bypass_from_router(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verify the router never directly calls runtime or SessionManager."""
+        token = _configure_operator(monkeypatch, "authorization:manage")
+        sm = _mk_session_manager()
+        ctrl = AuthorizationController(session_manager=sm, timeout_seconds=5.0)
+        app = create_app(authorization_controller=ctrl)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        with (
+            mock.patch.object(sm, "process_frame_result") as mock_process,
+            TestClient(app) as client,
+        ):
+            client.post(_AUTH_SESSIONS_PATH, headers=headers)
+            client.get(_AUTH_CURRENT_PATH, headers=headers)
+            assert mock_process.call_count == 0

@@ -815,6 +815,88 @@ class TestSessionManagerWithEventBus:
 
 
 # ---------------------------------------------------------------------------
+# Frame-result observers
+# ---------------------------------------------------------------------------
+
+
+class TestSessionManagerObservers:
+    def test_observer_receives_exact_frame_result(self) -> None:
+        mgr = _manager(require_confirmed_presence=False)
+        observed: list[TwoRateFrameResult] = []
+        frame = _mk_frame(frame_id=1, primary_track_id=1)
+
+        mgr.add_observer(observed.append)
+        events = mgr.process_frame_result(frame)
+
+        assert observed == [frame]
+        assert any(isinstance(e, SessionStartedEvent) for e in events)
+
+    def test_multiple_observers_work_and_duplicate_registration_is_ignored(self) -> None:
+        mgr = _manager(require_confirmed_presence=False)
+        first: list[TwoRateFrameResult] = []
+        second: list[TwoRateFrameResult] = []
+        frame = _mk_frame(frame_id=1, primary_track_id=1)
+
+        mgr.add_observer(first.append)
+        mgr.add_observer(first.append)
+        mgr.add_observer(second.append)
+        mgr.process_frame_result(frame)
+
+        assert first == [frame]
+        assert second == [frame]
+
+    def test_removed_observer_is_not_called_and_absent_removal_is_harmless(self) -> None:
+        mgr = _manager(require_confirmed_presence=False)
+        observed: list[TwoRateFrameResult] = []
+        frame = _mk_frame(frame_id=1, primary_track_id=1)
+
+        mgr.add_observer(observed.append)
+        mgr.remove_observer(observed.append)
+        mgr.remove_observer(observed.append)
+        events = mgr.process_frame_result(frame)
+
+        assert observed == []
+        assert any(isinstance(e, SessionStartedEvent) for e in events)
+
+    def test_observer_exception_does_not_break_normal_processing(self) -> None:
+        mgr = _manager(require_confirmed_presence=False)
+        observed: list[TwoRateFrameResult] = []
+        frame = _mk_frame(frame_id=1, primary_track_id=1)
+
+        def raising_observer(_result: TwoRateFrameResult) -> None:
+            raise RuntimeError("observer failed")
+
+        mgr.add_observer(raising_observer)
+        mgr.add_observer(observed.append)
+        events = mgr.process_frame_result(frame)
+
+        assert observed == [frame]
+        assert any(isinstance(e, SessionStartedEvent) for e in events)
+        assert mgr.active_session is not None
+
+    def test_existing_session_manager_behavior_remains_intact_with_observer(self) -> None:
+        mgr = _manager(require_confirmed_presence=True)
+        observed: list[TwoRateFrameResult] = []
+        id_state = _mk_id_state(1, IdentityState.IDENTIFIED, person_id="alice")
+        frame = _mk_frame(
+            frame_id=1,
+            primary_track_id=1,
+            identity_states={1: id_state},
+            presence_transitions=[_mk_transition(PresenceEvent.PERSON_ENTERED, track_id=1)],
+        )
+
+        mgr.add_observer(observed.append)
+        events = mgr.process_frame_result(frame)
+
+        assert observed == [frame]
+        assert [type(event) for event in events] == [
+            PersonEnteredEvent,
+            SessionStartedEvent,
+            PersonIdentifiedEvent,
+        ]
+
+
+# ---------------------------------------------------------------------------
 # Reset
 # ---------------------------------------------------------------------------
 

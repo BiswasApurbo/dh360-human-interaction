@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from dh360_hi.api.event_hub import InteractionEventHub
+from dh360_hi.api.routers.authorization import router as authorization_router
 from dh360_hi.api.routers.enrollment import router as enrollment_router
 from dh360_hi.api.routers.events import router as events_router
 from dh360_hi.api.routers.health import router as health_router
@@ -21,41 +23,105 @@ from dh360_hi.application.factory import create_interaction_service
 from dh360_hi.application.loader import load_config
 from dh360_hi.backend.exceptions import ValidationError as BackendValidationError
 from dh360_hi.contracts.errors import ApplicationError
+from dh360_hi.edge.authorization_controller import AuthorizationController
+
+if TYPE_CHECKING:
+    from dh360_hi.application.service import HumanInteractionService
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Create and tear down the application service for the API lifecycle."""
-    cfg = load_config(validate=True)
-    service = create_interaction_service(config=cfg, enable_perception=False)
-    hub = InteractionEventHub()
-    hub.attach(service)
-    app.state.service = service
-    app.state.event_hub = hub
-    app.state.operator_auth = cfg.api
+    # Reuse injected/pre-existing service if already provided
+    service: HumanInteractionService | None = getattr(app.state, "service", None)
+    if service is None:
+        cfg = load_config(validate=True)
+        service = create_interaction_service(config=cfg, enable_perception=False)
+        app.state.service = service
+        app.state.operator_auth = cfg.api
+    else:
+        cfg = load_config(validate=True)
+        if getattr(app.state, "operator_auth", None) is None:
+            app.state.operator_auth = cfg.api
+
+    # Reuse or attach EventHub
+    hub: InteractionEventHub | None = getattr(app.state, "event_hub", None)
+    if hub is None:
+        hub = InteractionEventHub()
+        hub.attach(service)
+        app.state.event_hub = hub
+
+    # If an AuthorizationController was already injected, use it;
+    # otherwise, if the service has an active runtime with a SessionManager, construct it.
+    auth_ctrl: AuthorizationController | None = getattr(app.state, "authorization_controller", None)
+    if auth_ctrl is None:
+        if service.runtime is not None and service.runtime.session_manager is not None:
+            timeout_sec = (
+                cfg.runtime.session_timeout_seconds
+                if hasattr(cfg.runtime, "session_timeout_seconds")
+                else 30.0
+            )
+            auth_ctrl = AuthorizationController(
+                session_manager=service.runtime.session_manager,
+                timeout_seconds=timeout_sec,
+            )
+            app.state.authorization_controller = auth_ctrl
+        else:
+            app.state.authorization_controller = None
 
     try:
         yield
     finally:
-        hub = getattr(app.state, "event_hub", None)  # type: ignore[assignment]
-        if hub:
-            hub.detach()
-        service = getattr(app.state, "service", None)  # type: ignore[assignment]
-        if service:
+        # Deterministic shutdown ordering:
+        # 1. Close AuthorizationController so it ceases processing frame results
+        ctrl: AuthorizationController | None = getattr(app.state, "authorization_controller", None)
+        if ctrl is not None:
             with suppress(Exception):
-                service.stop(timeout=3.0)
+                ctrl.close()
+
+        # 2. Detach InteractionEventHub listeners
+        event_hub: InteractionEventHub | None = getattr(app.state, "event_hub", None)
+        if event_hub is not None:
+            event_hub.detach()
+
+        # 3. Stop application service and runtime workers
+        svc: HumanInteractionService | None = getattr(app.state, "service", None)
+        if svc is not None:
+            with suppress(Exception):
+                svc.stop(timeout=3.0)
 
 
-def create_app() -> FastAPI:
-    """Construct the FastAPI application with the existing service wired in."""
+def create_app(
+    service: HumanInteractionService | None = None,
+    authorization_controller: AuthorizationController | None = None,
+) -> FastAPI:
+    """Construct the FastAPI application with service and controller wired in."""
     app = FastAPI(title="dh360-human-interaction API", lifespan=lifespan)
     cfg = load_config(validate=True)
-    service = create_interaction_service(config=cfg, enable_perception=False)
+
+    if service is None:
+        service = create_interaction_service(config=cfg, enable_perception=False)
+    app.state.service = service
+    app.state.operator_auth = cfg.api
+
     hub = InteractionEventHub()
     hub.attach(service)
-    app.state.service = service
     app.state.event_hub = hub
-    app.state.operator_auth = cfg.api
+
+    if authorization_controller is not None:
+        app.state.authorization_controller = authorization_controller
+    elif service.runtime is not None and service.runtime.session_manager is not None:
+        timeout_sec = (
+            cfg.runtime.session_timeout_seconds
+            if hasattr(cfg.runtime, "session_timeout_seconds")
+            else 30.0
+        )
+        app.state.authorization_controller = AuthorizationController(
+            session_manager=service.runtime.session_manager,
+            timeout_seconds=timeout_sec,
+        )
+    else:
+        app.state.authorization_controller = None
 
     @app.exception_handler(ApplicationError)
     async def handle_app_error(_request: Request, exc: ApplicationError) -> JSONResponse:
@@ -110,4 +176,5 @@ def create_app() -> FastAPI:
     app.include_router(persons_router)
     app.include_router(enrollment_router)
     app.include_router(events_router)
+    app.include_router(authorization_router)
     return app

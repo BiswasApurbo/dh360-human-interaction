@@ -1,5 +1,10 @@
 """Shared message, event, DTO, error, and data contracts across layers."""
 
+from dh360_hi.contracts.authorization import (
+    AuthorizationSession,
+    AuthorizationStatus,
+    derive_authorization_status,
+)
 from dh360_hi.contracts.dto import (
     CreatePersonCommand,
     EnrollmentProgressDTO,
@@ -49,6 +54,8 @@ from dh360_hi.contracts.interaction import (
 
 __all__ = [
     "ApplicationError",
+    "AuthorizationSession",
+    "AuthorizationStatus",
     "BaseEvent",
     "BaseIntegrationEvent",
     "ConflictAppError",
@@ -82,6 +89,7 @@ __all__ = [
     "StepResultDTO",
     "UpdatePersonCommand",
     "ValidationAppError",
+    "derive_authorization_status",
     "epoch_to_iso",
     "map_domain_event_to_integration",
 ]
