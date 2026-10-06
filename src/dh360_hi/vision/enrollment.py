@@ -80,7 +80,7 @@ class EnrollmentSample:
 class EnrollmentConfig:
     """Configuration governing face enrollment sample requirements and diversity thresholds."""
 
-    target_samples: int = 7
+    target_samples: int = 20
     minimum_samples: int = 5
     max_attempts: int = 60
     duplicate_similarity_threshold: float = 0.95
