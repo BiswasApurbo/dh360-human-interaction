@@ -49,10 +49,14 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     parser.add_argument("--config-file", help="Path to TOML configuration file")
     parser.add_argument("--db-path", help="Override SQLite database path")
     parser.add_argument("--target-fps", type=float, help="Override target frame rate ceiling")
+    parser.add_argument("--detector-model-path", help="Path to YuNet ONNX face detection model")
+    parser.add_argument("--embedder-model-path", help="Path to SFace ONNX face embedding model")
 
 
 def handle_serve(args: argparse.Namespace) -> int:
     """Execute unified daemon running live perception and HTTP API."""
+    from pathlib import Path
+
     import uvicorn
 
     overrides: dict[str, Any] = {}
@@ -62,6 +66,18 @@ def handle_serve(args: argparse.Namespace) -> int:
         if "runtime" not in overrides:
             overrides["runtime"] = {}
         overrides["runtime"]["target_fps"] = args.target_fps
+    if getattr(args, "detector_model_path", None):
+        overrides["detector_model_path"] = args.detector_model_path
+    if getattr(args, "embedder_model_path", None):
+        overrides["embedder_model_path"] = args.embedder_model_path
+
+    # Default to project's existing models/weights assets if present and not overridden
+    default_yunet = Path("models/weights/face_detection_yunet_2023mar.onnx")
+    default_sface = Path("models/weights/face_recognition_sface_2021dec.onnx")
+    if default_yunet.is_file():
+        overrides.setdefault("detector_model_path", str(default_yunet))
+    if default_sface.is_file():
+        overrides.setdefault("embedder_model_path", str(default_sface))
 
     config = load_config(
         preset=getattr(args, "preset", None),
