@@ -1,19 +1,17 @@
-"""Contract tests for the M3.2.4 live interaction SSE stream.
-"""
+"""Contract tests for the M3.2.4 live interaction SSE stream."""
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import secrets
-import contextlib
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
 from dh360_hi.api.app import create_app
-
 from dh360_hi.contracts.integration import SessionStartedIntegrationEvent
 
 _PATH = "/interaction/events"
@@ -77,6 +75,7 @@ def test_existing_context_endpoint_unchanged(monkeypatch: pytest.MonkeyPatch) ->
         response = client.get("/interaction/context")
     assert response.status_code == 200
 
+
 class _AsgiStream:
     """Minimal direct ASGI harness for the infinite SSE response body."""
 
@@ -98,9 +97,7 @@ class _AsgiStream:
     async def _send(self, message: dict[str, Any]) -> None:
         if message["type"] == "http.response.start":
             self.status = int(message["status"])
-            self.headers = {
-                k.decode().lower(): v.decode() for k, v in message.get("headers", [])
-            }
+            self.headers = {k.decode().lower(): v.decode() for k, v in message.get("headers", [])}
         elif message["type"] == "http.response.body":
             body = message.get("body", b"")
             if body:
@@ -153,12 +150,11 @@ def _run_stream(
             await asyncio.sleep(0.01)
         if not task.done():
             task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError, Exception):
             await task
-        except (asyncio.CancelledError, Exception):
-            pass
 
     asyncio.run(runner())
+
 
 def test_sse_initial_context_frame_via_asgi(monkeypatch: pytest.MonkeyPatch) -> None:
     token = _configure_operator(monkeypatch, "interaction:read")
@@ -171,8 +167,9 @@ def test_sse_initial_context_frame_via_asgi(monkeypatch: pytest.MonkeyPatch) -> 
     body = stream.text()
     assert "retry: 3000" in body
     assert "event: context" in body
-    assert '\"state\"' in body
+    assert '"state"' in body
     assert app.state.event_hub.subscriber_count == 0
+
 
 def test_sse_live_delivery_and_cleanup_via_asgi(monkeypatch: pytest.MonkeyPatch) -> None:
     token = _configure_operator(monkeypatch, "interaction:read")
@@ -194,6 +191,7 @@ def test_sse_live_delivery_and_cleanup_via_asgi(monkeypatch: pytest.MonkeyPatch)
     assert len(set(ids)) == len(ids)
     assert app.state.event_hub.subscriber_count == 0
 
+
 def test_sse_replay_since_last_event_id_via_asgi(monkeypatch: pytest.MonkeyPatch) -> None:
     token = _configure_operator(monkeypatch, "interaction:read")
     app = create_app()
@@ -209,6 +207,7 @@ def test_sse_replay_since_last_event_id_via_asgi(monkeypatch: pytest.MonkeyPatch
     assert "event: context" in body
     assert app.state.event_hub.subscriber_count == 0
 
+
 def test_sse_expired_replay_emits_resync_via_asgi(monkeypatch: pytest.MonkeyPatch) -> None:
     token = _configure_operator(monkeypatch, "interaction:read")
     app = create_app()
@@ -220,6 +219,7 @@ def test_sse_expired_replay_emits_resync_via_asgi(monkeypatch: pytest.MonkeyPatc
     body = stream.text()
     assert "event: resync" in body
     assert app.state.event_hub.subscriber_count == 0
+
 
 def test_sse_payloads_contain_no_internal_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     token = _configure_operator(monkeypatch, "interaction:read")
@@ -235,7 +235,6 @@ def test_sse_payloads_contain_no_internal_fields(monkeypatch: pytest.MonkeyPatch
         assert forbidden not in lowered
     for line in stream.text().splitlines():
         if line.startswith("data:"):
-            payload = json.loads(line[len("data:"):])
+            payload = json.loads(line[len("data:") :])
             assert "track_id" not in payload
             assert "frame_id" not in payload
-

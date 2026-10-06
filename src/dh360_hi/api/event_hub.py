@@ -185,13 +185,13 @@ def format_event_frame(seq: int, event: BaseIntegrationEvent) -> str:
 def format_context_frame(context: InteractionContextDTO) -> str:
     """Format the initial snapshot frame (no id; never moves Last-Event-ID)."""
     payload = json.dumps(context.to_dict(), separators=(",", ":"))
-    return "event: context\n" f"data: {payload}\n\n"
+    return f"event: context\ndata: {payload}\n\n"
 
 
 def format_resync_frame(context: InteractionContextDTO) -> str:
     """Format a recovery snapshot frame (no id; client re-derives state)."""
     payload = json.dumps(context.to_dict(), separators=(",", ":"))
-    return "event: resync\n" f"data: {payload}\n\n"
+    return f"event: resync\ndata: {payload}\n\n"
 
 
 def format_retry_frame(retry_millis: int = RETRY_MILLIS) -> str:
@@ -202,4 +202,3 @@ def format_retry_frame(retry_millis: int = RETRY_MILLIS) -> str:
 def format_heartbeat_frame() -> str:
     """Format an SSE comment heartbeat (never affects Last-Event-ID)."""
     return ": hb\n\n"
-

@@ -70,7 +70,7 @@ def test_replay_ring_evicts_oldest_beyond_buffer_size() -> None:
     assert len(frames) == BUFFER_SIZE
     assert [seq for seq, _ in frames] == list(range(6, BUFFER_SIZE + 6))
     seqs = [seq for seq, _ in frames]
-    assert all(a < b for a, b in zip(seqs, seqs[1:]))
+    assert all(a < b for a, b in zip(seqs, seqs[1:], strict=False))
 
 
 def test_replay_within_window_returns_newer_events() -> None:

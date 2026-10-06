@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 
 from dh360_hi.api.event_hub import InteractionEventHub
 from dh360_hi.api.routers.authorization import router as authorization_router
+from dh360_hi.api.routers.demo import router as demo_router
 from dh360_hi.api.routers.enrollment import router as enrollment_router
 from dh360_hi.api.routers.events import router as events_router
 from dh360_hi.api.routers.health import router as health_router
@@ -22,7 +23,9 @@ from dh360_hi.api.security import OperatorSecurityError
 from dh360_hi.application.factory import create_interaction_service
 from dh360_hi.application.loader import load_config
 from dh360_hi.backend.exceptions import ValidationError as BackendValidationError
+from dh360_hi.contracts.authorization import AuthorizationSession
 from dh360_hi.contracts.errors import ApplicationError
+from dh360_hi.contracts.integration import AuthorizationUpdatedIntegrationEvent
 from dh360_hi.edge.authorization_controller import AuthorizationController
 
 if TYPE_CHECKING:
@@ -61,13 +64,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 if hasattr(cfg.runtime, "session_timeout_seconds")
                 else 30.0
             )
+
+            def _on_auth_transition(s: AuthorizationSession) -> None:
+                if hub is not None:
+                    hub.publish(AuthorizationUpdatedIntegrationEvent.from_session(s))
+
             auth_ctrl = AuthorizationController(
                 session_manager=service.runtime.session_manager,
                 timeout_seconds=timeout_sec,
+                on_transition=_on_auth_transition,
             )
             app.state.authorization_controller = auth_ctrl
         else:
             app.state.authorization_controller = None
+    elif auth_ctrl._on_transition is None and hub is not None:
+        # If injected without callback, wire to event hub
+        def _on_injected_transition(s: AuthorizationSession) -> None:
+            if hub is not None:
+                hub.publish(AuthorizationUpdatedIntegrationEvent.from_session(s))
+
+        auth_ctrl._on_transition = _on_injected_transition
 
     try:
         yield
@@ -109,6 +125,12 @@ def create_app(
     app.state.event_hub = hub
 
     if authorization_controller is not None:
+        if authorization_controller._on_transition is None:
+
+            def _on_auth_trans(s: AuthorizationSession) -> None:
+                hub.publish(AuthorizationUpdatedIntegrationEvent.from_session(s))
+
+            authorization_controller._on_transition = _on_auth_trans
         app.state.authorization_controller = authorization_controller
     elif service.runtime is not None and service.runtime.session_manager is not None:
         timeout_sec = (
@@ -116,9 +138,14 @@ def create_app(
             if hasattr(cfg.runtime, "session_timeout_seconds")
             else 30.0
         )
+
+        def _on_auth_trans_created(s: AuthorizationSession) -> None:
+            hub.publish(AuthorizationUpdatedIntegrationEvent.from_session(s))
+
         app.state.authorization_controller = AuthorizationController(
             session_manager=service.runtime.session_manager,
             timeout_seconds=timeout_sec,
+            on_transition=_on_auth_trans_created,
         )
     else:
         app.state.authorization_controller = None
@@ -177,4 +204,5 @@ def create_app(
     app.include_router(enrollment_router)
     app.include_router(events_router)
     app.include_router(authorization_router)
+    app.include_router(demo_router)
     return app

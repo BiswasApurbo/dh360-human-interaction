@@ -16,6 +16,7 @@ from dh360_hi.contracts.events import (
     SessionStartedEvent,
 )
 from dh360_hi.contracts.integration import (
+    AuthorizationUpdatedIntegrationEvent,
     BaseIntegrationEvent,
     InteractionContextUpdatedIntegrationEvent,
     PersonIdentifiedIntegrationEvent,
@@ -110,6 +111,65 @@ class TestIntegrationEvents:
         assert ev.context.session_id == "sess-100"
         d = ev.to_dict()
         assert d["context"]["state"] == "engaged"
+
+    def test_authorization_updated_integration_event_defaults_and_serialization(self) -> None:
+        """Test AuthorizationUpdatedIntegrationEvent fields and serialization."""
+        ev = AuthorizationUpdatedIntegrationEvent(
+            authorization_id="auth-100",
+            status="authorized",
+            person_id="p-100",
+            display_name="Alice",
+            started_at="2026-10-06T10:00:00+00:00",
+            ended_at=None,
+            updated_at="2026-10-06T10:00:01+00:00",
+            is_active=True,
+            is_completed=False,
+            is_authorized=True,
+        )
+        assert ev.event_type == "authorization_updated"
+        assert ev.authorization_id == "auth-100"
+        assert ev.status == "authorized"
+        assert ev.person_id == "p-100"
+        assert ev.display_name == "Alice"
+        assert ev.started_at == "2026-10-06T10:00:00+00:00"
+        assert ev.ended_at is None
+        assert ev.updated_at == "2026-10-06T10:00:01+00:00"
+        assert ev.is_active is True
+        assert ev.is_completed is False
+        assert ev.is_authorized is True
+
+        # Check immutability
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            ev.status = "lost"  # type: ignore[misc]
+
+        # Serialization checks
+        d = ev.to_dict()
+        assert d["event_type"] == "authorization_updated"
+        assert d["authorization_id"] == "auth-100"
+        assert d["status"] == "authorized"
+        assert d["person_id"] == "p-100"
+        assert d["display_name"] == "Alice"
+        assert d["started_at"] == "2026-10-06T10:00:00+00:00"
+        assert d["ended_at"] is None
+        assert d["updated_at"] == "2026-10-06T10:00:01+00:00"
+        assert d["is_active"] is True
+        assert d["is_completed"] is False
+        assert d["is_authorized"] is True
+
+        # Privacy invariants: no internal vision/perception fields
+        forbidden_fields = [
+            "track_id",
+            "frame_id",
+            "embeddings",
+            "embedding",
+            "bbox",
+            "recognition",
+            "RecognitionResult",
+            "TwoRateFrameResult",
+        ]
+        for field in forbidden_fields:
+            assert field not in d
+            assert not hasattr(ev, field)
 
 
 class TestDomainEventToIntegrationMapper:

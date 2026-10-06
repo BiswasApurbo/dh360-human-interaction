@@ -109,6 +109,46 @@ class InteractionContextUpdatedIntegrationEvent(BaseIntegrationEvent):
         }
 
 
+@dataclass(frozen=True)
+class AuthorizationUpdatedIntegrationEvent(BaseIntegrationEvent):
+    """Emitted externally when an authorization session state transition occurs."""
+
+    event_type: str = "authorization_updated"
+    authorization_id: str = ""
+    status: str = "active"
+    person_id: str | None = None
+    display_name: str | None = None
+    started_at: str | None = None
+    ended_at: str | None = None
+    updated_at: str | None = None
+    is_active: bool = True
+    is_completed: bool = False
+    is_authorized: bool = False
+
+    @classmethod
+    def from_session(cls, session: Any) -> AuthorizationUpdatedIntegrationEvent:
+        """Create an event from an AuthorizationSession instance."""
+        status_str = (
+            session.status.value if hasattr(session.status, "value") else str(session.status)
+        )
+        return cls(
+            authorization_id=session.authorization_id,
+            status=status_str,
+            person_id=session.person_id,
+            display_name=session.display_name,
+            started_at=getattr(session, "created_at_iso", None),
+            ended_at=getattr(session, "ended_at_iso", None),
+            updated_at=getattr(session, "updated_at_iso", None),
+            is_active=session.is_active,
+            is_completed=session.is_completed,
+            is_authorized=session.is_authorized,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert integration event to a JSON-serializable dictionary."""
+        return asdict(self)
+
+
 def map_domain_event_to_integration(
     event: BaseEvent,
     summary: InteractionSummaryDTO | None = None,

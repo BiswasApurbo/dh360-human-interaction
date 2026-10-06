@@ -38,6 +38,7 @@ from dh360_hi.contracts.events import (
     SessionStartedEvent,
 )
 from dh360_hi.contracts.integration import (
+    AuthorizationUpdatedIntegrationEvent,
     BaseIntegrationEvent,
     InteractionContextUpdatedIntegrationEvent,
     PersonIdentifiedIntegrationEvent,
@@ -56,6 +57,7 @@ __all__ = [
     "ApplicationError",
     "AuthorizationSession",
     "AuthorizationStatus",
+    "AuthorizationUpdatedIntegrationEvent",
     "BaseEvent",
     "BaseIntegrationEvent",
     "ConflictAppError",

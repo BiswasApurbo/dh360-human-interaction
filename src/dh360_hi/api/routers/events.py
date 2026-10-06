@@ -74,7 +74,6 @@ async def _wait_for_items(
         await asyncio.sleep(0.05)
 
 
-
 @router.get("/interaction/events")
 async def stream_interaction_events(
     request: Request,

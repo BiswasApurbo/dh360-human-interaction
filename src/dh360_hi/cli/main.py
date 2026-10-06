@@ -18,6 +18,8 @@ from dh360_hi.cli.person import handle_person
 from dh360_hi.cli.person import register_subparser as register_person
 from dh360_hi.cli.run import handle_run
 from dh360_hi.cli.run import register_subparser as register_run
+from dh360_hi.cli.serve import handle_serve
+from dh360_hi.cli.serve import register_subparser as register_serve
 from dh360_hi.cli.session import handle_session
 from dh360_hi.cli.session import register_subparser as register_session
 from dh360_hi.contracts.errors import ApplicationError
@@ -39,6 +41,7 @@ def create_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     register_run(subparsers)
+    register_serve(subparsers)
     register_health(subparsers)
     register_person(subparsers)
     register_enroll(subparsers)
@@ -62,6 +65,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     dispatch_map = {
         "run": handle_run,
+        "serve": handle_serve,
         "health": handle_health,
         "person": handle_person,
         "enroll": handle_enroll,

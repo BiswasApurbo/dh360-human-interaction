@@ -433,3 +433,166 @@ class TestProhibitedOperationsAndPrivacy:
             controller.get_current()
             controller.close()
             assert mock_process.call_count == 0
+
+
+class TestAuthorizationControllerTransitionNotification:
+    """Tests covering on_transition callback invocation and exception safety."""
+
+    def test_callback_fires_on_active_to_authorized(self) -> None:
+        events: list[AuthorizationSession] = []
+        mgr = SessionManager(config=SessionConfig(require_confirmed_presence=True))
+        ctrl = AuthorizationController(
+            session_manager=mgr,
+            timeout_seconds=5.0,
+            on_transition=events.append,
+        )
+        ctrl.start()
+        assert len(events) == 0
+
+        # Frame 1: Transitions to AUTHORIZED
+        auth_state = _mk_id_state(
+            track_id=1,
+            state=IdentityState.IDENTIFIED,
+            person_id="p-100",
+            display_name="Alice",
+        )
+        mgr.process_frame_result(_mk_frame(primary_track_id=1, identity_states={1: auth_state}))
+
+        assert len(events) == 1
+        assert events[0].status is AuthorizationStatus.AUTHORIZED
+        assert events[0].person_id == "p-100"
+        assert events[0].display_name == "Alice"
+        assert events[0].is_authorized is True
+
+    def test_callback_fires_on_authorized_to_lost(self) -> None:
+        events: list[AuthorizationSession] = []
+        mgr = SessionManager(config=SessionConfig(require_confirmed_presence=True))
+        ctrl = AuthorizationController(
+            session_manager=mgr,
+            timeout_seconds=5.0,
+            on_transition=events.append,
+        )
+        ctrl.start()
+
+        auth_state = _mk_id_state(
+            track_id=1,
+            state=IdentityState.IDENTIFIED,
+            person_id="p-100",
+            display_name="Alice",
+        )
+        mgr.process_frame_result(_mk_frame(primary_track_id=1, identity_states={1: auth_state}))
+        assert len(events) == 1
+
+        # Frame 2: Primary target drops -> LOST
+        mgr.process_frame_result(_mk_frame(primary_track_id=None))
+
+        assert len(events) == 2
+        assert events[1].status is AuthorizationStatus.LOST
+        assert events[1].person_id == "p-100"
+        assert events[1].is_completed is True
+        assert events[1].ended_at_iso is not None
+
+    def test_callback_fires_on_unknown_uncertain_no_face(self) -> None:
+        events: list[AuthorizationSession] = []
+        mgr = SessionManager(config=SessionConfig(require_confirmed_presence=True))
+        ctrl = AuthorizationController(
+            session_manager=mgr,
+            timeout_seconds=5.0,
+            on_transition=events.append,
+        )
+        ctrl.start()
+
+        # Frame 1: UNKNOWN
+        unreg_state = _mk_id_state(track_id=1, state=IdentityState.UNREGISTERED)
+        mgr.process_frame_result(_mk_frame(primary_track_id=1, identity_states={1: unreg_state}))
+        assert len(events) == 1
+        assert events[0].status is AuthorizationStatus.UNKNOWN
+
+        # Frame 2: UNCERTAIN
+        unc_state = _mk_id_state(track_id=1, state=IdentityState.UNCERTAIN)
+        mgr.process_frame_result(_mk_frame(primary_track_id=1, identity_states={1: unc_state}))
+        assert len(events) == 2
+        assert events[1].status is AuthorizationStatus.UNCERTAIN
+
+        # Frame 3: NO_FACE
+        mgr.process_frame_result(_mk_frame(primary_track_id=None))
+        assert len(events) == 3
+        assert events[2].status is AuthorizationStatus.NO_FACE
+
+    def test_callback_does_not_fire_repeatedly_when_status_unchanged(self) -> None:
+        events: list[AuthorizationSession] = []
+        mgr = SessionManager(config=SessionConfig(require_confirmed_presence=True))
+        ctrl = AuthorizationController(
+            session_manager=mgr,
+            timeout_seconds=5.0,
+            on_transition=events.append,
+        )
+        ctrl.start()
+
+        # Frame 1: UNKNOWN
+        unreg_state = _mk_id_state(track_id=1, state=IdentityState.UNREGISTERED)
+        mgr.process_frame_result(_mk_frame(primary_track_id=1, identity_states={1: unreg_state}))
+        assert len(events) == 1
+
+        # Frame 2: Still UNKNOWN
+        mgr.process_frame_result(_mk_frame(primary_track_id=1, identity_states={1: unreg_state}))
+        assert len(events) == 1  # Did NOT fire again
+
+    def test_callback_fires_on_timeout_via_frame_or_get_current(self) -> None:
+        events: list[AuthorizationSession] = []
+        mgr = SessionManager(config=SessionConfig(require_confirmed_presence=True))
+        ctrl = AuthorizationController(
+            session_manager=mgr,
+            timeout_seconds=0.01,
+            on_transition=events.append,
+        )
+        ctrl.start()
+
+        # Manually force deadline expiration
+        ctrl._deadline = 0.0
+
+        # Frame triggers timeout
+        mgr.process_frame_result(_mk_frame(primary_track_id=None))
+        assert len(events) == 1
+        assert events[0].status is AuthorizationStatus.TIMEOUT
+        assert events[0].is_completed is True
+
+        # Second test: get_current timeout
+        events2: list[AuthorizationSession] = []
+        ctrl2 = AuthorizationController(
+            session_manager=mgr,
+            timeout_seconds=0.01,
+            on_transition=events2.append,
+        )
+        ctrl2.start()
+        ctrl2._deadline = 0.0
+        curr = ctrl2.get_current()
+        assert curr is not None
+        assert curr.status is AuthorizationStatus.TIMEOUT
+        assert len(events2) == 1
+        assert events2[0].status is AuthorizationStatus.TIMEOUT
+
+    def test_callback_exceptions_are_isolated(self) -> None:
+        def failing_callback(_session: AuthorizationSession) -> None:
+            msg = "listener failed unexpectedly"
+            raise RuntimeError(msg)
+
+        mgr = SessionManager(config=SessionConfig(require_confirmed_presence=True))
+        ctrl = AuthorizationController(
+            session_manager=mgr,
+            timeout_seconds=5.0,
+            on_transition=failing_callback,
+        )
+        ctrl.start()
+
+        # Processing frame should not throw even though callback raises
+        auth_state = _mk_id_state(
+            track_id=1,
+            state=IdentityState.IDENTIFIED,
+            person_id="p-100",
+            display_name="Alice",
+        )
+        mgr.process_frame_result(_mk_frame(primary_track_id=1, identity_states={1: auth_state}))
+        current = ctrl.get_current()
+        assert current is not None
+        assert current.status is AuthorizationStatus.AUTHORIZED

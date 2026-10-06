@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from dh360_hi.contracts.authorization import (
@@ -39,9 +40,15 @@ _logger = logging.getLogger(__name__)
 class AuthorizationController:
     """Controller that derives an :class:`AuthorizationSession` from frame results."""
 
-    def __init__(self, session_manager: SessionManager, timeout_seconds: float = 30.0) -> None:
+    def __init__(
+        self,
+        session_manager: SessionManager,
+        timeout_seconds: float = 30.0,
+        on_transition: Callable[[AuthorizationSession], None] | None = None,
+    ) -> None:
         self._session_manager = session_manager
         self._timeout_seconds = timeout_seconds
+        self._on_transition = on_transition
         self._lock = threading.Lock()
         self._session: AuthorizationSession | None = None
         self._deadline: float | None = None
@@ -73,8 +80,19 @@ class AuthorizationController:
             )
             return new_session
 
+    def _notify_transition(self, session: AuthorizationSession) -> None:
+        """Safely invoke the transition callback without leaking exceptions."""
+        if self._on_transition is not None:
+            try:
+                self._on_transition(session)
+            except Exception as exc:
+                _logger.exception(
+                    "Error in AuthorizationController on_transition callback: %s", exc
+                )
+
     def get_current(self) -> AuthorizationSession | None:
         """Return the latest session snapshot (may be ``None``)."""
+        session_to_notify: AuthorizationSession | None = None
         with self._lock:
             if (
                 self._session is not None
@@ -84,10 +102,15 @@ class AuthorizationController:
             ):
                 try:
                     self._session = self._session.complete(AuthorizationStatus.TIMEOUT)
+                    session_to_notify = self._session
                     _logger.debug("AuthorizationController session timed out")
                 except Exception as exc:
                     _logger.exception("Failed to complete session on timeout: %s", exc)
-            return self._session
+            current = self._session
+
+        if session_to_notify is not None:
+            self._notify_transition(session_to_notify)
+        return current
 
     def close(self) -> None:
         """Unregister the observer and mark the controller closed.
@@ -105,6 +128,7 @@ class AuthorizationController:
 
     def _on_frame(self, result: TwoRateFrameResult) -> None:
         """Observer invoked by ``SessionManager`` after processing each frame."""
+        session_to_notify: AuthorizationSession | None = None
         try:
             with self._lock:
                 if self._session is None or not self._session.is_active:
@@ -113,58 +137,65 @@ class AuthorizationController:
                 # Check timeout on each frame observation
                 if self._deadline is not None and time.monotonic() >= self._deadline:
                     self._session = self._session.complete(AuthorizationStatus.TIMEOUT)
-                    return
+                    session_to_notify = self._session
+                else:
+                    target_result = result.target_result
+                    primary_track_id = target_result.primary_track_id if target_result else None
 
-                target_result = result.target_result
-                primary_track_id = target_result.primary_track_id if target_result else None
+                    track_state = None
+                    if primary_track_id is not None:
+                        track_state = result.identity_states.get(primary_track_id)
+                    identity_state = track_state.state if track_state is not None else None
 
-                track_state = None
-                if primary_track_id is not None:
-                    track_state = result.identity_states.get(primary_track_id)
-                identity_state = track_state.state if track_state is not None else None
-
-                previously_authorized = self._session.is_authorized
-                new_status = derive_authorization_status(
-                    identity_state,
-                    target_result=target_result,
-                    previously_authorized=previously_authorized,
-                )
-
-                if previously_authorized:
-                    if new_status is AuthorizationStatus.LOST:
-                        # LOST is a terminal outcome following authorization loss
-                        self._session = self._session.complete(AuthorizationStatus.LOST)
-                    # If still AUTHORIZED, session stays running as AUTHORIZED
-                    return
-
-                # Pre-authorization evolution:
-                if new_status is AuthorizationStatus.AUTHORIZED:
-                    if (
-                        track_state is not None
-                        and track_state.state is IdentityState.IDENTIFIED
-                        and track_state.current_person_id
-                    ):
-                        self._session = self._session.transition(
-                            AuthorizationStatus.AUTHORIZED,
-                            person_id=track_state.current_person_id,
-                            display_name=track_state.current_display_name,
-                        )
-                elif (
-                    new_status
-                    in (
-                        AuthorizationStatus.UNKNOWN,
-                        AuthorizationStatus.UNCERTAIN,
-                        AuthorizationStatus.NO_FACE,
+                    previously_authorized = self._session.is_authorized
+                    new_status = derive_authorization_status(
+                        identity_state,
+                        target_result=target_result,
+                        previously_authorized=previously_authorized,
                     )
-                    and self._session.status is not new_status
-                ):
-                    self._session = self._session.transition(new_status)
-                elif (
-                    new_status is AuthorizationStatus.ACTIVE
-                    and self._session.status is not AuthorizationStatus.ACTIVE
-                ):
-                    self._session = self._session.transition(AuthorizationStatus.ACTIVE)
+
+                    if previously_authorized:
+                        if new_status is AuthorizationStatus.LOST:
+                            # LOST is a terminal outcome following authorization loss
+                            self._session = self._session.complete(AuthorizationStatus.LOST)
+                            session_to_notify = self._session
+                        # If still AUTHORIZED, session stays running as AUTHORIZED
+                    else:
+                        prior_status = self._session.status
+                        # Pre-authorization evolution:
+                        if new_status is AuthorizationStatus.AUTHORIZED:
+                            if (
+                                track_state is not None
+                                and track_state.state is IdentityState.IDENTIFIED
+                                and track_state.current_person_id
+                            ):
+                                self._session = self._session.transition(
+                                    AuthorizationStatus.AUTHORIZED,
+                                    person_id=track_state.current_person_id,
+                                    display_name=track_state.current_display_name,
+                                )
+                                session_to_notify = self._session
+                        elif (
+                            new_status
+                            in (
+                                AuthorizationStatus.UNKNOWN,
+                                AuthorizationStatus.UNCERTAIN,
+                                AuthorizationStatus.NO_FACE,
+                            )
+                            and prior_status is not new_status
+                        ):
+                            self._session = self._session.transition(new_status)
+                            session_to_notify = self._session
+                        elif (
+                            new_status is AuthorizationStatus.ACTIVE
+                            and prior_status is not AuthorizationStatus.ACTIVE
+                        ):
+                            self._session = self._session.transition(AuthorizationStatus.ACTIVE)
+                            session_to_notify = self._session
 
         except Exception as exc:
             # Observer errors must not propagate to SessionManager
             _logger.exception("AuthorizationController observer error: %s", exc)
+
+        if session_to_notify is not None:
+            self._notify_transition(session_to_notify)

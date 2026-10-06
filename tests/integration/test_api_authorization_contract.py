@@ -289,3 +289,108 @@ class TestCompositionAndLifecycle:
             client.post(_AUTH_SESSIONS_PATH, headers=headers)
             client.get(_AUTH_CURRENT_PATH, headers=headers)
             assert mock_process.call_count == 0
+
+    def test_authorization_transition_emits_sse_event(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verify that authorization state transitions are published as SSE events."""
+        import asyncio
+        import contextlib
+        import json
+        from typing import Any
+
+        token = _configure_operator(monkeypatch, "authorization:manage,interaction:read")
+        sm = _mk_session_manager()
+        ctrl = AuthorizationController(session_manager=sm, timeout_seconds=5.0)
+        app = create_app(authorization_controller=ctrl)
+
+        class _StreamHarness:
+            def __init__(self) -> None:
+                self.chunks: list[bytes] = []
+                self._disconnected = False
+                self.status: int | None = None
+
+            async def _receive(self) -> dict[str, Any]:
+                if self._disconnected:
+                    await asyncio.sleep(0)
+                    return {"type": "http.disconnect"}
+                await asyncio.sleep(0)
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            async def _send(self, message: dict[str, Any]) -> None:
+                if message["type"] == "http.response.start":
+                    self.status = int(message["status"])
+                elif message["type"] == "http.response.body":
+                    b = message.get("body", b"")
+                    if b:
+                        self.chunks.append(bytes(b))
+
+            def text(self) -> str:
+                return b"".join(self.chunks).decode()
+
+        stream = _StreamHarness()
+        scope = {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/interaction/events",
+            "raw_path": b"/interaction/events",
+            "query_string": b"",
+            "headers": [(b"authorization", f"Bearer {token}".encode())],
+            "state": {},
+        }
+
+        async def run_stream_and_trigger() -> None:
+            task = asyncio.ensure_future(app(scope, stream._receive, stream._send))
+            # Wait for stream to start and receive initial frame
+            for _ in range(100):
+                await asyncio.sleep(0.01)
+                if len(stream.chunks) >= 1:
+                    break
+
+            # Start authorization session on the controller directly
+            ctrl.start()
+
+            # Feed frame to transition to AUTHORIZED
+            id_state = _mk_id_state(
+                1, IdentityState.IDENTIFIED, person_id="p-auth-1", display_name="Alice"
+            )
+            frame = _mk_frame(primary_track_id=1, identity_states={1: id_state})
+            sm.process_frame_result(frame)
+
+            # Wait for SSE frames
+            for _ in range(100):
+                await asyncio.sleep(0.01)
+                if "authorization_updated" in stream.text():
+                    break
+
+            stream._disconnected = True
+            for _ in range(50):
+                if task.done():
+                    break
+                await asyncio.sleep(0.01)
+            if not task.done():
+                task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+
+        asyncio.run(run_stream_and_trigger())
+
+        assert stream.status == 200
+        output = stream.text()
+        assert "event: authorization_updated" in output
+        # Find the authorization_updated event chunk
+        lines = output.splitlines()
+        found_auth_event = False
+        for i, line in enumerate(lines):
+            if line.strip() == "event: authorization_updated":
+                data_line = lines[i + 1]
+                assert data_line.startswith("data: ")
+                payload = json.loads(data_line[len("data: ") :])
+                assert payload["event_type"] == "authorization_updated"
+                assert payload["status"] in ("active", "authorized")
+                assert "authorization_id" in payload
+                found_auth_event = True
+                break
+        assert found_auth_event, f"Did not find authorization_updated event in output: {output}"

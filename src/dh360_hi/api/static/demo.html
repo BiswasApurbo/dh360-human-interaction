@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Human Interaction Authorization Demo</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --card-bg: #ffffff;
+      --text: #1f2937;
+      --text-muted: #6b7280;
+      --border: #e5e7eb;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --danger: #dc2626;
+      --badge-active: #dbeafe;
+      --badge-active-txt: #1e40af;
+      --badge-auth: #dcfce7;
+      --badge-auth-txt: #15803d;
+      --badge-alert: #fee2e2;
+      --badge-alert-txt: #991b1b;
+      --badge-gray: #f3f4f6;
+      --badge-gray-txt: #374151;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.5;
+      padding: 2rem 1rem;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      min-height: 100vh;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      max-width: 640px;
+      width: 100%;
+      padding: 2rem;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    }
+    h1 {
+      font-size: 1.35rem;
+      font-weight: 600;
+      margin-bottom: 1.25rem;
+      color: #111827;
+      text-align: center;
+    }
+    .form-group {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1.5rem;
+    }
+    input[type="text"] {
+      flex: 1;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.9rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: monospace;
+      outline: none;
+    }
+    input[type="text"]:focus {
+      border-color: var(--primary);
+    }
+    button {
+      padding: 0.5rem 1rem;
+      font-size: 0.9rem;
+      font-weight: 500;
+      background-color: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button:hover {
+      background-color: var(--primary-hover);
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .status-panel {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+      background-color: #fafafa;
+    }
+    .field-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 0.35rem 0;
+      border-bottom: 1px solid #f0f0f0;
+      font-size: 0.9rem;
+    }
+    .field-row:last-child {
+      border-bottom: none;
+    }
+    .field-label {
+      font-weight: 500;
+      color: var(--text-muted);
+      width: 140px;
+      flex-shrink: 0;
+    }
+    .field-val {
+      font-family: monospace;
+      word-break: break-all;
+      text-align: right;
+    }
+    .badge {
+      display: inline-block;
+      padding: 0.2rem 0.6rem;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      font-family: monospace;
+    }
+    .badge-none { background: var(--badge-gray); color: var(--badge-gray-txt); }
+    .badge-active { background: var(--badge-active); color: var(--badge-active-txt); }
+    .badge-authorized { background: var(--badge-auth); color: var(--badge-auth-txt); }
+    .badge-unknown,
+    .badge-uncertain,
+    .badge-no_face,
+    .badge-lost,
+    .badge-timeout,
+    .badge-expired,
+    .badge-aborted {
+      background: var(--badge-alert);
+      color: var(--badge-alert-txt);
+    }
+    .notice {
+      padding: 0.5rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      margin-bottom: 1rem;
+      display: none;
+    }
+    .notice-error {
+      background-color: #fef2f2;
+      color: #991b1b;
+      border: 1px solid #fecaca;
+    }
+    .notice-info {
+      background-color: #eff6ff;
+      color: #1e40af;
+      border: 1px solid #bfdbfe;
+    }
+    .log-container {
+      margin-top: 1rem;
+    }
+    .log-header {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 0.5rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .log-box {
+      background: #1e293b;
+      color: #e2e8f0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.8rem;
+      padding: 0.75rem;
+      border-radius: 6px;
+      height: 180px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .sse-indicator {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 6px;
+      background-color: #9ca3af;
+    }
+    .sse-connected { background-color: #22c55e; }
+    .sse-connecting { background-color: #eab308; }
+    .sse-error { background-color: #ef4444; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Human Interaction Authorization Demo</h1>
+
+    <div id="notice-box" class="notice"></div>
+
+    <div class="form-group">
+      <input type="text" id="token-input" placeholder="Bearer Token" spellcheck="false" />
+      <button id="start-btn" onclick="startAuthorization()">Start Authorization</button>
+    </div>
+
+    <div class="status-panel">
+      <div class="field-row">
+        <span class="field-label">Status:</span>
+        <span id="auth-status" class="badge badge-none">IDLE</span>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Person:</span>
+        <span id="auth-person" class="field-val">-</span>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Authorization ID:</span>
+        <span id="auth-id" class="field-val">-</span>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Started:</span>
+        <span id="auth-started" class="field-val">-</span>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Updated:</span>
+        <span id="auth-updated" class="field-val">-</span>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Ended:</span>
+        <span id="auth-ended" class="field-val">-</span>
+      </div>
+      <div class="field-row">
+        <span class="field-label">SSE Stream:</span>
+        <span class="field-val" style="display: flex; align-items: center;">
+          <span id="sse-dot" class="sse-indicator"></span>
+          <span id="sse-status" style="font-family: inherit;">Disconnected</span>
+        </span>
+      </div>
+    </div>
+
+    <div class="log-container">
+      <div class="log-header">Event Log</div>
+      <div id="log-box" class="log-box"></div>
+    </div>
+  </div>
+
+  <script>
+    let abortController = null;
+    let isConnecting = false;
+
+    function getNowTime() {
+      const d = new Date();
+      return d.toTimeString().split(' ')[0];
+    }
+
+    function appendLog(msg) {
+      const box = document.getElementById("log-box");
+      const line = `[${getNowTime()}] ${msg}\n`;
+      box.textContent += line;
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function showNotice(msg, type = "error") {
+      const n = document.getElementById("notice-box");
+      n.textContent = msg;
+      n.className = "notice notice-" + type;
+      n.style.display = "block";
+    }
+
+    function clearNotice() {
+      const n = document.getElementById("notice-box");
+      n.style.display = "none";
+    }
+
+    function updateSessionUI(session) {
+      if (!session) return;
+
+      const st = (session.status || "IDLE").toUpperCase();
+      const statusEl = document.getElementById("auth-status");
+      statusEl.textContent = st;
+      statusEl.className = "badge badge-" + st.toLowerCase();
+
+      const pName = session.display_name || session.person_id || "-";
+      document.getElementById("auth-person").textContent = pName;
+      document.getElementById("auth-id").textContent = session.authorization_id || "-";
+      document.getElementById("auth-started").textContent = session.started_at || session.created_at || "-";
+      document.getElementById("auth-updated").textContent = session.updated_at || "-";
+      document.getElementById("auth-ended").textContent = session.ended_at || "-";
+    }
+
+    function setSseIndicator(state, text) {
+      const dot = document.getElementById("sse-dot");
+      const statusTxt = document.getElementById("sse-status");
+      dot.className = "sse-indicator sse-" + state;
+      statusTxt.textContent = text;
+    }
+
+    async function startAuthorization() {
+      clearNotice();
+      const token = document.getElementById("token-input").value.trim();
+      const startBtn = document.getElementById("start-btn");
+
+      if (!token) {
+        showNotice("Please enter an operator Bearer token with required scopes.", "error");
+        return;
+      }
+
+      startBtn.disabled = true;
+
+      try {
+        const resp = await fetch("/authorization/sessions", {
+          method: "POST",
+          headers: {
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json"
+          }
+        });
+
+        if (resp.status === 201) {
+          const data = await resp.json();
+          appendLog(`authorization session started: ${data.authorization_id}`);
+          updateSessionUI(data);
+          connectSSE(token);
+        } else if (resp.status === 409) {
+          const err = await resp.json();
+          showNotice(`Active session in progress (${err.detail || 'Conflict'})`, "info");
+          appendLog("authorization 409 active session already exists");
+          connectSSE(token);
+        } else if (resp.status === 401 || resp.status === 403) {
+          const err = await resp.json();
+          showNotice(`Authentication failed (${resp.status}): ${err.message || 'Unauthorized'}`, "error");
+          appendLog(`authorization request failed: HTTP ${resp.status}`);
+        } else if (resp.status === 503) {
+          showNotice("Authorization service unavailable (runtime not running)", "error");
+          appendLog("authorization request failed: HTTP 503 service unavailable");
+        } else {
+          showNotice(`Unexpected error: HTTP ${resp.status}`, "error");
+          appendLog(`authorization request failed: HTTP ${resp.status}`);
+        }
+      } catch (err) {
+        showNotice(`Network error: ${err.message}`, "error");
+        appendLog(`network error: ${err.message}`);
+      } finally {
+        startBtn.disabled = false;
+      }
+    }
+
+    async function connectSSE(token) {
+      if (isConnecting || abortController) {
+        return;
+      }
+
+      isConnecting = true;
+      setSseIndicator("connecting", "Connecting...");
+      appendLog("connecting to /interaction/events SSE stream...");
+
+      abortController = new AbortController();
+
+      try {
+        const resp = await fetch("/interaction/events", {
+          headers: {
+            "Authorization": "Bearer " + token
+          },
+          signal: abortController.signal
+        });
+
+        if (!resp.ok) {
+          setSseIndicator("error", `HTTP ${resp.status}`);
+          appendLog(`SSE stream connection failed: HTTP ${resp.status}`);
+          isConnecting = false;
+          abortController = null;
+          return;
+        }
+
+        setSseIndicator("connected", "Connected");
+        appendLog("SSE stream connected.");
+        isConnecting = false;
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop();
+
+          for (const block of parts) {
+            handleSseBlock(block);
+          }
+        }
+      } catch (err) {
+        if (err.name !== "AbortError") {
+          setSseIndicator("error", "Disconnected");
+          appendLog(`SSE stream error: ${err.message}`);
+        }
+      } finally {
+        isConnecting = false;
+        abortController = null;
+        setSseIndicator("error", "Disconnected");
+      }
+    }
+
+    function handleSseBlock(raw) {
+      if (!raw.trim()) return;
+
+      let eventType = "message";
+      let dataStr = "";
+
+      const lines = raw.split("\n");
+      for (const line of lines) {
+        if (line.startsWith("event:")) {
+          eventType = line.slice(6).trim();
+        } else if (line.startsWith("data:")) {
+          dataStr = line.slice(5).trim();
+        }
+      }
+
+      if (!dataStr) return;
+
+      try {
+        const payload = JSON.parse(dataStr);
+        if (eventType === "authorization_updated" || payload.event_type === "authorization_updated") {
+          const who = payload.display_name || payload.person_id || "unidentified";
+          appendLog(`authorization ${payload.status} (${who})`);
+          updateSessionUI(payload);
+        } else if (eventType === "context") {
+          appendLog("received context snapshot from edge runtime");
+        } else {
+          appendLog(`event: ${eventType}`);
+        }
+      } catch (e) {
+        // Non-JSON SSE frame
+      }
+    }
+  </script>
+</body>
+</html>
