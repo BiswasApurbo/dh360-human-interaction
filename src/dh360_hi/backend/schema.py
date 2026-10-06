@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 SCHEMA_V1_SQL = """
 -- Schema Version Tracking
@@ -69,7 +69,21 @@ CREATE INDEX IF NOT EXISTS idx_interaction_sessions_started_at ON interaction_se
 CREATE INDEX IF NOT EXISTS idx_interaction_sessions_created_at ON interaction_sessions(created_at);
 """
 
+SCHEMA_V3_SQL = """
+-- Migration v3: Hospital Profile & AI Context Columns on Persons Table
+ALTER TABLE persons ADD COLUMN role TEXT;
+ALTER TABLE persons ADD COLUMN department TEXT;
+ALTER TABLE persons ADD COLUMN office_room TEXT;
+ALTER TABLE persons ADD COLUMN working_hours TEXT;
+ALTER TABLE persons ADD COLUMN profile_description TEXT;
+ALTER TABLE persons ADD COLUMN ai_qa_pairs TEXT NOT NULL DEFAULT '[]';
+"""
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, str]] = {
     1: (SCHEMA_V1_SQL, "Initial schema: persons, face_embeddings, and indices with cascade delete"),
     2: (SCHEMA_V2_SQL, "Schema v2: interaction_sessions table and performance indices"),
+    3: (
+        SCHEMA_V3_SQL,
+        "Schema v3: hospital profile and AI context fields for authorized person registration",
+    ),
 }

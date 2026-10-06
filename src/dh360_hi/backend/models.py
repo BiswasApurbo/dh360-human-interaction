@@ -104,6 +104,12 @@ class PersonRecord:
     consent_status: ConsentStatus = ConsentStatus.GRANTED
     consent_timestamp: str | None = None
     notes: str | None = None
+    role: str | None = None
+    department: str | None = None
+    office_room: str | None = None
+    working_hours: str | None = None
+    profile_description: str | None = None
+    ai_qa_pairs_json: str = "[]"
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
 

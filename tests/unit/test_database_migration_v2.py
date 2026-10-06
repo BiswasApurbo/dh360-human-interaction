@@ -18,11 +18,11 @@ if TYPE_CHECKING:
 
 
 def test_fresh_database_initializes_at_v2() -> None:
-    """Verify that a newly initialized database starts at schema version 2 with all tables."""
+    """Verify that a newly initialized database starts at current schema version with all tables."""
     db = DatabaseManager(":memory:")
     try:
-        assert db.get_schema_version() == 2
-        assert CURRENT_SCHEMA_VERSION == 2
+        assert db.get_schema_version() == CURRENT_SCHEMA_VERSION
+        assert CURRENT_SCHEMA_VERSION == 3
 
         with db.readonly_cursor() as cur:
             cur.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
@@ -94,10 +94,10 @@ def test_v1_database_migrates_to_v2_preserving_data(tmp_path: Path) -> None:
     conn.commit()
     conn.close()
 
-    # Step 2: Open with DatabaseManager (triggers automatic migration to v2)
+    # Step 2: Open with DatabaseManager (triggers automatic migration to current schema)
     db = DatabaseManager(db_file)
     try:
-        assert db.get_schema_version() == 2
+        assert db.get_schema_version() == CURRENT_SCHEMA_VERSION
 
         with db.readonly_cursor() as cur:
             # Check persons survived
@@ -142,15 +142,15 @@ def test_v1_database_migrates_to_v2_preserving_data(tmp_path: Path) -> None:
 
 
 def test_schema_migration_is_idempotent(tmp_path: Path) -> None:
-    """Verify that multiple initialize() calls on an existing v2 database are idempotent."""
+    """Verify that multiple initialize() calls on an existing database are idempotent."""
     db_file = tmp_path / "idempotent_test.db"
     db = DatabaseManager(db_file)
     try:
-        assert db.get_schema_version() == 2
+        assert db.get_schema_version() == CURRENT_SCHEMA_VERSION
         # Call initialize repeatedly
-        assert db.initialize() == 2
-        assert db.initialize() == 2
-        assert db.get_schema_version() == 2
+        assert db.initialize() == CURRENT_SCHEMA_VERSION
+        assert db.initialize() == CURRENT_SCHEMA_VERSION
+        assert db.get_schema_version() == CURRENT_SCHEMA_VERSION
     finally:
         db.close()
 
