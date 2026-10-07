@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import dh360_hi.contracts  # noqa: F401
 from dh360_hi.backend.database import DatabaseManager
 from dh360_hi.backend.exceptions import PersonNotFoundError, ValidationError
 from dh360_hi.backend.models import ConsentStatus, PersonStatus

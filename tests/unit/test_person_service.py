@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+import dh360_hi.contracts  # noqa: F401
 from dh360_hi.backend.database import DatabaseManager
 from dh360_hi.backend.exceptions import PersonNotFoundError, ValidationError
 from dh360_hi.backend.models import ConsentStatus, PersonStatus
@@ -234,3 +235,151 @@ def test_vector_retrieval_missing_person_raises(service: PersonService) -> None:
         service.get_person_embedding_vectors(missing)
     with pytest.raises(PersonNotFoundError):
         service.add_person_embeddings(missing, [np.random.randn(128).astype(np.float32)])
+
+
+def test_person_context_create_and_reload(service: PersonService) -> None:
+    """Test creating a person with context fields, verifying persistence and reload."""
+    from dh360_hi.backend.person_service import QAPair
+
+    qa_list = [
+        QAPair(question="What is your department?", answer="Cardiology"),
+        QAPair(question="What is your pager extension?", answer="4412"),
+    ]
+
+    profile = service.create_person(
+        display_name="Dr. Gregory House",
+        preferred_name="House",
+        role="Head of Diagnostic Medicine",
+        department="Diagnostics",
+        office_room="Room 402",
+        working_hours="Mon-Fri 08:00-16:00",
+        profile_description="Specialist in infectious disease and nephrology.",
+        qa_pairs=qa_list,
+    )
+
+    # 1. Profile privacy: PersonProfile does NOT leak privileged context fields
+    assert not hasattr(profile, "ai_qa_pairs_json")
+    assert not hasattr(profile, "profile_description")
+
+    # 2. Raw record reload via repository
+    raw_rec = service.get_person_record(profile.person_id)
+    assert raw_rec is not None
+    assert raw_rec.role == "Head of Diagnostic Medicine"
+    assert raw_rec.department == "Diagnostics"
+    assert raw_rec.office_room == "Room 402"
+    assert raw_rec.working_hours == "Mon-Fri 08:00-16:00"
+    assert raw_rec.profile_description == "Specialist in infectious disease and nephrology."
+    expected_qa_snippet = '{"question": "What is your department?", "answer": "Cardiology"}'
+    assert expected_qa_snippet in raw_rec.ai_qa_pairs_json
+
+    # 3. Application-facing context DTO reload
+    ctx = service.get_person_context(profile.person_id)
+    assert ctx is not None
+    assert ctx.person_id == profile.person_id
+    assert ctx.display_name == "Dr. Gregory House"
+    assert ctx.preferred_name == "House"
+    assert ctx.role == "Head of Diagnostic Medicine"
+    assert ctx.department == "Diagnostics"
+    assert ctx.office_room == "Room 402"
+    assert ctx.working_hours == "Mon-Fri 08:00-16:00"
+    assert ctx.profile_description == "Specialist in infectious disease and nephrology."
+    assert len(ctx.qa_pairs) == 2
+    assert ctx.qa_pairs[0] == QAPair(question="What is your department?", answer="Cardiology")
+    assert ctx.qa_pairs[1] == QAPair(question="What is your pager extension?", answer="4412")
+
+
+def test_person_context_update(service: PersonService) -> None:
+    """Test updating hospital profile and Q&A context fields."""
+    profile = service.create_person(
+        display_name="Nurse Jackie",
+        role="Staff Nurse",
+        department="ER",
+    )
+
+    # Update hospital context and add Q&A using dicts
+    service.update_person(
+        person_id=profile.person_id,
+        role="Head Nurse",
+        department="Emergency Department",
+        office_room="Nurse Station 1",
+        working_hours="Tue-Sat 07:00-19:00",
+        profile_description="Lead triage coordinator.",
+        qa_pairs=[{"question": "Preferred radio channel?", "answer": "Channel 4"}],
+    )
+
+    ctx = service.get_person_context(profile.person_id)
+    assert ctx is not None
+    assert ctx.role == "Head Nurse"
+    assert ctx.department == "Emergency Department"
+    assert ctx.office_room == "Nurse Station 1"
+    assert ctx.working_hours == "Tue-Sat 07:00-19:00"
+    assert ctx.profile_description == "Lead triage coordinator."
+    assert len(ctx.qa_pairs) == 1
+    assert ctx.qa_pairs[0].question == "Preferred radio channel?"
+    assert ctx.qa_pairs[0].answer == "Channel 4"
+
+
+def test_person_context_validation_limits(service: PersonService) -> None:
+    """Test boundary validation limits on hospital context strings and Q&A pairs."""
+    from dh360_hi.backend.person_service import QAPair
+
+    # role > 200 chars
+    with pytest.raises(ValidationError, match="role must not exceed 200 characters"):
+        service.create_person("Test", role="A" * 201)
+
+    # department > 200 chars
+    with pytest.raises(ValidationError, match="department must not exceed 200 characters"):
+        service.create_person("Test", department="B" * 201)
+
+    # office_room > 100 chars
+    with pytest.raises(ValidationError, match="office_room must not exceed 100 characters"):
+        service.create_person("Test", office_room="C" * 101)
+
+    # working_hours > 200 chars
+    with pytest.raises(ValidationError, match="working_hours must not exceed 200 characters"):
+        service.create_person("Test", working_hours="D" * 201)
+
+    # profile_description > 2000 chars
+    with pytest.raises(
+        ValidationError, match="profile_description must not exceed 2000 characters"
+    ):
+        service.create_person("Test", profile_description="E" * 2001)
+
+    # Q&A pairs > 20
+    too_many_qa = [QAPair(question=f"Q{i}", answer=f"A{i}") for i in range(21)]
+    with pytest.raises(ValidationError, match="qa_pairs must not exceed 20 pairs"):
+        service.create_person("Test", qa_pairs=too_many_qa)
+
+    # Empty question
+    with pytest.raises(ValidationError, match="Question at index 0 must be a non-empty string"):
+        service.create_person("Test", qa_pairs=[QAPair(question="  ", answer="Valid")])
+
+    # Empty answer
+    with pytest.raises(ValidationError, match="Answer at index 0 must be a non-empty string"):
+        service.create_person("Test", qa_pairs=[QAPair(question="Valid", answer="")])
+
+
+def test_person_context_malformed_json_resilience(service: PersonService) -> None:
+    """Test that malformed or non-list stored JSON fails safely to empty list."""
+    profile = service.create_person("Resilient Patient")
+
+    # Manually inject malformed JSON into the database row
+    with service.repository._db.transaction() as cur:  # type: ignore[union-attr]
+        cur.execute(
+            "UPDATE persons SET ai_qa_pairs = ? WHERE person_id = ?;",
+            ("NOT VALID JSON! {{{", profile.person_id),
+        )
+
+    ctx = service.get_person_context(profile.person_id)
+    assert ctx is not None
+    assert ctx.qa_pairs == []
+
+    # Non-list JSON object
+    with service.repository._db.transaction() as cur:  # type: ignore[union-attr]
+        cur.execute(
+            "UPDATE persons SET ai_qa_pairs = ? WHERE person_id = ?;",
+            ('{"not": "a list"}', profile.person_id),
+        )
+    ctx = service.get_person_context(profile.person_id)
+    assert ctx is not None
+    assert ctx.qa_pairs == []

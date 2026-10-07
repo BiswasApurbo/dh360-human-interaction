@@ -107,6 +107,7 @@ class SQLitePersonRepository(BasePersonRepository):
     @staticmethod
     def _row_to_person(row: sqlite3.Row) -> PersonRecord:
         """Convert a database row to a PersonRecord instance."""
+        keys = row.keys() if hasattr(row, "keys") else ()
         return PersonRecord(
             person_id=row["person_id"],
             display_name=row["display_name"],
@@ -115,6 +116,18 @@ class SQLitePersonRepository(BasePersonRepository):
             consent_status=ConsentStatus(row["consent_status"]),
             consent_timestamp=row["consent_timestamp"],
             notes=row["notes"],
+            role=row["role"] if "role" in keys else None,
+            department=row["department"] if "department" in keys else None,
+            office_room=row["office_room"] if "office_room" in keys else None,
+            working_hours=row["working_hours"] if "working_hours" in keys else None,
+            profile_description=(
+                row["profile_description"] if "profile_description" in keys else None
+            ),
+            ai_qa_pairs_json=(
+                row["ai_qa_pairs"]
+                if "ai_qa_pairs" in keys and row["ai_qa_pairs"] is not None
+                else "[]"
+            ),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -139,8 +152,10 @@ class SQLitePersonRepository(BasePersonRepository):
         query = """
         INSERT INTO persons (
             person_id, display_name, preferred_name, status,
-            consent_status, consent_timestamp, notes, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+            consent_status, consent_timestamp, notes,
+            role, department, office_room, working_hours, profile_description, ai_qa_pairs,
+            created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         try:
             with self._db.transaction() as cur:
@@ -154,6 +169,12 @@ class SQLitePersonRepository(BasePersonRepository):
                         person.consent_status.value,
                         person.consent_timestamp,
                         person.notes,
+                        person.role,
+                        person.department,
+                        person.office_room,
+                        person.working_hours,
+                        person.profile_description,
+                        person.ai_qa_pairs_json,
                         person.created_at,
                         person.updated_at,
                     ),
@@ -197,6 +218,12 @@ class SQLitePersonRepository(BasePersonRepository):
             consent_status = ?,
             consent_timestamp = ?,
             notes = ?,
+            role = ?,
+            department = ?,
+            office_room = ?,
+            working_hours = ?,
+            profile_description = ?,
+            ai_qa_pairs = ?,
             updated_at = ?
         WHERE person_id = ?;
         """
@@ -210,6 +237,12 @@ class SQLitePersonRepository(BasePersonRepository):
                     person.consent_status.value,
                     person.consent_timestamp,
                     person.notes,
+                    person.role,
+                    person.department,
+                    person.office_room,
+                    person.working_hours,
+                    person.profile_description,
+                    person.ai_qa_pairs_json,
                     person.updated_at,
                     person.person_id,
                 ),
