@@ -351,7 +351,7 @@ def test_classify_head_direction_all_five_directions() -> None:
     assert classify_head_direction(lm_up) == HeadDirection.UP
 
     # 5. Looking DOWN: nose shifted lower towards mouth (y=118 instead of 104.3)
-    # (118 - 70) / 70 = 0.686 -> offset = 0.686 - 0.49 = +0.196 >= +0.08
+    # (118 - 70) / 70 = 0.686 -> offset = 0.686 - 0.50 = +0.186 >= +0.08
     lm_down = _create_synthetic_landmarks(
         re=(70.0, 70.0),
         le=(130.0, 70.0),
@@ -360,3 +360,71 @@ def test_classify_head_direction_all_five_directions() -> None:
         lm=(125.0, 140.0),
     )
     assert classify_head_direction(lm_down) == HeadDirection.DOWN
+
+
+def test_realistic_webcam_poses_and_opposite_rejections() -> None:
+    """Verify calibrated realistic webcam poses (RIGHT, LEFT, UP, DOWN, FRONT)
+
+    and ensure opposite directions are rejected and FRONT does not count for others.
+    """
+    from dh360_hi.vision.quality_gate import HeadDirection, classify_head_direction
+
+    # Realistic moderate RIGHT pose (nose offset +0.10: nt_x=94, eyes_mid=100, iod=60)
+    lm_right = _create_synthetic_landmarks(
+        re=(70.0, 70.0),
+        le=(130.0, 70.0),
+        nt=(94.0, 105.0),
+        rm=(75.0, 140.0),
+        lm=(125.0, 140.0),
+    )
+    # Realistic moderate LEFT pose (nose offset -0.10: nt_x=106, eyes_mid=100, iod=60)
+    lm_left = _create_synthetic_landmarks(
+        re=(70.0, 70.0),
+        le=(130.0, 70.0),
+        nt=(106.0, 105.0),
+        rm=(75.0, 140.0),
+        lm=(125.0, 140.0),
+    )
+    # Realistic UP pose (nose higher, y=92, span=70 -> ratio=0.314)
+    lm_up = _create_synthetic_landmarks(
+        re=(70.0, 70.0),
+        le=(130.0, 70.0),
+        nt=(100.0, 92.0),
+        rm=(75.0, 140.0),
+        lm=(125.0, 140.0),
+    )
+    # Realistic DOWN pose (nose lower, y=116, span=70 -> ratio=0.657)
+    lm_down = _create_synthetic_landmarks(
+        re=(70.0, 70.0),
+        le=(130.0, 70.0),
+        nt=(100.0, 116.0),
+        rm=(75.0, 140.0),
+        lm=(125.0, 140.0),
+    )
+    # Clean FRONT pose
+    lm_front = _create_synthetic_landmarks(
+        re=(70.0, 70.0),
+        le=(130.0, 70.0),
+        nt=(100.0, 105.0),
+        rm=(75.0, 140.0),
+        lm=(125.0, 140.0),
+    )
+
+    # 1. Correct classifications
+    assert classify_head_direction(lm_right) == HeadDirection.RIGHT
+    assert classify_head_direction(lm_left) == HeadDirection.LEFT
+    assert classify_head_direction(lm_up) == HeadDirection.UP
+    assert classify_head_direction(lm_down) == HeadDirection.DOWN
+    assert classify_head_direction(lm_front) == HeadDirection.FRONT
+
+    # 2. Opposite direction rejection
+    assert classify_head_direction(lm_right) != HeadDirection.LEFT
+    assert classify_head_direction(lm_left) != HeadDirection.RIGHT
+    assert classify_head_direction(lm_up) != HeadDirection.DOWN
+    assert classify_head_direction(lm_down) != HeadDirection.UP
+
+    # 3. FRONT does not count as any directional pose
+    assert classify_head_direction(lm_front) != HeadDirection.RIGHT
+    assert classify_head_direction(lm_front) != HeadDirection.LEFT
+    assert classify_head_direction(lm_front) != HeadDirection.UP
+    assert classify_head_direction(lm_front) != HeadDirection.DOWN

@@ -1151,3 +1151,101 @@ def test_guided_enrollment_commit_fails_if_any_direction_unmet(
     assert res.samples_enrolled == 0
     assert "unmet direction targets" in str(res.error_message)
     assert len(service.get_person_embedding_vectors(person.person_id)) == 0
+
+
+def test_real_turned_face_accepted_during_directional_stages(
+    mock_pipeline: tuple,
+) -> None:
+    """Verify that a realistic turned face (with yaw asymmetry > 2.5) is accepted as RIGHT
+
+    and not rejected by quality gate, while opposite poses and FRONT are rejected.
+    """
+    from dh360_hi.vision.detector import FaceLandmarks
+    from dh360_hi.vision.enrollment import EnrollmentConfig, FaceEnrollmentController
+    from dh360_hi.vision.quality_gate import HeadDirection
+
+    detector, quality_gate, aligner, embedder, service, _ = mock_pipeline
+    guided_config = EnrollmentConfig(
+        target_samples=25,
+        minimum_samples=5,
+        min_sample_interval_seconds=0.0,
+    )
+    controller = FaceEnrollmentController(
+        detector=detector,
+        quality_gate=quality_gate,
+        aligner=aligner,
+        embedder=embedder,
+        person_service=service,
+        config=guided_config,
+    )
+    person = service.create_person("Turned Pose Person")
+    prog = controller.start_session(person.person_id)
+
+    frame = Frame(image=np.zeros((480, 640, 3), dtype=np.uint8), frame_id=1, timestamp=0.0)
+
+    # 1. Complete Stage 1 (FRONT) with 5 samples
+    lm_front = FaceLandmarks(
+        right_eye=(70.0, 70.0),
+        left_eye=(130.0, 70.0),
+        nose_tip=(100.0, 105.0),
+        right_mouth_corner=(75.0, 140.0),
+        left_mouth_corner=(125.0, 140.0),
+    )
+    detector.set_detections(
+        [FaceDetection(bbox=(20.0, 20.0, 100.0, 100.0), confidence=0.95, landmarks=lm_front)]
+    )
+    for i in range(5):
+        vec = np.zeros(128, dtype=np.float32)
+        vec[i] = 1.0
+        embedder.set_vector(vec)
+        prog = controller.process_frame(frame)
+
+    assert prog.direction_counts[HeadDirection.FRONT.value] == 5
+    assert prog.current_direction == HeadDirection.RIGHT.value
+
+    # 2. In Stage 2 (RIGHT):
+    # Present realistic RIGHT pose: nose shifted to x=82 (yaw asymmetry = 48/12 = 4.0 > 2.5)
+    lm_right_strong = FaceLandmarks(
+        right_eye=(70.0, 70.0),
+        left_eye=(130.0, 70.0),
+        nose_tip=(82.0, 105.0),
+        right_mouth_corner=(75.0, 140.0),
+        left_mouth_corner=(125.0, 140.0),
+    )
+    detector.set_detections(
+        [FaceDetection(bbox=(20.0, 20.0, 100.0, 100.0), confidence=0.95, landmarks=lm_right_strong)]
+    )
+    vec = np.zeros(128, dtype=np.float32)
+    vec[10] = 1.0
+    embedder.set_vector(vec)
+    prog = controller.process_frame(frame)
+
+    # MUST be accepted as RIGHT, not rejected as excessive_yaw!
+    assert prog.direction_counts[HeadDirection.RIGHT.value] == 1
+    assert prog.samples_collected == 6
+    assert prog.last_rejection_reason is None
+
+    # Present FRONT pose while in RIGHT stage:
+    detector.set_detections(
+        [FaceDetection(bbox=(20.0, 20.0, 100.0, 100.0), confidence=0.95, landmarks=lm_front)]
+    )
+    prog = controller.process_frame(frame)
+    # Must be rejected, must NOT increment RIGHT counter
+    assert prog.direction_counts[HeadDirection.RIGHT.value] == 1
+    assert prog.last_rejection_reason == SampleRejectionReason.DIRECTION_QUOTA_FULL
+
+    # Present opposite (LEFT) pose while in RIGHT stage:
+    lm_left_strong = FaceLandmarks(
+        right_eye=(70.0, 70.0),
+        left_eye=(130.0, 70.0),
+        nose_tip=(118.0, 105.0),
+        right_mouth_corner=(75.0, 140.0),
+        left_mouth_corner=(125.0, 140.0),
+    )
+    detector.set_detections(
+        [FaceDetection(bbox=(20.0, 20.0, 100.0, 100.0), confidence=0.95, landmarks=lm_left_strong)]
+    )
+    prog = controller.process_frame(frame)
+    # Must be rejected, must NOT increment RIGHT counter
+    assert prog.direction_counts[HeadDirection.RIGHT.value] == 1
+    assert prog.last_rejection_reason == SampleRejectionReason.WRONG_DIRECTION

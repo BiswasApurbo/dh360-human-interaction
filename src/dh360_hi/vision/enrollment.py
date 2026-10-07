@@ -28,6 +28,7 @@ from dh360_hi.vision.embedder import (
 from dh360_hi.vision.frame import Frame
 from dh360_hi.vision.quality_gate import (
     BaseFaceQualityGate,
+    FaceRejectionReason,
     HeadDirection,
     classify_head_direction,
 )
@@ -522,8 +523,19 @@ class FaceEnrollmentController(BaseFaceEnrollment):
 
         # 5. Quality Gate Evaluation
         q_result = self._quality_gate.evaluate(frame, target_detection)
-        if not q_result.is_acceptable:
-            reasons_str = ", ".join(r.value for r in q_result.rejection_reasons)
+        rejection_reasons = list(q_result.rejection_reasons)
+
+        # During guided directional enrollment (RIGHT, LEFT, UP, DOWN), head yaw
+        # is the requested physical posture, not a frontality defect.
+        if self._config.direction_targets:
+            active_stage = self._get_active_stage_direction(s)
+            if active_stage is not None and active_stage != HeadDirection.FRONT:
+                rejection_reasons = [
+                    r for r in rejection_reasons if r != FaceRejectionReason.EXCESSIVE_YAW
+                ]
+
+        if len(rejection_reasons) > 0:
+            reasons_str = ", ".join(r.value for r in rejection_reasons)
             s.last_rejection_reason = SampleRejectionReason.QUALITY_REJECTED
             s.last_rejection_details = f"Quality gate rejected: {reasons_str}"
             s.rejection_counts[SampleRejectionReason.QUALITY_REJECTED.value] += 1

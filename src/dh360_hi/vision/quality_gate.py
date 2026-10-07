@@ -138,7 +138,7 @@ class HeadDirection(StrEnum):
 
 def classify_head_direction(
     landmarks: FaceLandmarks,
-    yaw_threshold: float = 0.12,
+    yaw_threshold: float = 0.08,
     pitch_up_threshold: float = 0.08,
     pitch_down_threshold: float = 0.08,
 ) -> HeadDirection:
@@ -150,7 +150,7 @@ def classify_head_direction(
       normalized by inter-ocular distance. Positive deviation indicates subject looking
       right (towards camera left / right eye side), negative indicates left.
     - Pitch is computed from the vertical position of the nose tip relative to the
-      eye midpoint and mouth midpoint. In canonical frontal pose, nose is roughly midway.
+      eye midpoint and mouth midpoint. In canonical frontal pose, nose is roughly midway (0.50).
       Higher nose position relative to expected height indicates looking UP;
       lower nose position indicates looking DOWN.
     """
@@ -179,8 +179,8 @@ def classify_head_direction(
     yaw_offset = (eyes_mid_x - nt_x) / iod
 
     # Pitch offset: vertical position of nose within eye-to-mouth span
-    # Canonical ratio for nose between eyes and mouth is ~0.49
-    canonical_pitch_ratio = 0.49
+    # Canonical ratio for nose between eyes and mouth is ~0.50
+    canonical_pitch_ratio = 0.50
     current_pitch_ratio = (nt_y - eyes_mid_y) / vert_span
     pitch_offset = current_pitch_ratio - canonical_pitch_ratio
 
@@ -192,16 +192,18 @@ def classify_head_direction(
     if not is_yaw and not is_pitch_up and not is_pitch_down:
         return HeadDirection.FRONT
 
-    # Compare yaw magnitude vs pitch magnitude to resolve diagonals
     yaw_mag = abs(yaw_offset)
     pitch_mag = abs(pitch_offset)
 
-    if is_yaw and (not (is_pitch_up or is_pitch_down) or yaw_mag >= pitch_mag):
+    # Yaw takes precedence when horizontal turn is clear
+    if is_yaw:
+        if (is_pitch_up or is_pitch_down) and pitch_mag > yaw_mag * 1.5:
+            return HeadDirection.UP if is_pitch_up else HeadDirection.DOWN
         return HeadDirection.RIGHT if yaw_offset > 0 else HeadDirection.LEFT
 
-    if is_pitch_up and (not is_yaw or pitch_mag > yaw_mag):
+    if is_pitch_up:
         return HeadDirection.UP
-    if is_pitch_down and (not is_yaw or pitch_mag > yaw_mag):
+    if is_pitch_down:
         return HeadDirection.DOWN
 
     return HeadDirection.FRONT
