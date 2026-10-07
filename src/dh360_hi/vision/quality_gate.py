@@ -136,11 +136,24 @@ class HeadDirection(StrEnum):
     DOWN = "down"
 
 
+def compute_face_pitch_ratio(landmarks: FaceLandmarks) -> float:
+    """Compute vertical position ratio of the nose tip between eyes and mouth.
+
+    Returns:
+        float: (nose_tip_y - eyes_mid_y) / vert_span
+    """
+    eyes_mid_y = (landmarks.right_eye[1] + landmarks.left_eye[1]) / 2.0
+    mouth_mid_y = (landmarks.right_mouth_corner[1] + landmarks.left_mouth_corner[1]) / 2.0
+    vert_span = max(abs(mouth_mid_y - eyes_mid_y), 1e-4)
+    return float((landmarks.nose_tip[1] - eyes_mid_y) / vert_span)
+
+
 def classify_head_direction(
     landmarks: FaceLandmarks,
     yaw_threshold: float = 0.08,
-    pitch_up_threshold: float = 0.08,
-    pitch_down_threshold: float = 0.08,
+    pitch_up_threshold: float = 0.06,
+    pitch_down_threshold: float = 0.06,
+    baseline_pitch_ratio: float = 0.50,
 ) -> HeadDirection:
     """Classify 5-point facial landmarks into a discrete head orientation direction.
 
@@ -150,15 +163,14 @@ def classify_head_direction(
       normalized by inter-ocular distance. Positive deviation indicates subject looking
       right (towards camera left / right eye side), negative indicates left.
     - Pitch is computed from the vertical position of the nose tip relative to the
-      eye midpoint and mouth midpoint. In canonical frontal pose, nose is roughly midway (0.50).
+      eye midpoint and mouth midpoint. In canonical frontal pose, nose is roughly midway (~0.50),
+      or dynamically calibrated to the user's resting frontal baseline.
       Higher nose position relative to expected height indicates looking UP;
       lower nose position indicates looking DOWN.
     """
     re_x, re_y = landmarks.right_eye
     le_x, le_y = landmarks.left_eye
-    nt_x, nt_y = landmarks.nose_tip
-    rm_x, rm_y = landmarks.right_mouth_corner
-    lm_x, lm_y = landmarks.left_mouth_corner
+    nt_x, _ = landmarks.nose_tip
 
     # Inter-ocular distance (scale normalization)
     eye_dx = le_x - re_x
@@ -167,11 +179,6 @@ def classify_head_direction(
 
     # Eye midpoint & mouth midpoint
     eyes_mid_x = (re_x + le_x) / 2.0
-    eyes_mid_y = (re_y + le_y) / 2.0
-    mouth_mid_y = (rm_y + lm_y) / 2.0
-
-    # Vertical facial span between eyes and mouth
-    vert_span = max(abs(mouth_mid_y - eyes_mid_y), 1e-4)
 
     # Yaw offset: positive if nose shifts toward right eye (subject's right),
     # negative if nose shifts toward left eye (subject's left)
@@ -179,10 +186,8 @@ def classify_head_direction(
     yaw_offset = (eyes_mid_x - nt_x) / iod
 
     # Pitch offset: vertical position of nose within eye-to-mouth span
-    # Canonical ratio for nose between eyes and mouth is ~0.50
-    canonical_pitch_ratio = 0.50
-    current_pitch_ratio = (nt_y - eyes_mid_y) / vert_span
-    pitch_offset = current_pitch_ratio - canonical_pitch_ratio
+    current_pitch_ratio = compute_face_pitch_ratio(landmarks)
+    pitch_offset = current_pitch_ratio - baseline_pitch_ratio
 
     # Determine dominant deviation
     is_yaw = abs(yaw_offset) >= yaw_threshold
@@ -195,10 +200,14 @@ def classify_head_direction(
     yaw_mag = abs(yaw_offset)
     pitch_mag = abs(pitch_offset)
 
-    # Yaw takes precedence when horizontal turn is clear
-    if is_yaw:
-        if (is_pitch_up or is_pitch_down) and pitch_mag > yaw_mag * 1.5:
+    # When both horizontal turn and vertical tilt reach threshold,
+    # vertical pitch is weighted to account for natural perspective foreshortening.
+    if is_yaw and (is_pitch_up or is_pitch_down):
+        if pitch_mag * 1.5 >= yaw_mag:
             return HeadDirection.UP if is_pitch_up else HeadDirection.DOWN
+        return HeadDirection.RIGHT if yaw_offset > 0 else HeadDirection.LEFT
+
+    if is_yaw:
         return HeadDirection.RIGHT if yaw_offset > 0 else HeadDirection.LEFT
 
     if is_pitch_up:

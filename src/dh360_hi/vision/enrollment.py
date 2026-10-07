@@ -31,6 +31,7 @@ from dh360_hi.vision.quality_gate import (
     FaceRejectionReason,
     HeadDirection,
     classify_head_direction,
+    compute_face_pitch_ratio,
 )
 
 logger = logging.getLogger(__name__)
@@ -200,6 +201,8 @@ class _ActiveSessionData:
         }
     )
     current_direction: HeadDirection | None = None
+    baseline_pitch_ratio: float | None = None
+    front_pitch_ratios: list[float] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -543,8 +546,44 @@ class FaceEnrollmentController(BaseFaceEnrollment):
 
         # 5b. Head Direction Classification & Guided Stage Sequencing
         detected_direction = HeadDirection.FRONT
+        cur_pitch_ratio = None
+        p_offset = None
+        y_offset = None
         if target_detection.landmarks is not None:
-            detected_direction = classify_head_direction(target_detection.landmarks)
+            active_stage = (
+                self._get_active_stage_direction(s) if self._config.direction_targets else None
+            )
+            cur_pitch_ratio = compute_face_pitch_ratio(target_detection.landmarks)
+            lm = target_detection.landmarks
+            iod = max(
+                float(np.hypot(lm.left_eye[0] - lm.right_eye[0], lm.left_eye[1] - lm.right_eye[1])),
+                1e-4,
+            )
+            y_offset = ((lm.right_eye[0] + lm.left_eye[0]) / 2.0 - lm.nose_tip[0]) / iod
+            if s.baseline_pitch_ratio is None:
+                if active_stage == HeadDirection.FRONT and abs(y_offset) < 0.12:
+                    baseline_pitch = cur_pitch_ratio
+                else:
+                    baseline_pitch = 0.50
+            else:
+                baseline_pitch = s.baseline_pitch_ratio
+            p_offset = cur_pitch_ratio - baseline_pitch
+            detected_direction = classify_head_direction(
+                target_detection.landmarks,
+                baseline_pitch_ratio=baseline_pitch,
+            )
+            logger.info(
+                "Enrollment pose: detected=%s (active=%s) | "
+                "pitch_ratio=%.4f (baseline=%.4f, offset=%.4f) | yaw_offset=%.4f",
+                detected_direction.value,
+                self._get_active_stage_direction(s).value
+                if self._config.direction_targets and self._get_active_stage_direction(s)
+                else "none",
+                cur_pitch_ratio,
+                baseline_pitch,
+                p_offset,
+                y_offset,
+            )
 
         dir_key = detected_direction.value
         dir_target = self._config.direction_targets.get(dir_key, self._config.samples_per_direction)
@@ -574,6 +613,12 @@ class FaceEnrollmentController(BaseFaceEnrollment):
                         f"direction '{active_stage.value}'"
                     )
                     s.rejection_counts[SampleRejectionReason.WRONG_DIRECTION.value] += 1
+                logger.info(
+                    "Enrollment frame rejected at stage '%s': %s (%s)",
+                    active_stage.value,
+                    s.last_rejection_reason.value,
+                    s.last_rejection_details,
+                )
                 return self._build_progress(s)
 
             dir_key = active_stage.value
@@ -658,6 +703,11 @@ class FaceEnrollmentController(BaseFaceEnrollment):
         s.last_sample_time = curr_time
         s.last_rejection_reason = None
         s.last_rejection_details = None
+
+        if detected_direction == HeadDirection.FRONT and target_detection.landmarks is not None:
+            sample_pitch = compute_face_pitch_ratio(target_detection.landmarks)
+            s.front_pitch_ratios.append(sample_pitch)
+            s.baseline_pitch_ratio = float(np.mean(s.front_pitch_ratios))
 
         logger.debug(
             "Accepted enrollment sample %d/%d (%s %d/%d) for person '%s' (quality: %.2f)",

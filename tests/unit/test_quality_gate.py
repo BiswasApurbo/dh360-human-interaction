@@ -428,3 +428,128 @@ def test_realistic_webcam_poses_and_opposite_rejections() -> None:
     assert classify_head_direction(lm_front) != HeadDirection.LEFT
     assert classify_head_direction(lm_front) != HeadDirection.UP
     assert classify_head_direction(lm_front) != HeadDirection.DOWN
+
+
+def test_up_down_pose_classification_and_mutual_exclusion() -> None:
+    """Verify UP/DOWN pose detection, mutual exclusion, and baseline calibration.
+
+    Requirements:
+    - Representative UP pose is classified as UP
+    - Representative DOWN pose is classified as DOWN
+    - FRONT pose is NOT classified as UP or DOWN
+    - UP pose is NOT classified as DOWN
+    - DOWN pose is NOT classified as UP
+    - Poses with realistic natural slight yaw (pitch_mag > yaw_mag) classify correctly
+    - Dynamic baseline calibration accommodates varied resting facial proportions
+    """
+    from dh360_hi.vision.quality_gate import (
+        HeadDirection,
+        classify_head_direction,
+        compute_face_pitch_ratio,
+    )
+
+    # Eyes at y=70, mouth at y=140 -> vert_span = 70.0, iod = 60.0
+    # Clean FRONT (nt_y=105 -> ratio=0.50)
+    lm_front = _create_synthetic_landmarks(
+        re=(70.0, 70.0),
+        le=(130.0, 70.0),
+        nt=(100.0, 105.0),
+        rm=(75.0, 140.0),
+        lm=(125.0, 140.0),
+    )
+    # Representative UP pose (nt_y=98 -> ratio=0.40, offset=-0.10 <= -0.06)
+    lm_up = _create_synthetic_landmarks(
+        re=(70.0, 70.0),
+        le=(130.0, 70.0),
+        nt=(100.0, 98.0),
+        rm=(75.0, 140.0),
+        lm=(125.0, 140.0),
+    )
+    # Representative DOWN pose (nt_y=112 -> ratio=0.60, offset=+0.10 >= +0.06)
+    lm_down = _create_synthetic_landmarks(
+        re=(70.0, 70.0),
+        le=(130.0, 70.0),
+        nt=(100.0, 112.0),
+        rm=(75.0, 140.0),
+        lm=(125.0, 140.0),
+    )
+    # Representative UP pose with natural slight yaw (nt_x=95 -> yaw_off=+0.083, pitch_off=-0.10)
+    # Pitch magnitude (0.10) > yaw magnitude (0.083), so UP must take precedence
+    lm_up_slight_yaw = _create_synthetic_landmarks(
+        re=(70.0, 70.0),
+        le=(130.0, 70.0),
+        nt=(95.0, 98.0),
+        rm=(75.0, 140.0),
+        lm=(125.0, 140.0),
+    )
+    # Representative DOWN pose with natural slight yaw (nt_x=105 -> yaw_off=-0.083, pitch_off=+0.10)
+    # Pitch magnitude (0.10) > yaw magnitude (0.083), so DOWN must take precedence
+    lm_down_slight_yaw = _create_synthetic_landmarks(
+        re=(70.0, 70.0),
+        le=(130.0, 70.0),
+        nt=(105.0, 112.0),
+        rm=(75.0, 140.0),
+        lm=(125.0, 140.0),
+    )
+
+    # 1. Representative UP pose is classified as UP
+    assert classify_head_direction(lm_up) == HeadDirection.UP
+    assert classify_head_direction(lm_up_slight_yaw) == HeadDirection.UP
+
+    # 2. Representative DOWN pose is classified as DOWN
+    assert classify_head_direction(lm_down) == HeadDirection.DOWN
+    assert classify_head_direction(lm_down_slight_yaw) == HeadDirection.DOWN
+
+    # 3. FRONT pose is NOT classified as UP or DOWN
+    assert classify_head_direction(lm_front) == HeadDirection.FRONT
+    assert classify_head_direction(lm_front) != HeadDirection.UP
+    assert classify_head_direction(lm_front) != HeadDirection.DOWN
+
+    # 4. UP pose is NOT classified as DOWN
+    assert classify_head_direction(lm_up) != HeadDirection.DOWN
+    assert classify_head_direction(lm_up_slight_yaw) != HeadDirection.DOWN
+
+    # 5. DOWN pose is NOT classified as UP
+    assert classify_head_direction(lm_down) != HeadDirection.UP
+    assert classify_head_direction(lm_down_slight_yaw) != HeadDirection.UP
+
+    # 6. Dynamic baseline calibration (resting face ratio != 0.50)
+    # Resting ratio = 0.54 (nt_y = 70 + 70*0.54 = 107.8)
+    lm_resting_54 = _create_synthetic_landmarks(
+        re=(70.0, 70.0),
+        le=(130.0, 70.0),
+        nt=(100.0, 107.8),
+        rm=(75.0, 140.0),
+        lm=(125.0, 140.0),
+    )
+    # Tilts up by 0.08 relative to resting face (nt_y = 102.2 -> ratio = 0.46)
+    lm_up_from_54 = _create_synthetic_landmarks(
+        re=(70.0, 70.0),
+        le=(130.0, 70.0),
+        nt=(100.0, 102.2),
+        rm=(75.0, 140.0),
+        lm=(125.0, 140.0),
+    )
+    # Tilts down by 0.08 relative to resting face (nt_y = 113.4 -> ratio = 0.62)
+    lm_down_from_54 = _create_synthetic_landmarks(
+        re=(70.0, 70.0),
+        le=(130.0, 70.0),
+        nt=(100.0, 113.4),
+        rm=(75.0, 140.0),
+        lm=(125.0, 140.0),
+    )
+
+    baseline_54 = compute_face_pitch_ratio(lm_resting_54)
+    assert abs(baseline_54 - 0.54) < 1e-4
+
+    assert (
+        classify_head_direction(lm_resting_54, baseline_pitch_ratio=baseline_54)
+        == HeadDirection.FRONT
+    )
+    assert (
+        classify_head_direction(lm_up_from_54, baseline_pitch_ratio=baseline_54) == HeadDirection.UP
+    )
+    assert (
+        classify_head_direction(lm_down_from_54, baseline_pitch_ratio=baseline_54)
+        == HeadDirection.DOWN
+    )
