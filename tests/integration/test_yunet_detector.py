@@ -1,5 +1,6 @@
 """Integration tests for YuNet face detector execution."""
 
+import threading
 from pathlib import Path
 
 import cv2
@@ -99,3 +100,74 @@ def test_yunet_confidence_threshold_setter() -> None:
     assert detector.confidence_threshold == 0.5
     detector.confidence_threshold = 0.8
     assert detector.confidence_threshold == 0.8
+
+
+@pytest.mark.skipif(not MODEL_PATH.exists(), reason="YuNet model weights not downloaded")
+def test_yunet_detector_thread_safety() -> None:
+    """Verify concurrent detection calls from multiple threads run safely
+    without graph buffer corruption.
+    """
+    detector = YuNetFaceDetector(
+        model_path=MODEL_PATH,
+        input_size=(320, 320),
+    )
+
+    errors: list[Exception] = []
+
+    def worker(img: np.ndarray, frame_id_base: int) -> None:
+        for idx in range(20):
+            try:
+                res = detector.detect(img, frame_id=frame_id_base + idx)
+                assert res is not None
+            except Exception as exc:
+                errors.append(exc)
+                break
+
+    img_480p = np.zeros((480, 640, 3), dtype=np.uint8)
+    img_720p = np.zeros((720, 1280, 3), dtype=np.uint8)
+    img_320p = np.zeros((320, 320, 3), dtype=np.uint8)
+
+    threads = [
+        threading.Thread(target=worker, args=(img_480p, 100)),
+        threading.Thread(target=worker, args=(img_720p, 200)),
+        threading.Thread(target=worker, args=(img_320p, 300)),
+        threading.Thread(target=worker, args=(img_480p, 400)),
+    ]
+
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(errors) == 0, f"Concurrent detection raised errors: {errors}"
+
+
+@pytest.mark.skipif(not MODEL_PATH.exists(), reason="YuNet model weights not downloaded")
+def test_yunet_detector_frame_normalization() -> None:
+    """Verify detector normalizes non-contiguous, BGRA, and grayscale frames."""
+    detector = YuNetFaceDetector(
+        model_path=MODEL_PATH,
+        input_size=(320, 320),
+    )
+
+    # 1. Non-contiguous sliced frame
+    full_img = np.zeros((480, 640, 3), dtype=np.uint8)
+    sliced_img = full_img[::2, ::2]  # non-contiguous view
+    assert not sliced_img.flags.c_contiguous
+    res_sliced = detector.detect(sliced_img)
+    assert res_sliced.input_size == (320, 240)
+
+    # 2. 4-channel BGRA frame
+    bgra_img = np.zeros((240, 320, 4), dtype=np.uint8)
+    res_bgra = detector.detect(bgra_img)
+    assert res_bgra.input_size == (320, 240)
+
+    # 3. 1-channel grayscale frame
+    gray_img = np.zeros((240, 320), dtype=np.uint8)
+    res_gray = detector.detect(gray_img)
+    assert res_gray.input_size == (320, 240)
+
+    # 4. Empty/zero dimension frame
+    empty_img = np.zeros((0, 0, 3), dtype=np.uint8)
+    res_empty = detector.detect(empty_img)
+    assert len(res_empty.detections) == 0

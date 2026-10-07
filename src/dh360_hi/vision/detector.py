@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -129,6 +130,7 @@ class YuNetFaceDetector(BaseFaceDetector):
                 f"Please run 'python scripts/download_models.py' to download model weights."
             )
 
+        self._lock = threading.RLock()
         self._input_size = input_size
         self._score_threshold = float(score_threshold)
         self._nms_threshold = float(nms_threshold)
@@ -156,64 +158,91 @@ class YuNetFaceDetector(BaseFaceDetector):
             image = frame
             current_frame_id = frame_id
 
+        if image is None or image.size == 0 or image.ndim < 2:
+            return DetectionResult(
+                detections=[],
+                frame_id=current_frame_id,
+                latency_ms=0.0,
+                input_size=self._input_size,
+            )
+
+        # Normalize channel layout: YuNet expects 3-channel BGR
+        if image.ndim == 2:
+            image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        elif image.ndim == 3 and image.shape[2] == 4:
+            image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+        elif image.ndim == 3 and image.shape[2] == 1:
+            image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+
+        # Ensure contiguous uint8 array
+        if not image.flags.c_contiguous:
+            image = np.ascontiguousarray(image)
+        if image.dtype != np.uint8:
+            image = image.astype(np.uint8)
+
         height, width = image.shape[:2]
         frame_size = (width, height)
 
-        # Update input size on detector if frame dimensions changed
-        if self._input_size != frame_size:
-            self.input_size = frame_size
+        with self._lock:
+            # Update input size on detector if frame dimensions changed
+            if self._input_size != frame_size:
+                self.input_size = frame_size
 
-        start_time = time.perf_counter()
-        _, raw_faces = self._detector.detect(image)
-        latency_ms = (time.perf_counter() - start_time) * 1000.0
+            start_time = time.perf_counter()
+            _, raw_faces = self._detector.detect(image)
+            latency_ms = (time.perf_counter() - start_time) * 1000.0
 
-        detections: list[FaceDetection] = []
-        if raw_faces is not None and len(raw_faces) > 0:
-            for face_row in raw_faces:
-                # Raw row format: [x, y, w, h, re_x, re_y, le_x, le_y, nt_x, nt_y, ...]
-                bbox = (
-                    float(face_row[0]),
-                    float(face_row[1]),
-                    float(face_row[2]),
-                    float(face_row[3]),
-                )
-                landmarks = FaceLandmarks(
-                    right_eye=(float(face_row[4]), float(face_row[5])),
-                    left_eye=(float(face_row[6]), float(face_row[7])),
-                    nose_tip=(float(face_row[8]), float(face_row[9])),
-                    right_mouth_corner=(float(face_row[10]), float(face_row[11])),
-                    left_mouth_corner=(float(face_row[12]), float(face_row[13])),
-                )
-                score = float(face_row[14])
-                detections.append(
-                    FaceDetection(
-                        bbox=bbox,
-                        confidence=score,
-                        landmarks=landmarks,
+            detections: list[FaceDetection] = []
+            if raw_faces is not None and len(raw_faces) > 0:
+                for face_row in raw_faces:
+                    # Raw row format: [x, y, w, h, re_x, re_y, le_x, le_y, nt_x, nt_y, ...]
+                    bbox = (
+                        float(face_row[0]),
+                        float(face_row[1]),
+                        float(face_row[2]),
+                        float(face_row[3]),
                     )
-                )
+                    landmarks = FaceLandmarks(
+                        right_eye=(float(face_row[4]), float(face_row[5])),
+                        left_eye=(float(face_row[6]), float(face_row[7])),
+                        nose_tip=(float(face_row[8]), float(face_row[9])),
+                        right_mouth_corner=(float(face_row[10]), float(face_row[11])),
+                        left_mouth_corner=(float(face_row[12]), float(face_row[13])),
+                    )
+                    score = float(face_row[14])
+                    detections.append(
+                        FaceDetection(
+                            bbox=bbox,
+                            confidence=score,
+                            landmarks=landmarks,
+                        )
+                    )
 
-        return DetectionResult(
-            detections=detections,
-            frame_id=current_frame_id,
-            latency_ms=latency_ms,
-            input_size=self._input_size,
-        )
+            return DetectionResult(
+                detections=detections,
+                frame_id=current_frame_id,
+                latency_ms=latency_ms,
+                input_size=self._input_size,
+            )
 
     @property
     def input_size(self) -> tuple[int, int]:
-        return self._input_size
+        with self._lock:
+            return self._input_size
 
     @input_size.setter
     def input_size(self, size: tuple[int, int]) -> None:
-        self._input_size = size
-        self._detector.setInputSize(self._input_size)
+        with self._lock:
+            self._input_size = size
+            self._detector.setInputSize(self._input_size)
 
     @property
     def confidence_threshold(self) -> float:
-        return self._score_threshold
+        with self._lock:
+            return self._score_threshold
 
     @confidence_threshold.setter
     def confidence_threshold(self, threshold: float) -> None:
-        self._score_threshold = float(threshold)
-        self._detector.setScoreThreshold(self._score_threshold)
+        with self._lock:
+            self._score_threshold = float(threshold)
+            self._detector.setScoreThreshold(self._score_threshold)
