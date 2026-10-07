@@ -481,6 +481,23 @@
 
     async function startEnrollment(token, personId) {
       try {
+        const consentResp = await fetch(`/persons/${personId}`, {
+          method: "PATCH",
+          headers: {
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ consent_status: "granted" })
+        });
+
+        if (!consentResp.ok) {
+          const cErr = await consentResp.json().catch(() => ({}));
+          const cMsg = cErr.detail || cErr.message || `HTTP ${consentResp.status}`;
+          showNotice(`Failed to set biometric consent: ${cMsg}`, "error");
+          appendLog(`consent update failed: HTTP ${consentResp.status}`);
+          return;
+        }
+
         const resp = await fetch(`/persons/${personId}/enrollment/sessions`, {
           method: "POST",
           headers: {
