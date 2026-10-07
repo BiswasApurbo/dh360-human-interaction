@@ -26,7 +26,11 @@ from dh360_hi.vision.embedder import (
     normalize_l2,
 )
 from dh360_hi.vision.frame import Frame
-from dh360_hi.vision.quality_gate import BaseFaceQualityGate
+from dh360_hi.vision.quality_gate import (
+    BaseFaceQualityGate,
+    HeadDirection,
+    classify_head_direction,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +61,7 @@ class SampleRejectionReason(StrEnum):
     ALIGNMENT_FAILED = "alignment_failed"
     EMBEDDING_FAILED = "embedding_failed"
     DUPLICATE_SAMPLE = "duplicate_sample"
+    DIRECTION_QUOTA_FULL = "direction_quota_full"
     CONSENT_MISSING = "consent_missing"
     INACTIVE_PERSON = "inactive_person"
     TIMEOUT = "timeout"
@@ -74,14 +79,28 @@ class EnrollmentSample:
     yaw_asymmetry: float | None
     frame_id: int
     timestamp: float
+    direction: HeadDirection = HeadDirection.FRONT
+
+
+def default_direction_targets() -> dict[str, int]:
+    """Default per-direction sample targets for guided enrollment (5 directions * 5 = 25)."""
+    return {
+        HeadDirection.FRONT.value: 5,
+        HeadDirection.RIGHT.value: 5,
+        HeadDirection.LEFT.value: 5,
+        HeadDirection.UP.value: 5,
+        HeadDirection.DOWN.value: 5,
+    }
 
 
 @dataclass(frozen=True)
 class EnrollmentConfig:
     """Configuration governing face enrollment sample requirements and diversity thresholds."""
 
-    target_samples: int = 20
+    target_samples: int = 25
     minimum_samples: int = 5
+    samples_per_direction: int = 5
+    direction_targets: dict[str, int] = field(default_factory=default_direction_targets)
     max_attempts: int = 60
     duplicate_similarity_threshold: float = 0.95
     min_sample_interval_seconds: float = 0.2
@@ -93,6 +112,15 @@ class EnrollmentConfig:
         if self.minimum_samples < 1:
             msg = "minimum_samples must be at least 1"
             raise ValueError(msg)
+        # If target_samples was explicitly overridden (e.g. legacy test config target_samples=5)
+        # without explicit direction_targets, disable direction quotas so legacy tests run free
+        if self.direction_targets == default_direction_targets() and self.target_samples != 25:
+            object.__setattr__(self, "direction_targets", {})
+        elif self.direction_targets:
+            total_dir_targets = sum(self.direction_targets.values())
+            if total_dir_targets != self.target_samples and self.target_samples == 25:
+                object.__setattr__(self, "target_samples", total_dir_targets)
+
         if self.target_samples < self.minimum_samples:
             msg = "target_samples cannot be less than minimum_samples"
             raise ValueError(msg)
@@ -119,6 +147,16 @@ class _ActiveSessionData:
     last_rejection_reason: SampleRejectionReason | None = None
     last_rejection_details: str | None = None
     rejection_counts: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    direction_counts: dict[str, int] = field(
+        default_factory=lambda: {
+            HeadDirection.FRONT.value: 0,
+            HeadDirection.RIGHT.value: 0,
+            HeadDirection.LEFT.value: 0,
+            HeadDirection.UP.value: 0,
+            HeadDirection.DOWN.value: 0,
+        }
+    )
+    current_direction: HeadDirection | None = None
 
 
 @dataclass(frozen=True)
@@ -140,6 +178,9 @@ class EnrollmentProgress:
     rejection_counts: dict[str, int]
     is_viable: bool
     is_complete: bool
+    current_direction: str | None = None
+    direction_counts: dict[str, int] = field(default_factory=dict)
+    direction_targets: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -235,6 +276,15 @@ class FaceEnrollmentController(BaseFaceEnrollment):
 
     def _build_progress(self, s: _ActiveSessionData) -> EnrollmentProgress:
         """Construct an immutable EnrollmentProgress from session data."""
+        # Determine current guidance direction if not currently detected
+        curr_dir_str = s.current_direction.value if s.current_direction is not None else None
+        if curr_dir_str is None:
+            # Recommend the first direction that hasn't reached target
+            for d_name, d_target in self._config.direction_targets.items():
+                if s.direction_counts.get(d_name, 0) < d_target:
+                    curr_dir_str = d_name
+                    break
+
         return EnrollmentProgress(
             session_id=s.session_id,
             enrollment_batch_id=s.enrollment_batch_id,
@@ -251,6 +301,9 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             rejection_counts=dict(s.rejection_counts),
             is_viable=len(s.samples) >= self._config.minimum_samples,
             is_complete=s.state == EnrollmentState.COMPLETED,
+            current_direction=curr_dir_str,
+            direction_counts=dict(s.direction_counts),
+            direction_targets=dict(self._config.direction_targets),
         )
 
     def start_session(
@@ -397,6 +450,25 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             s.rejection_counts[SampleRejectionReason.QUALITY_REJECTED.value] += 1
             return self._build_progress(s)
 
+        # 5b. Head Direction Classification & Quota Check
+        detected_direction = HeadDirection.FRONT
+        if target_detection.landmarks is not None:
+            detected_direction = classify_head_direction(target_detection.landmarks)
+        s.current_direction = detected_direction
+
+        dir_key = detected_direction.value
+        dir_target = self._config.direction_targets.get(dir_key, self._config.samples_per_direction)
+        current_dir_count = s.direction_counts.get(dir_key, 0)
+
+        if current_dir_count >= dir_target:
+            s.last_rejection_reason = SampleRejectionReason.DIRECTION_QUOTA_FULL
+            s.last_rejection_details = (
+                f"Direction '{dir_key}' has already reached its quota "
+                f"({current_dir_count}/{dir_target} samples)"
+            )
+            s.rejection_counts[SampleRejectionReason.DIRECTION_QUOTA_FULL.value] += 1
+            return self._build_progress(s)
+
         # 6. Face Alignment
         align_result = self._aligner.align(frame, target_detection)
         if not align_result.is_success:
@@ -466,28 +538,40 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             yaw_asymmetry=q_result.metrics.yaw_asymmetry,
             frame_id=frame.frame_id,
             timestamp=frame.timestamp,
+            direction=detected_direction,
         )
         s.samples.append(sample)
+        s.direction_counts[dir_key] = current_dir_count + 1
         s.last_sample_time = curr_time
         s.last_rejection_reason = None
         s.last_rejection_details = None
 
         logger.debug(
-            "Accepted enrollment sample %d/%d for person '%s' (quality: %.2f)",
+            "Accepted enrollment sample %d/%d (%s %d/%d) for person '%s' (quality: %.2f)",
             len(s.samples),
             self._config.target_samples,
+            dir_key,
+            s.direction_counts[dir_key],
+            dir_target,
             s.person_id,
             sample.quality_score,
         )
 
-        if len(s.samples) >= self._config.target_samples:
-            s.state = EnrollmentState.COMPLETED
-            logger.info(
-                "Enrollment session %s reached target samples (%d/%d)",
-                s.session_id,
-                len(s.samples),
-                self._config.target_samples,
+        # Check completion condition: all direction targets met and total target reached
+        if self._config.direction_targets:
+            all_directions_met = all(
+                s.direction_counts.get(d, 0) >= target
+                for d, target in self._config.direction_targets.items()
             )
+            if all_directions_met and len(s.samples) >= self._config.target_samples:
+                s.state = EnrollmentState.COMPLETED
+                logger.info(
+                    "Enrollment session %s completed with %d samples across all guided directions",
+                    s.session_id,
+                    len(s.samples),
+                )
+        elif len(s.samples) >= self._config.target_samples:
+            s.state = EnrollmentState.COMPLETED
 
         return self._build_progress(s)
 

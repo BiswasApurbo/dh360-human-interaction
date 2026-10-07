@@ -126,6 +126,87 @@ def compute_pose_metrics(
     return roll_angle_deg, yaw_asymmetry
 
 
+class HeadDirection(StrEnum):
+    """Head gaze/pose orientation relative to camera for guided biometric enrollment."""
+
+    FRONT = "front"
+    RIGHT = "right"
+    LEFT = "left"
+    UP = "up"
+    DOWN = "down"
+
+
+def classify_head_direction(
+    landmarks: FaceLandmarks,
+    yaw_threshold: float = 0.12,
+    pitch_up_threshold: float = 0.08,
+    pitch_down_threshold: float = 0.08,
+) -> HeadDirection:
+    """Classify 5-point facial landmarks into a discrete head orientation direction.
+
+    Geometry:
+    - Eye midpoint and inter-ocular span define scale and horizontal reference.
+    - Yaw is computed from signed horizontal deviation of nose tip from eye midpoint,
+      normalized by inter-ocular distance. Positive deviation indicates subject looking
+      right (towards camera left / right eye side), negative indicates left.
+    - Pitch is computed from the vertical position of the nose tip relative to the
+      eye midpoint and mouth midpoint. In canonical frontal pose, nose is roughly midway.
+      Higher nose position relative to expected height indicates looking UP;
+      lower nose position indicates looking DOWN.
+    """
+    re_x, re_y = landmarks.right_eye
+    le_x, le_y = landmarks.left_eye
+    nt_x, nt_y = landmarks.nose_tip
+    rm_x, rm_y = landmarks.right_mouth_corner
+    lm_x, lm_y = landmarks.left_mouth_corner
+
+    # Inter-ocular distance (scale normalization)
+    eye_dx = le_x - re_x
+    eye_dy = le_y - re_y
+    iod = max(float(np.hypot(eye_dx, eye_dy)), 1e-4)
+
+    # Eye midpoint & mouth midpoint
+    eyes_mid_x = (re_x + le_x) / 2.0
+    eyes_mid_y = (re_y + le_y) / 2.0
+    mouth_mid_y = (rm_y + lm_y) / 2.0
+
+    # Vertical facial span between eyes and mouth
+    vert_span = max(abs(mouth_mid_y - eyes_mid_y), 1e-4)
+
+    # Yaw offset: positive if nose shifts toward right eye (subject's right),
+    # negative if nose shifts toward left eye (subject's left)
+    # (re_x < le_x, so eyes_mid_x - nt_x is positive when nose is closer to right eye)
+    yaw_offset = (eyes_mid_x - nt_x) / iod
+
+    # Pitch offset: vertical position of nose within eye-to-mouth span
+    # Canonical ratio for nose between eyes and mouth is ~0.49
+    canonical_pitch_ratio = 0.49
+    current_pitch_ratio = (nt_y - eyes_mid_y) / vert_span
+    pitch_offset = current_pitch_ratio - canonical_pitch_ratio
+
+    # Determine dominant deviation
+    is_yaw = abs(yaw_offset) >= yaw_threshold
+    is_pitch_up = pitch_offset <= -pitch_up_threshold
+    is_pitch_down = pitch_offset >= pitch_down_threshold
+
+    if not is_yaw and not is_pitch_up and not is_pitch_down:
+        return HeadDirection.FRONT
+
+    # Compare yaw magnitude vs pitch magnitude to resolve diagonals
+    yaw_mag = abs(yaw_offset)
+    pitch_mag = abs(pitch_offset)
+
+    if is_yaw and (not (is_pitch_up or is_pitch_down) or yaw_mag >= pitch_mag):
+        return HeadDirection.RIGHT if yaw_offset > 0 else HeadDirection.LEFT
+
+    if is_pitch_up and (not is_yaw or pitch_mag > yaw_mag):
+        return HeadDirection.UP
+    if is_pitch_down and (not is_yaw or pitch_mag > yaw_mag):
+        return HeadDirection.DOWN
+
+    return HeadDirection.FRONT
+
+
 class BaseFaceQualityGate(ABC):
     """Abstract interface for face quality evaluation."""
 

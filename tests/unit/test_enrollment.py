@@ -676,3 +676,171 @@ def test_timeout_still_fires_after_active_collection(
     assert prog2.samples_collected == 0
 
     controller.cancel_session()
+
+
+def test_guided_enrollment_direction_counting_and_quota_enforcement(
+    mock_pipeline: tuple,
+) -> None:
+    """Verify 5-per-direction sample counting, quota full rejection, and progress fields."""
+    from dh360_hi.contracts.dto import EnrollmentProgressDTO
+    from dh360_hi.vision.detector import FaceLandmarks
+    from dh360_hi.vision.enrollment import EnrollmentConfig, FaceEnrollmentController
+    from dh360_hi.vision.quality_gate import HeadDirection
+
+    detector, quality_gate, aligner, embedder, service, _ = mock_pipeline
+    guided_config = EnrollmentConfig(
+        target_samples=25,
+        minimum_samples=5,
+        min_sample_interval_seconds=0.0,
+    )
+    controller = FaceEnrollmentController(
+        detector=detector,
+        quality_gate=quality_gate,
+        aligner=aligner,
+        embedder=embedder,
+        person_service=service,
+        config=guided_config,
+    )
+    person = service.create_person("Guided Person")
+    prog = controller.start_session(person.person_id)
+
+    # Initial progress has default targets and zero counts
+    assert prog.direction_targets[HeadDirection.FRONT.value] == 5
+    assert prog.direction_targets[HeadDirection.RIGHT.value] == 5
+    assert prog.direction_counts[HeadDirection.FRONT.value] == 0
+    assert prog.current_direction == HeadDirection.FRONT.value
+
+    # DTO round-trip preserves direction data
+    dto = EnrollmentProgressDTO.from_progress(prog)
+    assert dto.current_direction == HeadDirection.FRONT.value
+    assert dto.direction_targets[HeadDirection.FRONT.value] == 5
+    assert dto.direction_counts[HeadDirection.FRONT.value] == 0
+
+    frame = Frame(image=np.zeros((480, 640, 3), dtype=np.uint8), frame_id=1, timestamp=0.0)
+
+    # Configure frontal landmarks
+    lm_front = FaceLandmarks(
+        right_eye=(70.0, 70.0),
+        left_eye=(130.0, 70.0),
+        nose_tip=(100.0, 104.3),
+        right_mouth_corner=(75.0, 140.0),
+        left_mouth_corner=(125.0, 140.0),
+    )
+    detector.set_detections(
+        [FaceDetection(bbox=(20.0, 20.0, 100.0, 100.0), confidence=0.95, landmarks=lm_front)]
+    )
+
+    # Collect 5 frontal samples with unique embeddings
+    for i in range(5):
+        vec = np.zeros(128, dtype=np.float32)
+        vec[i] = 1.0
+        embedder.set_vector(vec)
+        prog = controller.process_frame(frame)
+        assert prog.direction_counts[HeadDirection.FRONT.value] == i + 1
+
+    assert prog.direction_counts[HeadDirection.FRONT.value] == 5
+
+    # 6th frontal sample must be rejected with DIRECTION_QUOTA_FULL
+    vec6 = np.zeros(128, dtype=np.float32)
+    vec6[5] = 1.0
+    embedder.set_vector(vec6)
+    prog = controller.process_frame(frame)
+    assert prog.last_rejection_reason == SampleRejectionReason.DIRECTION_QUOTA_FULL
+    assert prog.direction_counts[HeadDirection.FRONT.value] == 5
+    assert prog.samples_collected == 5
+
+    controller.cancel_session()
+
+
+def test_guided_enrollment_completes_at_25_samples_across_all_directions(
+    mock_pipeline: tuple,
+) -> None:
+    """Verify session completes when all 5 directions have 5 accepted samples (25 total)."""
+    from dh360_hi.vision.detector import FaceLandmarks
+    from dh360_hi.vision.enrollment import EnrollmentConfig, FaceEnrollmentController
+    from dh360_hi.vision.quality_gate import HeadDirection
+
+    detector, quality_gate, aligner, embedder, service, _ = mock_pipeline
+    guided_config = EnrollmentConfig(
+        target_samples=25,
+        minimum_samples=5,
+        min_sample_interval_seconds=0.0,
+    )
+    controller = FaceEnrollmentController(
+        detector=detector,
+        quality_gate=quality_gate,
+        aligner=aligner,
+        embedder=embedder,
+        person_service=service,
+        config=guided_config,
+    )
+    person = service.create_person("All Directions Person")
+    controller.start_session(person.person_id)
+
+    frame = Frame(image=np.zeros((480, 640, 3), dtype=np.uint8), frame_id=1, timestamp=0.0)
+
+    directions_landmarks = {
+        HeadDirection.FRONT: FaceLandmarks(
+            right_eye=(70.0, 70.0),
+            left_eye=(130.0, 70.0),
+            nose_tip=(100.0, 104.3),
+            right_mouth_corner=(75.0, 140.0),
+            left_mouth_corner=(125.0, 140.0),
+        ),
+        HeadDirection.RIGHT: FaceLandmarks(
+            right_eye=(70.0, 70.0),
+            left_eye=(130.0, 70.0),
+            nose_tip=(88.0, 104.3),
+            right_mouth_corner=(75.0, 140.0),
+            left_mouth_corner=(125.0, 140.0),
+        ),
+        HeadDirection.LEFT: FaceLandmarks(
+            right_eye=(70.0, 70.0),
+            left_eye=(130.0, 70.0),
+            nose_tip=(112.0, 104.3),
+            right_mouth_corner=(75.0, 140.0),
+            left_mouth_corner=(125.0, 140.0),
+        ),
+        HeadDirection.UP: FaceLandmarks(
+            right_eye=(70.0, 70.0),
+            left_eye=(130.0, 70.0),
+            nose_tip=(100.0, 90.0),
+            right_mouth_corner=(75.0, 140.0),
+            left_mouth_corner=(125.0, 140.0),
+        ),
+        HeadDirection.DOWN: FaceLandmarks(
+            right_eye=(70.0, 70.0),
+            left_eye=(130.0, 70.0),
+            nose_tip=(100.0, 118.0),
+            right_mouth_corner=(75.0, 140.0),
+            left_mouth_corner=(125.0, 140.0),
+        ),
+    }
+
+    sample_idx = 0
+    prog = None
+    for _direction, lm in directions_landmarks.items():
+        detector.set_detections(
+            [FaceDetection(bbox=(20.0, 20.0, 100.0, 100.0), confidence=0.95, landmarks=lm)]
+        )
+        for _ in range(5):
+            vec = np.zeros(128, dtype=np.float32)
+            vec[sample_idx % 128] = 1.0
+            vec[(sample_idx + 1) % 128] = float(sample_idx + 1)
+            embedder.set_vector(vec)
+            sample_idx += 1
+            prog = controller.process_frame(frame)
+
+    assert prog is not None
+    assert prog.samples_collected == 25
+    assert prog.is_complete is True
+    assert prog.state == EnrollmentState.COMPLETED
+    for d in directions_landmarks:
+        assert prog.direction_counts[d.value] == 5
+
+    # Commit persists all 25 embeddings
+    res = controller.commit_session()
+    assert res.is_success is True
+    assert res.samples_enrolled == 25
+    stored_vectors = service.get_person_embedding_vectors(person.person_id)
+    assert len(stored_vectors) == 25

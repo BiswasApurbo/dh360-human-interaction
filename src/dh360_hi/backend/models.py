@@ -11,10 +11,9 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from dh360_hi.backend.exceptions import ValidationError
-from dh360_hi.contracts.interaction import InteractionState
 
 if TYPE_CHECKING:
-    from dh360_hi.contracts.interaction import InteractionSummary
+    from dh360_hi.contracts.interaction import InteractionState, InteractionSummary
 
 
 class PersonStatus(StrEnum):
@@ -333,12 +332,15 @@ class SessionQueryFilter:
                 f"max_duration_seconds ({self.max_duration_seconds})"
             )
             raise ValidationError(msg)
-        if self.final_state is not None and not isinstance(self.final_state, InteractionState):
-            try:
-                object.__setattr__(self, "final_state", InteractionState(self.final_state))
-            except (ValueError, TypeError) as exc:
-                msg = f"Invalid final_state: '{self.final_state}'"
-                raise ValidationError(msg) from exc
+        if self.final_state is not None:
+            from dh360_hi.contracts.interaction import InteractionState
+
+            if not isinstance(self.final_state, InteractionState):
+                try:
+                    object.__setattr__(self, "final_state", InteractionState(self.final_state))
+                except (ValueError, TypeError) as exc:
+                    msg = f"Invalid final_state: '{self.final_state}'"
+                    raise ValidationError(msg) from exc
 
 
 @dataclass(frozen=True)

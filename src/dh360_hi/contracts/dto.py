@@ -478,6 +478,9 @@ class EnrollmentProgressDTO:
     last_rejection_reason: str | None = None
     last_rejection_details: str | None = None
     rejection_counts: dict[str, int] = field(default_factory=dict)
+    current_direction: str | None = None
+    direction_counts: dict[str, int] = field(default_factory=dict)
+    direction_targets: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert DTO to a JSON-serializable dictionary."""
@@ -508,6 +511,9 @@ class EnrollmentProgressDTO:
             else None,
             last_rejection_details=progress.last_rejection_details,
             rejection_counts=dict(progress.rejection_counts),
+            current_direction=getattr(progress, "current_direction", None),
+            direction_counts=dict(getattr(progress, "direction_counts", {})),
+            direction_targets=dict(getattr(progress, "direction_targets", {})),
         )
 
 

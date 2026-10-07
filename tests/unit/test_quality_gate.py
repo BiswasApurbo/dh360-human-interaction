@@ -301,3 +301,62 @@ def test_evaluation_on_reference_fixture() -> None:
     assert res.is_acceptable is True
     assert res.metrics.sharpness > 200.0
     assert res.metrics.face_width > 100.0
+
+
+def test_classify_head_direction_all_five_directions() -> None:
+    """Verify classify_head_direction for FRONT, RIGHT, LEFT, UP, and DOWN."""
+    from dh360_hi.vision.quality_gate import HeadDirection, classify_head_direction
+
+    # 1. Frontal face: nose centered horizontally and vertically between eyes and mouth
+    lm_front = _create_synthetic_landmarks(
+        re=(70.0, 70.0),
+        le=(130.0, 70.0),
+        nt=(100.0, 104.3),  # (104.3 - 70) / 70 ~= 0.49
+        rm=(75.0, 140.0),
+        lm=(125.0, 140.0),
+    )
+    assert classify_head_direction(lm_front) == HeadDirection.FRONT
+
+    # 2. Right turned face: nose shifted towards right eye (image left, x=88)
+    # eyes_mid = 100, (100 - 88) / 60 = +0.20 > 0.12
+    lm_right = _create_synthetic_landmarks(
+        re=(70.0, 70.0),
+        le=(130.0, 70.0),
+        nt=(88.0, 104.3),
+        rm=(75.0, 140.0),
+        lm=(125.0, 140.0),
+    )
+    assert classify_head_direction(lm_right) == HeadDirection.RIGHT
+
+    # 3. Left turned face: nose shifted towards left eye (image right, x=112)
+    # eyes_mid = 100, (100 - 112) / 60 = -0.20 < -0.12
+    lm_left = _create_synthetic_landmarks(
+        re=(70.0, 70.0),
+        le=(130.0, 70.0),
+        nt=(112.0, 104.3),
+        rm=(75.0, 140.0),
+        lm=(125.0, 140.0),
+    )
+    assert classify_head_direction(lm_left) == HeadDirection.LEFT
+
+    # 4. Looking UP: nose shifted higher towards eyes (y=90 instead of 104.3)
+    # (90 - 70) / 70 = 0.286 -> offset = 0.286 - 0.49 = -0.204 <= -0.08
+    lm_up = _create_synthetic_landmarks(
+        re=(70.0, 70.0),
+        le=(130.0, 70.0),
+        nt=(100.0, 90.0),
+        rm=(75.0, 140.0),
+        lm=(125.0, 140.0),
+    )
+    assert classify_head_direction(lm_up) == HeadDirection.UP
+
+    # 5. Looking DOWN: nose shifted lower towards mouth (y=118 instead of 104.3)
+    # (118 - 70) / 70 = 0.686 -> offset = 0.686 - 0.49 = +0.196 >= +0.08
+    lm_down = _create_synthetic_landmarks(
+        re=(70.0, 70.0),
+        le=(130.0, 70.0),
+        nt=(100.0, 118.0),
+        rm=(75.0, 140.0),
+        lm=(125.0, 140.0),
+    )
+    assert classify_head_direction(lm_down) == HeadDirection.DOWN

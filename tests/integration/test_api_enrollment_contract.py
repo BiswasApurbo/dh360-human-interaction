@@ -56,11 +56,14 @@ class _StubService:
             mode=mode,
             state="collecting",
             samples_collected=0,
-            target_samples=7,
+            target_samples=25,
             minimum_samples=5,
             total_attempts=0,
             is_viable=False,
             is_complete=False,
+            current_direction="front",
+            direction_counts={"front": 0, "right": 0, "left": 0, "up": 0, "down": 0},
+            direction_targets={"front": 5, "right": 5, "left": 5, "up": 5, "down": 5},
         )
         return self._progress
 
@@ -155,10 +158,15 @@ def test_full_session_lifecycle_with_stub(monkeypatch: pytest.MonkeyPatch) -> No
             headers=headers,
         )
         assert start.status_code == 201
-        assert start.json()["state"] == "collecting"
+        start_data = start.json()
+        assert start_data["state"] == "collecting"
+        assert start_data["current_direction"] == "front"
+        assert start_data["direction_targets"]["front"] == 5
+        assert start_data["direction_counts"]["front"] == 0
 
         current = client.get(f"/persons/{_PERSON_ID}/enrollment/sessions", headers=headers)
         assert current.status_code == 200
+        assert current.json()["current_direction"] == "front"
 
         step = client.post(f"/persons/{_PERSON_ID}/enrollment/sessions/step", headers=headers)
         assert step.status_code == 200
