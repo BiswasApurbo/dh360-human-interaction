@@ -6,6 +6,7 @@ from dh360_hi.contracts.authorization import (
     derive_authorization_status,
 )
 from dh360_hi.contracts.dto import (
+    AuthorizedPersonContextDTO,
     CreatePersonCommand,
     EnrollmentProgressDTO,
     EnrollmentResultDTO,
@@ -14,6 +15,7 @@ from dh360_hi.contracts.dto import (
     InteractionSummaryDTO,
     PersonEngagementStatsDTO,
     PersonProfileDTO,
+    QAPair,
     RuntimeMetricsDTO,
     SessionAggregateAnalyticsDTO,
     StepResultDTO,
@@ -55,6 +57,7 @@ from dh360_hi.contracts.interaction import (
 
 __all__ = [
     "ApplicationError",
+    "AuthorizedPersonContextDTO",
     "AuthorizationSession",
     "AuthorizationStatus",
     "AuthorizationUpdatedIntegrationEvent",
@@ -81,6 +84,7 @@ __all__ = [
     "PersonLostIdentityEvent",
     "PersonLostIdentityIntegrationEvent",
     "PersonProfileDTO",
+    "QAPair",
     "RuntimeMetricsDTO",
     "ServiceUnavailableError",
     "SessionAggregateAnalyticsDTO",

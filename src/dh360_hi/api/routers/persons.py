@@ -27,17 +27,32 @@ _person_delete = Depends(require_scope(OperatorScope.PERSONS_DELETE))
 _biometrics_reset = Depends(require_scope(OperatorScope.BIOMETRICS_RESET))
 
 
+class QAPairRequest(BaseModel):
+    """Question-and-answer pair schema for requests."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: StrictStr = Field(min_length=1)
+    answer: StrictStr = Field(min_length=1)
+
+
 class PersonCreateRequest(BaseModel):
-    """Strict request body for creating a profile without accepting consent or notes."""
+    """Strict request body for creating a profile with optional context."""
 
     model_config = ConfigDict(extra="forbid")
 
     display_name: StrictStr = Field(min_length=1)
     preferred_name: StrictStr | None = None
+    role: StrictStr | None = None
+    department: StrictStr | None = None
+    office_room: StrictStr | None = None
+    working_hours: StrictStr | None = None
+    profile_description: StrictStr | None = None
+    qa_pairs: list[QAPairRequest] | None = None
 
 
 class PersonUpdateRequest(BaseModel):
-    """Strict profile update payload; notes and biometric fields are not accepted."""
+    """Strict profile update payload with optional context."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -45,6 +60,12 @@ class PersonUpdateRequest(BaseModel):
     preferred_name: StrictStr | None = Field(default=None, min_length=1)
     status: PersonStatus | None = None
     consent_status: ConsentStatus | None = None
+    role: StrictStr | None = None
+    department: StrictStr | None = None
+    office_room: StrictStr | None = None
+    working_hours: StrictStr | None = None
+    profile_description: StrictStr | None = None
+    qa_pairs: list[QAPairRequest] | None = None
 
 
 def _get_service(request: Request) -> HumanInteractionService:
@@ -98,6 +119,14 @@ def create_person(
         consent_status=ConsentStatus.PENDING,
         notes=None,
         person_id=None,
+        role=payload.role,
+        department=payload.department,
+        office_room=payload.office_room,
+        working_hours=payload.working_hours,
+        profile_description=payload.profile_description,
+        qa_pairs=(
+            [qa.model_dump() for qa in payload.qa_pairs] if payload.qa_pairs is not None else None
+        ),
     )
     return _get_service(request).create_person(command).to_dict()
 
@@ -117,6 +146,12 @@ def update_person(
             payload.preferred_name,
             payload.status,
             payload.consent_status,
+            payload.role,
+            payload.department,
+            payload.office_room,
+            payload.working_hours,
+            payload.profile_description,
+            payload.qa_pairs,
         )
     ):
         raise ValidationAppError("At least one profile field must be provided", field="body")
@@ -144,6 +179,14 @@ def update_person(
         status=payload.status,
         consent_status=payload.consent_status,
         notes=None,
+        role=payload.role,
+        department=payload.department,
+        office_room=payload.office_room,
+        working_hours=payload.working_hours,
+        profile_description=payload.profile_description,
+        qa_pairs=(
+            [qa.model_dump() for qa in payload.qa_pairs] if payload.qa_pairs is not None else None
+        ),
     )
     try:
         return _get_service(request).update_person(person_id, command).to_dict()

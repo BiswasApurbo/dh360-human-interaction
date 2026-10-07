@@ -394,3 +394,155 @@ class TestCompositionAndLifecycle:
                 found_auth_event = True
                 break
         assert found_auth_event, f"Did not find authorization_updated event in output: {output}"
+
+
+class TestAuthorizedSessionContextEndpoints:
+    """Tests for GET /authorization/sessions/{authorization_id}/context."""
+
+    def test_authorized_session_returns_full_context_and_qa(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        token = _configure_operator(monkeypatch, "authorization:manage,persons:create,persons:read")
+        sm = _mk_session_manager()
+        ctrl = AuthorizationController(session_manager=sm, timeout_seconds=10.0)
+        app = create_app(authorization_controller=ctrl)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        with TestClient(app) as client:
+            # 1. Create person with full context
+            create_resp = client.post(
+                "/persons",
+                headers=headers,
+                json={
+                    "display_name": "Dr. Gregory House",
+                    "preferred_name": "House",
+                    "role": "Head of Diagnostics",
+                    "department": "Nephrology & Diagnostics",
+                    "office_room": "Room 402",
+                    "working_hours": "Mon-Fri 08:00-16:00",
+                    "profile_description": "Specialist in diagnostic medicine.",
+                    "qa_pairs": [
+                        {"question": "Specialty?", "answer": "Diagnostics"},
+                        {"question": "Pager?", "answer": "4412"},
+                    ],
+                },
+            )
+            assert create_resp.status_code == 201
+            person_id = create_resp.json()["person_id"]
+
+            # Verify public GET /persons/{id} does NOT leak context
+            pub_resp = client.get(f"/persons/{person_id}", headers=headers)
+            assert pub_resp.status_code == 200
+            assert "profile_description" not in pub_resp.json()
+            assert "qa_pairs" not in pub_resp.json()
+
+            # 2. Start session
+            start_resp = client.post(_AUTH_SESSIONS_PATH, headers=headers)
+            assert start_resp.status_code == 201
+            auth_id = start_resp.json()["authorization_id"]
+
+            # 3. Transition to AUTHORIZED via perception frame
+            id_state = _mk_id_state(
+                1, IdentityState.IDENTIFIED, person_id=person_id, display_name="House"
+            )
+            frame = _mk_frame(primary_track_id=1, identity_states={1: id_state})
+            sm.process_frame_result(frame)
+
+            curr = client.get(_AUTH_CURRENT_PATH, headers=headers)
+            assert curr.json()["status"] == "authorized"
+
+            # 4. Fetch privileged context
+            ctx_resp = client.get(f"/authorization/sessions/{auth_id}/context", headers=headers)
+            assert ctx_resp.status_code == 200
+            data = ctx_resp.json()
+            assert data["person_id"] == person_id
+            assert data["display_name"] == "Dr. Gregory House"
+            assert data["preferred_name"] == "House"
+            assert data["role"] == "Head of Diagnostics"
+            assert data["department"] == "Nephrology & Diagnostics"
+            assert data["office_room"] == "Room 402"
+            assert data["working_hours"] == "Mon-Fri 08:00-16:00"
+            assert data["profile_description"] == "Specialist in diagnostic medicine."
+            assert len(data["qa_pairs"]) == 2
+            assert data["qa_pairs"][0] == {"question": "Specialty?", "answer": "Diagnostics"}
+            assert data["qa_pairs"][1] == {"question": "Pager?", "answer": "4412"}
+
+            # Verify no biometric or tracker internals leaked
+            for forbidden in ("track_id", "frame_id", "embedding", "embeddings", "bbox"):
+                assert forbidden not in data
+
+    @pytest.mark.parametrize(
+        "state,track_id,expected_status",
+        [
+            (None, None, "active"),
+            (None, 1, "active"),  # active observation
+            (IdentityState.UNREGISTERED, 1, "unknown"),
+            (IdentityState.UNCERTAIN, 1, "uncertain"),
+        ],
+    )
+    def test_non_authorized_states_return_403(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        state: IdentityState | None,
+        track_id: int | None,
+        expected_status: str,
+    ) -> None:
+        token = _configure_operator(monkeypatch, "authorization:manage")
+        sm = _mk_session_manager()
+        ctrl = AuthorizationController(session_manager=sm, timeout_seconds=10.0)
+        app = create_app(authorization_controller=ctrl)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        with TestClient(app) as client:
+            start_resp = client.post(_AUTH_SESSIONS_PATH, headers=headers)
+            auth_id = start_resp.json()["authorization_id"]
+
+            if state is not None and track_id is not None:
+                id_state = _mk_id_state(track_id, state)
+                frame = _mk_frame(primary_track_id=track_id, identity_states={track_id: id_state})
+                sm.process_frame_result(frame)
+
+            curr = client.get(_AUTH_CURRENT_PATH, headers=headers)
+            assert curr.json()["status"] == expected_status
+
+            ctx_resp = client.get(f"/authorization/sessions/{auth_id}/context", headers=headers)
+            assert ctx_resp.status_code == 403
+            assert "privileged context is restricted" in ctx_resp.json()["detail"]
+
+    def test_lost_and_timeout_states_return_403(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        token = _configure_operator(monkeypatch, "authorization:manage")
+        sm = _mk_session_manager()
+        ctrl = AuthorizationController(session_manager=sm, timeout_seconds=0.01)
+        app = create_app(authorization_controller=ctrl)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        with TestClient(app) as client:
+            start_resp = client.post(_AUTH_SESSIONS_PATH, headers=headers)
+            auth_id = start_resp.json()["authorization_id"]
+
+            # Trigger timeout
+            import time
+
+            time.sleep(0.02)
+            curr = client.get(_AUTH_CURRENT_PATH, headers=headers)
+            assert curr.json()["status"] == "timeout"
+
+            ctx_resp = client.get(f"/authorization/sessions/{auth_id}/context", headers=headers)
+            assert ctx_resp.status_code == 403
+
+    def test_missing_authorization_session_returns_404(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        token = _configure_operator(monkeypatch, "authorization:manage")
+        sm = _mk_session_manager()
+        ctrl = AuthorizationController(session_manager=sm, timeout_seconds=10.0)
+        app = create_app(authorization_controller=ctrl)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        with TestClient(app) as client:
+            resp = client.get(
+                "/authorization/sessions/00000000-0000-0000-0000-000000000000/context",
+                headers=headers,
+            )
+            assert resp.status_code == 404
+            assert "not found" in resp.json()["detail"]

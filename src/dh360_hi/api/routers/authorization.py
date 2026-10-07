@@ -68,3 +68,62 @@ def get_current_authorization_session(
     controller = _get_controller(request)
     session = controller.get_current()
     return session.to_dict() if session is not None else None
+
+
+@router.get(
+    "/authorization/sessions/{authorization_id}/context",
+    status_code=status.HTTP_200_OK,
+)
+def get_authorized_session_context(
+    authorization_id: str,
+    request: Request,
+    _operator: OperatorPrincipal = _authorization_manage,
+) -> dict[str, Any]:
+    """Retrieve privileged person context for an AUTHORIZED session.
+
+    Returns HTTP 200 with AuthorizedPersonContextDTO when AUTHORIZED.
+    Returns HTTP 403 when session is in any other status.
+    Returns HTTP 404 when session is missing or ID does not match.
+    """
+    controller = _get_controller(request)
+    session = controller.get_current()
+    if session is None or session.authorization_id != authorization_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Authorization session '{authorization_id}' not found",
+        )
+
+    if session.status != "authorized" or not session.person_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Session is in state '{session.status.value}', "
+                "privileged context is restricted to authorized sessions"
+            ),
+        )
+
+    service = getattr(request.app.state, "service", None)
+    if service is None or not hasattr(service, "person_service"):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Application service is not initialized",
+        )
+
+    context = service.person_service.get_person_context(session.person_id)
+    if context is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Person context for '{session.person_id}' not found",
+        )
+
+    return {
+        "person_id": context.person_id,
+        "display_name": context.display_name,
+        "preferred_name": context.preferred_name,
+        "role": context.role,
+        "department": context.department,
+        "office_room": context.office_room,
+        "working_hours": context.working_hours,
+        "profile_description": context.profile_description,
+        "qa_pairs": [{"question": p.question, "answer": p.answer} for p in context.qa_pairs],
+    }

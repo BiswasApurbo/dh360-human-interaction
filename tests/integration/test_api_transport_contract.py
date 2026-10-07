@@ -508,3 +508,86 @@ def test_mutation_service_unavailable_uses_existing_503_contract(
 
     assert response.status_code == 503
     assert response.json()["code"] == "SERVICE_UNAVAILABLE"
+
+
+def test_person_create_and_update_with_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Create and update person with hospital context and Q&A pairs."""
+    token = _configure_operator(monkeypatch, "persons:create,persons:update,persons:read")
+    headers = {"Authorization": f"Bearer {token}"}
+    app = create_app()
+
+    with TestClient(app) as client:
+        # 1. Create with full context
+        create_resp = client.post(
+            "/persons",
+            headers=headers,
+            json={
+                "display_name": "Dr. Allison Cameron",
+                "preferred_name": "Cameron",
+                "role": "Immunologist",
+                "department": "Immunology",
+                "office_room": "Lab 3",
+                "working_hours": "09:00-17:00",
+                "profile_description": "Senior fellow.",
+                "qa_pairs": [{"question": "Specialty?", "answer": "Immunology"}],
+            },
+        )
+        assert create_resp.status_code == 201
+        person_id = create_resp.json()["person_id"]
+
+        # Public profile does NOT leak context fields
+        pub_profile = client.get(f"/persons/{person_id}", headers=headers).json()
+        assert "profile_description" not in pub_profile
+        assert "qa_pairs" not in pub_profile
+
+        # 2. Update context fields
+        update_resp = client.patch(
+            f"/persons/{person_id}",
+            headers=headers,
+            json={
+                "role": "Attending Physician",
+                "office_room": "Office 101",
+                "qa_pairs": [
+                    {"question": "Specialty?", "answer": "Immunology"},
+                    {"question": "Floor?", "answer": "4th Floor"},
+                ],
+            },
+        )
+        assert update_resp.status_code == 200
+
+        # Verify underlying service context has the updated fields
+        ctx = app.state.service.person_service.get_person_context(person_id)
+        assert ctx is not None
+        assert ctx.role == "Attending Physician"
+        assert ctx.office_room == "Office 101"
+        assert len(ctx.qa_pairs) == 2
+
+
+def test_person_context_validation_rejection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Malformed or invalid Q&A pairs are rejected with 422."""
+    token = _configure_operator(monkeypatch, "persons:create")
+    headers = {"Authorization": f"Bearer {token}"}
+    app = create_app()
+
+    with TestClient(app) as client:
+        # Empty question in Q&A
+        resp1 = client.post(
+            "/persons",
+            headers=headers,
+            json={
+                "display_name": "Test Person",
+                "qa_pairs": [{"question": "", "answer": "Valid"}],
+            },
+        )
+        assert resp1.status_code == 422
+
+        # Empty answer in Q&A
+        resp2 = client.post(
+            "/persons",
+            headers=headers,
+            json={
+                "display_name": "Test Person",
+                "qa_pairs": [{"question": "Valid", "answer": ""}],
+            },
+        )
+        assert resp2.status_code == 422

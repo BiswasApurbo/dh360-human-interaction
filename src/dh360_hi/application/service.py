@@ -305,6 +305,12 @@ class HumanInteractionService:
             consent_status=command.consent_status,
             notes=command.notes,
             person_id=command.person_id,
+            role=command.role,
+            department=command.department,
+            office_room=command.office_room,
+            working_hours=command.working_hours,
+            profile_description=command.profile_description,
+            qa_pairs=command.qa_pairs,
         )
         return PersonProfileDTO.from_profile(profile)
 
@@ -337,6 +343,12 @@ class HumanInteractionService:
                         status=command.status,
                         consent_status=command.consent_status,
                         notes=command.notes,
+                        role=command.role,
+                        department=command.department,
+                        office_room=command.office_room,
+                        working_hours=command.working_hours,
+                        profile_description=command.profile_description,
+                        qa_pairs=command.qa_pairs,
                     )
                 except (BackendValidationError, PersonNotFoundError):
                     raise

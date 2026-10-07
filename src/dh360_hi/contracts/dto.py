@@ -49,11 +49,53 @@ def epoch_to_iso(ts: float | None) -> str | None:
 
 
 @dataclass(frozen=True)
+class QAPair:
+    """Structured question-and-answer pair for privileged AI context."""
+
+    question: str
+    answer: str
+
+    def to_dict(self) -> dict[str, str]:
+        """Convert Q&A pair to dictionary."""
+        return {"question": self.question, "answer": self.answer}
+
+
+@dataclass(frozen=True)
+class AuthorizedPersonContextDTO:
+    """Privileged person context exposed only upon AUTHORIZED session state."""
+
+    person_id: str
+    display_name: str
+    preferred_name: str | None = None
+    role: str | None = None
+    department: str | None = None
+    office_room: str | None = None
+    working_hours: str | None = None
+    profile_description: str | None = None
+    qa_pairs: list[QAPair] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert DTO to a JSON-serializable dictionary."""
+        return {
+            "person_id": self.person_id,
+            "display_name": self.display_name,
+            "preferred_name": self.preferred_name,
+            "role": self.role,
+            "department": self.department,
+            "office_room": self.office_room,
+            "working_hours": self.working_hours,
+            "profile_description": self.profile_description,
+            "qa_pairs": [qa.to_dict() for qa in self.qa_pairs],
+        }
+
+
+@dataclass(frozen=True)
 class PersonProfileDTO:
     """Public profile DTO for an enrolled person.
 
     Privacy Invariant: Excludes internal biometric implementation details
-    (raw vectors, embedding counts, model name) and free-form notes.
+    (raw vectors, embedding counts, model name), free-form notes, and privileged
+    context (profile_description, qa_pairs).
     """
 
     person_id: str
@@ -98,6 +140,12 @@ class CreatePersonCommand:
     consent_status: ConsentStatus | str = ConsentStatus.GRANTED
     notes: str | None = None
     person_id: str | None = None
+    role: str | None = None
+    department: str | None = None
+    office_room: str | None = None
+    working_hours: str | None = None
+    profile_description: str | None = None
+    qa_pairs: list[QAPair | dict[str, str]] | None = None
 
     def __post_init__(self) -> None:
         if not self.display_name or not self.display_name.strip():
@@ -117,6 +165,18 @@ class CreatePersonCommand:
             else str(self.consent_status),
             "notes": self.notes.strip() if self.notes else None,
             "person_id": self.person_id,
+            "role": self.role.strip() if self.role else None,
+            "department": self.department.strip() if self.department else None,
+            "office_room": self.office_room.strip() if self.office_room else None,
+            "working_hours": self.working_hours.strip() if self.working_hours else None,
+            "profile_description": (
+                self.profile_description.strip() if self.profile_description else None
+            ),
+            "qa_pairs": (
+                [qa.to_dict() if isinstance(qa, QAPair) else qa for qa in self.qa_pairs]
+                if self.qa_pairs is not None
+                else None
+            ),
         }
 
 
@@ -129,6 +189,12 @@ class UpdatePersonCommand:
     status: PersonStatus | str | None = None
     consent_status: ConsentStatus | str | None = None
     notes: str | None = None
+    role: str | None = None
+    department: str | None = None
+    office_room: str | None = None
+    working_hours: str | None = None
+    profile_description: str | None = None
+    qa_pairs: list[QAPair | dict[str, str]] | None = None
 
     def __post_init__(self) -> None:
         if self.display_name is not None and not self.display_name.strip():
@@ -153,6 +219,18 @@ class UpdatePersonCommand:
             if self.consent_status is not None
             else None,
             "notes": self.notes.strip() if self.notes is not None else None,
+            "role": self.role.strip() if self.role is not None else None,
+            "department": self.department.strip() if self.department is not None else None,
+            "office_room": self.office_room.strip() if self.office_room is not None else None,
+            "working_hours": self.working_hours.strip() if self.working_hours is not None else None,
+            "profile_description": (
+                self.profile_description.strip() if self.profile_description is not None else None
+            ),
+            "qa_pairs": (
+                [qa.to_dict() if isinstance(qa, QAPair) else qa for qa in self.qa_pairs]
+                if self.qa_pairs is not None
+                else None
+            ),
         }
 
 
