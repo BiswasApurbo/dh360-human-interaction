@@ -62,6 +62,7 @@ class SampleRejectionReason(StrEnum):
     EMBEDDING_FAILED = "embedding_failed"
     DUPLICATE_SAMPLE = "duplicate_sample"
     DIRECTION_QUOTA_FULL = "direction_quota_full"
+    WRONG_DIRECTION = "wrong_direction"
     CONSENT_MISSING = "consent_missing"
     INACTIVE_PERSON = "inactive_person"
     TIMEOUT = "timeout"
@@ -82,6 +83,15 @@ class EnrollmentSample:
     direction: HeadDirection = HeadDirection.FRONT
 
 
+STAGE_DIRECTIONS: tuple[HeadDirection, ...] = (
+    HeadDirection.FRONT,
+    HeadDirection.RIGHT,
+    HeadDirection.LEFT,
+    HeadDirection.UP,
+    HeadDirection.DOWN,
+)
+
+
 def default_direction_targets() -> dict[str, int]:
     """Default per-direction sample targets for guided enrollment (5 directions * 5 = 25)."""
     return {
@@ -93,6 +103,38 @@ def default_direction_targets() -> dict[str, int]:
     }
 
 
+def get_active_stage_direction(
+    direction_counts: dict[str, int],
+    direction_targets: dict[str, int],
+) -> HeadDirection | None:
+    """Return the active required stage direction in sequence, or None if all targets are met."""
+    if not direction_targets:
+        return None
+    for stage in STAGE_DIRECTIONS:
+        target = direction_targets.get(stage.value, 0)
+        if direction_counts.get(stage.value, 0) < target:
+            return stage
+    for d_key, target in direction_targets.items():
+        if direction_counts.get(d_key, 0) < target:
+            try:
+                return HeadDirection(d_key)
+            except ValueError:
+                return None
+    return None
+
+
+def _get_stage_instruction(direction: HeadDirection) -> str:
+    """Human-readable prompt instruction for a head direction."""
+    instructions = {
+        HeadDirection.FRONT: "look front",
+        HeadDirection.RIGHT: "turn right",
+        HeadDirection.LEFT: "turn left",
+        HeadDirection.UP: "look up",
+        HeadDirection.DOWN: "look down",
+    }
+    return instructions.get(direction, f"look {direction.value}")
+
+
 @dataclass(frozen=True)
 class EnrollmentConfig:
     """Configuration governing face enrollment sample requirements and diversity thresholds."""
@@ -101,10 +143,10 @@ class EnrollmentConfig:
     minimum_samples: int = 5
     samples_per_direction: int = 5
     direction_targets: dict[str, int] = field(default_factory=default_direction_targets)
-    max_attempts: int = 60
+    max_attempts: int = 120
     duplicate_similarity_threshold: float = 0.95
     min_sample_interval_seconds: float = 0.2
-    timeout_seconds: float = 30.0
+    timeout_seconds: float = 60.0
     model_name: str = "SFace"
     model_version: str = "2021dec"
 
@@ -274,16 +316,23 @@ class FaceEnrollmentController(BaseFaceEnrollment):
         """Retrieve current progress of the active session."""
         return self._build_progress(self._session) if self._session is not None else None
 
+    def _get_active_stage_direction(self, s: _ActiveSessionData) -> HeadDirection | None:
+        """Return the active required stage direction in sequence, or None if all met."""
+        return get_active_stage_direction(s.direction_counts, self._config.direction_targets)
+
     def _build_progress(self, s: _ActiveSessionData) -> EnrollmentProgress:
         """Construct an immutable EnrollmentProgress from session data."""
-        # Determine current guidance direction if not currently detected
-        curr_dir_str = s.current_direction.value if s.current_direction is not None else None
-        if curr_dir_str is None:
-            # Recommend the first direction that hasn't reached target
-            for d_name, d_target in self._config.direction_targets.items():
-                if s.direction_counts.get(d_name, 0) < d_target:
-                    curr_dir_str = d_name
-                    break
+        active_stage = self._get_active_stage_direction(s)
+        curr_dir_str = active_stage.value if active_stage is not None else None
+
+        if self._config.direction_targets:
+            all_directions_met = all(
+                s.direction_counts.get(d, 0) >= target
+                for d, target in self._config.direction_targets.items()
+            )
+            is_viable = all_directions_met and len(s.samples) >= self._config.target_samples
+        else:
+            is_viable = len(s.samples) >= self._config.minimum_samples
 
         return EnrollmentProgress(
             session_id=s.session_id,
@@ -299,7 +348,7 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             last_rejection_reason=s.last_rejection_reason,
             last_rejection_details=s.last_rejection_details,
             rejection_counts=dict(s.rejection_counts),
-            is_viable=len(s.samples) >= self._config.minimum_samples,
+            is_viable=is_viable,
             is_complete=s.state == EnrollmentState.COMPLETED,
             current_direction=curr_dir_str,
             direction_counts=dict(s.direction_counts),
@@ -393,7 +442,22 @@ class FaceEnrollmentController(BaseFaceEnrollment):
         # 1. Check Timeout
         elapsed = time.monotonic() - s.start_time
         if elapsed > self._config.timeout_seconds:
-            if len(s.samples) >= self._config.minimum_samples:
+            if self._config.direction_targets:
+                all_directions_met = all(
+                    s.direction_counts.get(d, 0) >= target
+                    for d, target in self._config.direction_targets.items()
+                )
+                if all_directions_met and len(s.samples) >= self._config.target_samples:
+                    s.state = EnrollmentState.COMPLETED
+                else:
+                    s.state = EnrollmentState.FAILED
+                    s.last_rejection_reason = SampleRejectionReason.TIMEOUT
+                    s.last_rejection_details = (
+                        f"Session timed out after {elapsed:.1f}s with only "
+                        f"{len(s.samples)}/{self._config.target_samples} samples across directions"
+                    )
+                    s.rejection_counts[SampleRejectionReason.TIMEOUT.value] += 1
+            elif len(s.samples) >= self._config.minimum_samples:
                 s.state = EnrollmentState.COMPLETED
             else:
                 s.state = EnrollmentState.FAILED
@@ -407,7 +471,22 @@ class FaceEnrollmentController(BaseFaceEnrollment):
 
         # 2. Check Max Attempts
         if s.attempts >= self._config.max_attempts:
-            if len(s.samples) >= self._config.minimum_samples:
+            if self._config.direction_targets:
+                all_directions_met = all(
+                    s.direction_counts.get(d, 0) >= target
+                    for d, target in self._config.direction_targets.items()
+                )
+                if all_directions_met and len(s.samples) >= self._config.target_samples:
+                    s.state = EnrollmentState.COMPLETED
+                else:
+                    s.state = EnrollmentState.FAILED
+                    s.last_rejection_reason = SampleRejectionReason.MAX_ATTEMPTS_EXCEEDED
+                    s.last_rejection_details = (
+                        f"Reached max attempts ({s.attempts}) with only "
+                        f"{len(s.samples)}/{self._config.target_samples} samples across directions"
+                    )
+                    s.rejection_counts[SampleRejectionReason.MAX_ATTEMPTS_EXCEEDED.value] += 1
+            elif len(s.samples) >= self._config.minimum_samples:
                 s.state = EnrollmentState.COMPLETED
             else:
                 s.state = EnrollmentState.FAILED
@@ -450,24 +529,46 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             s.rejection_counts[SampleRejectionReason.QUALITY_REJECTED.value] += 1
             return self._build_progress(s)
 
-        # 5b. Head Direction Classification & Quota Check
+        # 5b. Head Direction Classification & Guided Stage Sequencing
         detected_direction = HeadDirection.FRONT
         if target_detection.landmarks is not None:
             detected_direction = classify_head_direction(target_detection.landmarks)
-        s.current_direction = detected_direction
 
         dir_key = detected_direction.value
         dir_target = self._config.direction_targets.get(dir_key, self._config.samples_per_direction)
         current_dir_count = s.direction_counts.get(dir_key, 0)
 
-        if current_dir_count >= dir_target:
-            s.last_rejection_reason = SampleRejectionReason.DIRECTION_QUOTA_FULL
-            s.last_rejection_details = (
-                f"Direction '{dir_key}' has already reached its quota "
-                f"({current_dir_count}/{dir_target} samples)"
+        if self._config.direction_targets:
+            active_stage = self._get_active_stage_direction(s)
+            # If all direction stages have already been completed, reject additional frames
+            if active_stage is None:
+                s.last_rejection_reason = SampleRejectionReason.DIRECTION_QUOTA_FULL
+                s.last_rejection_details = "All guided direction quotas are already fulfilled"
+                s.rejection_counts[SampleRejectionReason.DIRECTION_QUOTA_FULL.value] += 1
+                return self._build_progress(s)
+
+            if detected_direction != active_stage:
+                if current_dir_count >= dir_target:
+                    s.last_rejection_reason = SampleRejectionReason.DIRECTION_QUOTA_FULL
+                    s.last_rejection_details = (
+                        f"Direction '{dir_key}' has already reached its quota "
+                        f"({current_dir_count}/{dir_target} samples)"
+                    )
+                    s.rejection_counts[SampleRejectionReason.DIRECTION_QUOTA_FULL.value] += 1
+                else:
+                    s.last_rejection_reason = SampleRejectionReason.WRONG_DIRECTION
+                    s.last_rejection_details = (
+                        f"Detected head direction '{dir_key}' does not match required stage "
+                        f"direction '{active_stage.value}'"
+                    )
+                    s.rejection_counts[SampleRejectionReason.WRONG_DIRECTION.value] += 1
+                return self._build_progress(s)
+
+            dir_key = active_stage.value
+            dir_target = self._config.direction_targets.get(
+                dir_key, self._config.samples_per_direction
             )
-            s.rejection_counts[SampleRejectionReason.DIRECTION_QUOTA_FULL.value] += 1
-            return self._build_progress(s)
+            current_dir_count = s.direction_counts.get(dir_key, 0)
 
         # 6. Face Alignment
         align_result = self._aligner.align(frame, target_detection)
@@ -596,8 +697,41 @@ class FaceEnrollmentController(BaseFaceEnrollment):
 
         s = self._session
 
-        # 1. Validate Minimum Samples
-        if len(s.samples) < self._config.minimum_samples:
+        # 1. Validate Minimum Samples & Direction Targets
+        if self._config.direction_targets:
+            all_directions_met = all(
+                s.direction_counts.get(d, 0) >= target
+                for d, target in self._config.direction_targets.items()
+            )
+            if not all_directions_met or len(s.samples) < self._config.target_samples:
+                s.state = EnrollmentState.FAILED
+                unmet = {
+                    d: f"{s.direction_counts.get(d, 0)}/{target}"
+                    for d, target in self._config.direction_targets.items()
+                    if s.direction_counts.get(d, 0) < target
+                }
+                err_msg = (
+                    f"Cannot commit enrollment: collected "
+                    f"{len(s.samples)}/{self._config.target_samples} samples; "
+                    f"unmet direction targets: {unmet}"
+                )
+                result = EnrollmentResult(
+                    session_id=s.session_id,
+                    enrollment_batch_id=s.enrollment_batch_id,
+                    person_id=s.person_id,
+                    display_name=s.display_name,
+                    mode=s.mode,
+                    is_success=False,
+                    state=EnrollmentState.FAILED,
+                    samples_enrolled=0,
+                    persisted_embedding_ids=[],
+                    total_attempts=s.attempts,
+                    error_message=err_msg,
+                    rejection_counts=dict(s.rejection_counts),
+                )
+                self._session = None
+                return result
+        elif len(s.samples) < self._config.minimum_samples:
             s.state = EnrollmentState.FAILED
             err_msg = (
                 f"Cannot commit enrollment: collected {len(s.samples)} samples, "

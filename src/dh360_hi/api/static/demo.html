@@ -531,9 +531,16 @@
 
       const counts = data.direction_counts || {};
       const targets = data.direction_targets || {};
+      const getVal = (obj, key) => {
+        if (!obj) return undefined;
+        if (obj[key] !== undefined) return obj[key];
+        if (obj[key.toLowerCase()] !== undefined) return obj[key.toLowerCase()];
+        if (obj[key.toUpperCase()] !== undefined) return obj[key.toUpperCase()];
+        return undefined;
+      };
       const parts = ["FRONT", "RIGHT", "LEFT", "UP", "DOWN"].map(d => {
-        const c = counts[d] !== undefined ? counts[d] : 0;
-        const t = targets[d] !== undefined ? targets[d] : 5;
+        const c = getVal(counts, d) ?? 0;
+        const t = getVal(targets, d) ?? 5;
         return `${d} ${c}/${t}`;
       });
       document.getElementById("direction-progress").textContent = parts.join(" | ");
@@ -565,7 +572,7 @@
             const data = await resp.json();
             updateEnrollmentProgressUI(data);
 
-            const isComplete = data.is_complete || (data.state && data.state.toUpperCase() === "COMPLETED") || (data.samples_collected >= 25);
+            const isComplete = Boolean(data.is_complete || (data.state && data.state.toUpperCase() === "COMPLETED"));
             if (isComplete && !isEnrollmentCommitted) {
               isEnrollmentCommitted = true;
               clearInterval(enrollmentIntervalId);
@@ -596,11 +603,12 @@
 
         if (resp.status === 200) {
           const data = await resp.json();
-          appendLog(`enrollment committed: ${data.samples_persisted || 25} embeddings saved`);
-          showNotice("Registration complete. 25 embeddings saved.", "info");
+          const persistedCount = data.samples_enrolled !== undefined ? data.samples_enrolled : (data.samples_persisted || 25);
+          appendLog(`enrollment committed: ${persistedCount} embeddings saved`);
+          showNotice(`Registration complete. ${persistedCount} embeddings saved.`, "info");
           document.getElementById("current-instruction").textContent = "Enrollment Complete";
           document.getElementById("current-instruction").style.color = "#15803d";
-          document.getElementById("total-progress").textContent = "25/25";
+          document.getElementById("total-progress").textContent = `${persistedCount}/25`;
           document.getElementById("auth-action-section").style.display = "block";
         } else {
           const err = await resp.json().catch(() => ({}));

@@ -844,3 +844,310 @@ def test_guided_enrollment_completes_at_25_samples_across_all_directions(
     assert res.samples_enrolled == 25
     stored_vectors = service.get_person_embedding_vectors(person.person_id)
     assert len(stored_vectors) == 25
+
+
+def test_front_samples_alone_cannot_complete_enrollment_or_commit(
+    mock_pipeline: tuple,
+) -> None:
+    """CRITICAL: Presenting 25 FRONT frames cannot complete enrollment or commit.
+
+    The session must stop accepting FRONT frames at 5, reject further FRONT frames with
+    DIRECTION_QUOTA_FULL, advance stage guidance to RIGHT, remain incomplete, and reject
+    commit if all 5 direction targets are not satisfied.
+    """
+    from dh360_hi.vision.detector import FaceLandmarks
+    from dh360_hi.vision.enrollment import EnrollmentConfig, FaceEnrollmentController
+    from dh360_hi.vision.quality_gate import HeadDirection
+
+    detector, quality_gate, aligner, embedder, service, _ = mock_pipeline
+    guided_config = EnrollmentConfig(
+        target_samples=25,
+        minimum_samples=5,
+        min_sample_interval_seconds=0.0,
+    )
+    controller = FaceEnrollmentController(
+        detector=detector,
+        quality_gate=quality_gate,
+        aligner=aligner,
+        embedder=embedder,
+        person_service=service,
+        config=guided_config,
+    )
+    person = service.create_person("Front Only Person")
+    prog = controller.start_session(person.person_id)
+    assert prog.current_direction == HeadDirection.FRONT.value
+
+    frame = Frame(image=np.zeros((480, 640, 3), dtype=np.uint8), frame_id=1, timestamp=0.0)
+    lm_front = FaceLandmarks(
+        right_eye=(70.0, 70.0),
+        left_eye=(130.0, 70.0),
+        nose_tip=(100.0, 104.3),
+        right_mouth_corner=(75.0, 140.0),
+        left_mouth_corner=(125.0, 140.0),
+    )
+    detector.set_detections(
+        [FaceDetection(bbox=(20.0, 20.0, 100.0, 100.0), confidence=0.95, landmarks=lm_front)]
+    )
+
+    # 1. Present 5 valid FRONT frames -> accepted
+    for i in range(5):
+        vec = np.zeros(128, dtype=np.float32)
+        vec[i] = 1.0
+        embedder.set_vector(vec)
+        prog = controller.process_frame(frame)
+        assert prog.direction_counts[HeadDirection.FRONT.value] == i + 1
+
+    assert prog.direction_counts[HeadDirection.FRONT.value] == 5
+    assert prog.samples_collected == 5
+    # Next required stage must be RIGHT
+    assert prog.current_direction == HeadDirection.RIGHT.value
+    assert prog.is_complete is False
+
+    # 2. Present 20 more FRONT frames (making 25 total attempts with FRONT)
+    for i in range(5, 25):
+        vec = np.zeros(128, dtype=np.float32)
+        vec[i % 128] = float(i + 1)
+        embedder.set_vector(vec)
+        prog = controller.process_frame(frame)
+        assert prog.last_rejection_reason == SampleRejectionReason.DIRECTION_QUOTA_FULL
+        assert prog.samples_collected == 5
+        assert prog.direction_counts[HeadDirection.FRONT.value] == 5
+        assert prog.current_direction == HeadDirection.RIGHT.value
+        assert prog.is_complete is False
+
+    # Total accepted samples is still strictly 5, NOT 25
+    assert prog.samples_collected == 5
+    assert prog.is_complete is False
+    assert prog.state == EnrollmentState.COLLECTING
+
+    # 3. Attempting to commit must fail because 4 directions are unmet
+    res = controller.commit_session()
+    assert res.is_success is False
+    assert res.state == EnrollmentState.FAILED
+    assert res.samples_enrolled == 0
+    assert len(res.persisted_embedding_ids) == 0
+    assert "unmet direction targets" in str(res.error_message)
+
+    # Database has 0 stored embeddings for this person
+    stored = service.get_person_embedding_vectors(person.person_id)
+    assert len(stored) == 0
+
+
+def test_guided_enrollment_enforces_strict_stage_sequence(
+    mock_pipeline: tuple,
+) -> None:
+    """Verify strict stage ordering: FRONT -> RIGHT -> LEFT -> UP -> DOWN.
+
+    Frames presented out of sequence are rejected with WRONG_DIRECTION.
+    Only frames matching the active stage direction are accepted.
+    """
+    from dh360_hi.vision.detector import FaceLandmarks
+    from dh360_hi.vision.enrollment import EnrollmentConfig, FaceEnrollmentController
+    from dh360_hi.vision.quality_gate import HeadDirection
+
+    detector, quality_gate, aligner, embedder, service, _ = mock_pipeline
+    guided_config = EnrollmentConfig(
+        target_samples=25,
+        minimum_samples=5,
+        min_sample_interval_seconds=0.0,
+    )
+    controller = FaceEnrollmentController(
+        detector=detector,
+        quality_gate=quality_gate,
+        aligner=aligner,
+        embedder=embedder,
+        person_service=service,
+        config=guided_config,
+    )
+    person = service.create_person("Strict Sequence Person")
+    prog = controller.start_session(person.person_id)
+
+    frame = Frame(image=np.zeros((480, 640, 3), dtype=np.uint8), frame_id=1, timestamp=0.0)
+
+    landmarks_by_dir = {
+        HeadDirection.FRONT: FaceLandmarks(
+            right_eye=(70.0, 70.0),
+            left_eye=(130.0, 70.0),
+            nose_tip=(100.0, 104.3),
+            right_mouth_corner=(75.0, 140.0),
+            left_mouth_corner=(125.0, 140.0),
+        ),
+        HeadDirection.RIGHT: FaceLandmarks(
+            right_eye=(70.0, 70.0),
+            left_eye=(130.0, 70.0),
+            nose_tip=(88.0, 104.3),
+            right_mouth_corner=(75.0, 140.0),
+            left_mouth_corner=(125.0, 140.0),
+        ),
+        HeadDirection.LEFT: FaceLandmarks(
+            right_eye=(70.0, 70.0),
+            left_eye=(130.0, 70.0),
+            nose_tip=(112.0, 104.3),
+            right_mouth_corner=(75.0, 140.0),
+            left_mouth_corner=(125.0, 140.0),
+        ),
+        HeadDirection.UP: FaceLandmarks(
+            right_eye=(70.0, 70.0),
+            left_eye=(130.0, 70.0),
+            nose_tip=(100.0, 90.0),
+            right_mouth_corner=(75.0, 140.0),
+            left_mouth_corner=(125.0, 140.0),
+        ),
+        HeadDirection.DOWN: FaceLandmarks(
+            right_eye=(70.0, 70.0),
+            left_eye=(130.0, 70.0),
+            nose_tip=(100.0, 118.0),
+            right_mouth_corner=(75.0, 140.0),
+            left_mouth_corner=(125.0, 140.0),
+        ),
+    }
+
+    # Stage 1: Active stage is FRONT.
+    assert prog.current_direction == HeadDirection.FRONT.value
+    # Present RIGHT frame out of turn -> rejected with WRONG_DIRECTION
+    detector.set_detections(
+        [
+            FaceDetection(
+                bbox=(20.0, 20.0, 100.0, 100.0),
+                confidence=0.95,
+                landmarks=landmarks_by_dir[HeadDirection.RIGHT],
+            )
+        ]
+    )
+    vec = np.zeros(128, dtype=np.float32)
+    vec[0] = 1.0
+    embedder.set_vector(vec)
+    prog = controller.process_frame(frame)
+    assert prog.last_rejection_reason == SampleRejectionReason.WRONG_DIRECTION
+    assert prog.samples_collected == 0
+    assert prog.direction_counts[HeadDirection.RIGHT.value] == 0
+    assert prog.direction_counts[HeadDirection.FRONT.value] == 0
+    assert prog.current_direction == HeadDirection.FRONT.value
+
+    # Now step through each stage in order: FRONT, RIGHT, LEFT, UP, DOWN
+    sequence = [
+        HeadDirection.FRONT,
+        HeadDirection.RIGHT,
+        HeadDirection.LEFT,
+        HeadDirection.UP,
+        HeadDirection.DOWN,
+    ]
+    sample_counter = 0
+    for stage_idx, stage_dir in enumerate(sequence):
+        assert prog.current_direction == stage_dir.value
+        detector.set_detections(
+            [
+                FaceDetection(
+                    bbox=(20.0, 20.0, 100.0, 100.0),
+                    confidence=0.95,
+                    landmarks=landmarks_by_dir[stage_dir],
+                )
+            ]
+        )
+        for count in range(1, 6):
+            sample_counter += 1
+            v = np.zeros(128, dtype=np.float32)
+            v[sample_counter % 128] = float(sample_counter)
+            embedder.set_vector(v)
+            prog = controller.process_frame(frame)
+            assert prog.direction_counts[stage_dir.value] == count
+            assert prog.samples_collected == stage_idx * 5 + count
+
+        if stage_idx < len(sequence) - 1:
+            next_stage = sequence[stage_idx + 1]
+            assert prog.current_direction == next_stage.value
+            assert prog.is_complete is False
+
+    # After DOWN 5/5: enrollment is complete
+    assert prog.samples_collected == 25
+    assert prog.is_complete is True
+    assert prog.state == EnrollmentState.COMPLETED
+
+    res = controller.commit_session()
+    assert res.is_success is True
+    assert res.samples_enrolled == 25
+    assert len(service.get_person_embedding_vectors(person.person_id)) == 25
+
+
+def test_guided_enrollment_commit_fails_if_any_direction_unmet(
+    mock_pipeline: tuple,
+) -> None:
+    """Verify commit fails if only 4 out of 5 directions have reached their quota."""
+    from dh360_hi.vision.detector import FaceLandmarks
+    from dh360_hi.vision.enrollment import EnrollmentConfig, FaceEnrollmentController
+    from dh360_hi.vision.quality_gate import HeadDirection
+
+    detector, quality_gate, aligner, embedder, service, _ = mock_pipeline
+    guided_config = EnrollmentConfig(
+        target_samples=25,
+        minimum_samples=5,
+        min_sample_interval_seconds=0.0,
+    )
+    controller = FaceEnrollmentController(
+        detector=detector,
+        quality_gate=quality_gate,
+        aligner=aligner,
+        embedder=embedder,
+        person_service=service,
+        config=guided_config,
+    )
+    person = service.create_person("Four Directions Person")
+    controller.start_session(person.person_id)
+
+    frame = Frame(image=np.zeros((480, 640, 3), dtype=np.uint8), frame_id=1, timestamp=0.0)
+
+    landmarks_by_dir = {
+        HeadDirection.FRONT: FaceLandmarks(
+            right_eye=(70.0, 70.0),
+            left_eye=(130.0, 70.0),
+            nose_tip=(100.0, 104.3),
+            right_mouth_corner=(75.0, 140.0),
+            left_mouth_corner=(125.0, 140.0),
+        ),
+        HeadDirection.RIGHT: FaceLandmarks(
+            right_eye=(70.0, 70.0),
+            left_eye=(130.0, 70.0),
+            nose_tip=(88.0, 104.3),
+            right_mouth_corner=(75.0, 140.0),
+            left_mouth_corner=(125.0, 140.0),
+        ),
+        HeadDirection.LEFT: FaceLandmarks(
+            right_eye=(70.0, 70.0),
+            left_eye=(130.0, 70.0),
+            nose_tip=(112.0, 104.3),
+            right_mouth_corner=(75.0, 140.0),
+            left_mouth_corner=(125.0, 140.0),
+        ),
+        HeadDirection.UP: FaceLandmarks(
+            right_eye=(70.0, 70.0),
+            left_eye=(130.0, 70.0),
+            nose_tip=(100.0, 90.0),
+            right_mouth_corner=(75.0, 140.0),
+            left_mouth_corner=(125.0, 140.0),
+        ),
+    }
+
+    sample_counter = 0
+    for _d, lm in landmarks_by_dir.items():
+        detector.set_detections(
+            [FaceDetection(bbox=(20.0, 20.0, 100.0, 100.0), confidence=0.95, landmarks=lm)]
+        )
+        for _ in range(5):
+            sample_counter += 1
+            v = np.zeros(128, dtype=np.float32)
+            v[sample_counter % 128] = float(sample_counter)
+            embedder.set_vector(v)
+            controller.process_frame(frame)
+
+    # 20 samples collected (FRONT, RIGHT, LEFT, UP all 5, DOWN is 0)
+    assert controller.current_progress.samples_collected == 20
+    assert controller.current_progress.current_direction == HeadDirection.DOWN.value
+    assert controller.current_progress.is_complete is False
+
+    # Attempt commit before DOWN
+    res = controller.commit_session()
+    assert res.is_success is False
+    assert res.state == EnrollmentState.FAILED
+    assert res.samples_enrolled == 0
+    assert "unmet direction targets" in str(res.error_message)
+    assert len(service.get_person_embedding_vectors(person.person_id)) == 0
