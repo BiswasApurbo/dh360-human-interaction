@@ -132,6 +132,26 @@ def commit_enrollment_session(
     return result.to_dict()
 
 
+@router.delete(
+    "/enrollment/sessions/current",
+    status_code=status.HTTP_200_OK,
+)
+def cancel_any_enrollment_session(
+    request: Request,
+    _operator: OperatorPrincipal = _enrollment_manage,
+) -> dict[str, Any]:
+    """Force cancel any active enrollment session, regardless of person_id."""
+    service = _get_service(request)
+    progress = service.get_enrollment_progress()
+    if progress is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No active enrollment session to cancel",
+        )
+    service.cancel_enrollment("Cancelled via generic API cleanup")
+    return {"cancelled": True, "person_id": progress.person_id}
+
+
 @router.post("/{person_id}/enrollment/sessions/cancel")
 def cancel_enrollment_session(
     person_id: str,
