@@ -204,7 +204,7 @@
 
     <div id="notice-box" class="notice"></div>
 
-    <div id="registration-section">
+    <div id="registration-section" style="display:none;">
       <h2 style="font-size: 1.15rem; margin-bottom: 0.75rem;">Register Person</h2>
       <div class="form-group"><input type="text" id="display-name" placeholder="Display Name *" /></div>
       <div class="form-group"><input type="text" id="preferred-name" placeholder="Preferred Name" /></div>
@@ -253,8 +253,9 @@
       </div>
     </div>
 
-    <div id="auth-action-section" style="display:none; margin-top:1rem; margin-bottom:1.5rem;">
+    <div id="auth-action-section" style="display:block; margin-top:1rem; margin-bottom:1.5rem;">
       <button id="start-btn" onclick="startAuthorization()" style="width:100%;">Start Authorization</button>
+      <button id="show-register-btn" onclick="document.getElementById('registration-section').style.display='block'; this.style.display='none';" style="width:100%; margin-top:0.5rem; background:#4b5563;">Register New Person</button>
     </div>
 
     <div class="status-panel">
@@ -766,6 +767,15 @@
           if (st === "AUTHORIZED") {
             const token = document.getElementById("token-input").value.trim();
             fetchAuthorizedContext(token, payload.authorization_id || currentAuthId);
+          } else if (st === "UNKNOWN") {
+            clearContextUI();
+            showNotice("Person not registered. Please register.", "error");
+            document.getElementById("registration-section").style.display = "block";
+            const showBtn = document.getElementById("show-register-btn");
+            if(showBtn) showBtn.style.display = "none";
+          } else if (st === "UNCERTAIN") {
+            clearContextUI();
+            showNotice("Identity could not be confirmed.", "error");
           } else {
             clearContextUI();
           }
