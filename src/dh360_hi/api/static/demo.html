@@ -248,7 +248,7 @@
         </div>
         <div class="field-row">
           <span class="field-label">Total Accepted:</span>
-          <span id="total-progress" class="field-val">0/25</span>
+          <span id="total-progress" class="field-val">0/30</span>
         </div>
       </div>
     </div>
@@ -601,12 +601,13 @@
 
         if (resp.status === 200) {
           const data = await resp.json();
-          const persistedCount = data.samples_enrolled !== undefined ? data.samples_enrolled : (data.samples_persisted || 25);
+          const persistedCount = data.samples_enrolled !== undefined ? data.samples_enrolled : (data.samples_persisted || 30);
           appendLog(`enrollment committed: ${persistedCount} embeddings saved`);
           showNotice(`Registration complete. ${persistedCount} embeddings saved.`, "info");
           document.getElementById("current-instruction").textContent = "Enrollment Complete";
           document.getElementById("current-instruction").style.color = "#15803d";
-          document.getElementById("total-progress").textContent = `${persistedCount}/25`;
+          const target = document.getElementById("total-progress").textContent.split("/")[1] || "30";
+          document.getElementById("total-progress").textContent = `${persistedCount}/${target}`;
           document.getElementById("auth-action-section").style.display = "block";
         } else {
           const err = await resp.json().catch(() => ({}));
