@@ -320,9 +320,7 @@
     const DIRECTION_INSTRUCTIONS = {
       FRONT: "Look FRONT",
       RIGHT: "Turn RIGHT",
-      LEFT: "Turn LEFT",
-      UP: "Look UP",
-      DOWN: "Look DOWN"
+      LEFT: "Turn LEFT"
     };
 
     function getNowTime() {
@@ -538,15 +536,15 @@
         if (obj[key.toUpperCase()] !== undefined) return obj[key.toUpperCase()];
         return undefined;
       };
-      const parts = ["FRONT", "RIGHT", "LEFT", "UP", "DOWN"].map(d => {
+      const parts = ["FRONT", "RIGHT", "LEFT"].map(d => {
         const c = getVal(counts, d) ?? 0;
-        const t = getVal(targets, d) ?? 5;
+        const t = getVal(targets, d) ?? 10;
         return `${d} ${c}/${t}`;
       });
       document.getElementById("direction-progress").textContent = parts.join(" | ");
 
       const total = data.samples_collected !== undefined ? data.samples_collected : (data.total_samples !== undefined ? data.total_samples : 0);
-      const target = data.target_samples !== undefined ? data.target_samples : 25;
+      const target = data.target_samples !== undefined ? data.target_samples : 30;
       document.getElementById("total-progress").textContent = `${total}/${target}`;
     }
 

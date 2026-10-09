@@ -372,7 +372,7 @@ def test_successful_enrollment_and_single_gallery_sync(mock_pipeline: tuple) -> 
 
     # Collect 5 diverse samples
     rng = np.random.default_rng(seed=123)
-    for _ in range(5):
+    for _ in range(20):
         vec = normalize_l2(rng.standard_normal(128).astype(np.float32))
         embedder.set_vector(vec)
         controller.process_frame(dummy_frame)
@@ -584,7 +584,7 @@ def test_controller_persists_only_through_person_service(
     # ADD_SAMPLES: uses get_person_embedding_vectors + add_person_embeddings.
     controller.start_session(person.person_id, mode=EnrollmentMode.ADD_SAMPLES)
     rng = np.random.default_rng(seed=99)
-    for _ in range(5):
+    for _ in range(20):
         embedder.set_vector(normalize_l2(rng.standard_normal(128).astype(np.float32)))
         controller.process_frame(dummy_frame)
     add_res = controller.commit_session()
@@ -594,7 +594,7 @@ def test_controller_persists_only_through_person_service(
     # REPLACE: uses replace_person_embeddings.
     controller.start_session(person.person_id, mode=EnrollmentMode.REPLACE)
     rng2 = np.random.default_rng(seed=100)
-    for _ in range(5):
+    for _ in range(20):
         embedder.set_vector(normalize_l2(rng2.standard_normal(128).astype(np.float32)))
         controller.process_frame(dummy_frame)
     replace_res = controller.commit_session()
@@ -689,7 +689,7 @@ def test_guided_enrollment_direction_counting_and_quota_enforcement(
 
     detector, quality_gate, aligner, embedder, service, _ = mock_pipeline
     guided_config = EnrollmentConfig(
-        target_samples=25,
+        target_samples=30,
         minimum_samples=5,
         min_sample_interval_seconds=0.0,
     )
@@ -705,15 +705,15 @@ def test_guided_enrollment_direction_counting_and_quota_enforcement(
     prog = controller.start_session(person.person_id)
 
     # Initial progress has default targets and zero counts
-    assert prog.direction_targets[HeadDirection.FRONT.value] == 5
-    assert prog.direction_targets[HeadDirection.RIGHT.value] == 5
+    assert prog.direction_targets[HeadDirection.FRONT.value] == 10
+    assert prog.direction_targets[HeadDirection.RIGHT.value] == 10
     assert prog.direction_counts[HeadDirection.FRONT.value] == 0
     assert prog.current_direction == HeadDirection.FRONT.value
 
     # DTO round-trip preserves direction data
     dto = EnrollmentProgressDTO.from_progress(prog)
     assert dto.current_direction == HeadDirection.FRONT.value
-    assert dto.direction_targets[HeadDirection.FRONT.value] == 5
+    assert dto.direction_targets[HeadDirection.FRONT.value] == 10
     assert dto.direction_counts[HeadDirection.FRONT.value] == 0
 
     frame = Frame(image=np.zeros((480, 640, 3), dtype=np.uint8), frame_id=1, timestamp=0.0)
@@ -731,14 +731,14 @@ def test_guided_enrollment_direction_counting_and_quota_enforcement(
     )
 
     # Collect 5 frontal samples with unique embeddings
-    for i in range(5):
+    for i in range(10):
         vec = np.zeros(128, dtype=np.float32)
         vec[i] = 1.0
         embedder.set_vector(vec)
         prog = controller.process_frame(frame)
         assert prog.direction_counts[HeadDirection.FRONT.value] == i + 1
 
-    assert prog.direction_counts[HeadDirection.FRONT.value] == 5
+    assert prog.direction_counts[HeadDirection.FRONT.value] == 10
 
     # 6th frontal sample must be rejected with DIRECTION_QUOTA_FULL
     vec6 = np.zeros(128, dtype=np.float32)
@@ -746,13 +746,13 @@ def test_guided_enrollment_direction_counting_and_quota_enforcement(
     embedder.set_vector(vec6)
     prog = controller.process_frame(frame)
     assert prog.last_rejection_reason == SampleRejectionReason.DIRECTION_QUOTA_FULL
-    assert prog.direction_counts[HeadDirection.FRONT.value] == 5
-    assert prog.samples_collected == 5
+    assert prog.direction_counts[HeadDirection.FRONT.value] == 10
+    assert prog.samples_collected == 10
 
     controller.cancel_session()
 
 
-def test_guided_enrollment_completes_at_25_samples_across_all_directions(
+def test_guided_enrollment_completes_at_30_samples_across_all_directions(
     mock_pipeline: tuple,
 ) -> None:
     """Verify session completes when all 5 directions have 5 accepted samples (25 total)."""
@@ -762,7 +762,7 @@ def test_guided_enrollment_completes_at_25_samples_across_all_directions(
 
     detector, quality_gate, aligner, embedder, service, _ = mock_pipeline
     guided_config = EnrollmentConfig(
-        target_samples=25,
+        target_samples=30,
         minimum_samples=5,
         min_sample_interval_seconds=0.0,
     )
@@ -801,20 +801,6 @@ def test_guided_enrollment_completes_at_25_samples_across_all_directions(
             right_mouth_corner=(75.0, 140.0),
             left_mouth_corner=(125.0, 140.0),
         ),
-        HeadDirection.UP: FaceLandmarks(
-            right_eye=(70.0, 70.0),
-            left_eye=(130.0, 70.0),
-            nose_tip=(100.0, 90.0),
-            right_mouth_corner=(75.0, 140.0),
-            left_mouth_corner=(125.0, 140.0),
-        ),
-        HeadDirection.DOWN: FaceLandmarks(
-            right_eye=(70.0, 70.0),
-            left_eye=(130.0, 70.0),
-            nose_tip=(100.0, 118.0),
-            right_mouth_corner=(75.0, 140.0),
-            left_mouth_corner=(125.0, 140.0),
-        ),
     }
 
     sample_idx = 0
@@ -823,7 +809,7 @@ def test_guided_enrollment_completes_at_25_samples_across_all_directions(
         detector.set_detections(
             [FaceDetection(bbox=(20.0, 20.0, 100.0, 100.0), confidence=0.95, landmarks=lm)]
         )
-        for _ in range(5):
+        for _ in range(20):
             vec = np.zeros(128, dtype=np.float32)
             vec[sample_idx % 128] = 1.0
             vec[(sample_idx + 1) % 128] = float(sample_idx + 1)
@@ -832,18 +818,18 @@ def test_guided_enrollment_completes_at_25_samples_across_all_directions(
             prog = controller.process_frame(frame)
 
     assert prog is not None
-    assert prog.samples_collected == 25
+    assert prog.samples_collected == 30
     assert prog.is_complete is True
     assert prog.state == EnrollmentState.COMPLETED
     for d in directions_landmarks:
-        assert prog.direction_counts[d.value] == 5
+        assert prog.direction_counts[d.value] == 10
 
     # Commit persists all 25 embeddings
     res = controller.commit_session()
     assert res.is_success is True
-    assert res.samples_enrolled == 25
+    assert res.samples_enrolled == 30
     stored_vectors = service.get_person_embedding_vectors(person.person_id)
-    assert len(stored_vectors) == 25
+    assert len(stored_vectors) == 30
 
 
 def test_front_samples_alone_cannot_complete_enrollment_or_commit(
@@ -861,7 +847,7 @@ def test_front_samples_alone_cannot_complete_enrollment_or_commit(
 
     detector, quality_gate, aligner, embedder, service, _ = mock_pipeline
     guided_config = EnrollmentConfig(
-        target_samples=25,
+        target_samples=30,
         minimum_samples=5,
         min_sample_interval_seconds=0.0,
     )
@@ -890,15 +876,15 @@ def test_front_samples_alone_cannot_complete_enrollment_or_commit(
     )
 
     # 1. Present 5 valid FRONT frames -> accepted
-    for i in range(5):
+    for i in range(10):
         vec = np.zeros(128, dtype=np.float32)
         vec[i] = 1.0
         embedder.set_vector(vec)
         prog = controller.process_frame(frame)
         assert prog.direction_counts[HeadDirection.FRONT.value] == i + 1
 
-    assert prog.direction_counts[HeadDirection.FRONT.value] == 5
-    assert prog.samples_collected == 5
+    assert prog.direction_counts[HeadDirection.FRONT.value] == 10
+    assert prog.samples_collected == 10
     # Next required stage must be RIGHT
     assert prog.current_direction == HeadDirection.RIGHT.value
     assert prog.is_complete is False
@@ -910,13 +896,13 @@ def test_front_samples_alone_cannot_complete_enrollment_or_commit(
         embedder.set_vector(vec)
         prog = controller.process_frame(frame)
         assert prog.last_rejection_reason == SampleRejectionReason.DIRECTION_QUOTA_FULL
-        assert prog.samples_collected == 5
-        assert prog.direction_counts[HeadDirection.FRONT.value] == 5
+        assert prog.samples_collected == 10
+        assert prog.direction_counts[HeadDirection.FRONT.value] == 10
         assert prog.current_direction == HeadDirection.RIGHT.value
         assert prog.is_complete is False
 
     # Total accepted samples is still strictly 5, NOT 25
-    assert prog.samples_collected == 5
+    assert prog.samples_collected == 10
     assert prog.is_complete is False
     assert prog.state == EnrollmentState.COLLECTING
 
@@ -947,7 +933,7 @@ def test_guided_enrollment_enforces_strict_stage_sequence(
 
     detector, quality_gate, aligner, embedder, service, _ = mock_pipeline
     guided_config = EnrollmentConfig(
-        target_samples=25,
+        target_samples=30,
         minimum_samples=5,
         min_sample_interval_seconds=0.0,
     )
@@ -986,20 +972,6 @@ def test_guided_enrollment_enforces_strict_stage_sequence(
             right_mouth_corner=(75.0, 140.0),
             left_mouth_corner=(125.0, 140.0),
         ),
-        HeadDirection.UP: FaceLandmarks(
-            right_eye=(70.0, 70.0),
-            left_eye=(130.0, 70.0),
-            nose_tip=(100.0, 90.0),
-            right_mouth_corner=(75.0, 140.0),
-            left_mouth_corner=(125.0, 140.0),
-        ),
-        HeadDirection.DOWN: FaceLandmarks(
-            right_eye=(70.0, 70.0),
-            left_eye=(130.0, 70.0),
-            nose_tip=(100.0, 118.0),
-            right_mouth_corner=(75.0, 140.0),
-            left_mouth_corner=(125.0, 140.0),
-        ),
     }
 
     # Stage 1: Active stage is FRONT.
@@ -1029,8 +1001,6 @@ def test_guided_enrollment_enforces_strict_stage_sequence(
         HeadDirection.FRONT,
         HeadDirection.RIGHT,
         HeadDirection.LEFT,
-        HeadDirection.UP,
-        HeadDirection.DOWN,
     ]
     sample_counter = 0
     for stage_idx, stage_dir in enumerate(sequence):
@@ -1044,29 +1014,29 @@ def test_guided_enrollment_enforces_strict_stage_sequence(
                 )
             ]
         )
-        for count in range(1, 6):
+        for count in range(1, 11):
             sample_counter += 1
             v = np.zeros(128, dtype=np.float32)
             v[sample_counter % 128] = float(sample_counter)
             embedder.set_vector(v)
             prog = controller.process_frame(frame)
             assert prog.direction_counts[stage_dir.value] == count
-            assert prog.samples_collected == stage_idx * 5 + count
+            assert prog.samples_collected == stage_idx * 10 + count
 
         if stage_idx < len(sequence) - 1:
             next_stage = sequence[stage_idx + 1]
             assert prog.current_direction == next_stage.value
             assert prog.is_complete is False
 
-    # After DOWN 5/5: enrollment is complete
-    assert prog.samples_collected == 25
+    # After LEFT 10/10: enrollment is complete
+    assert prog.samples_collected == 30
     assert prog.is_complete is True
     assert prog.state == EnrollmentState.COMPLETED
 
     res = controller.commit_session()
     assert res.is_success is True
-    assert res.samples_enrolled == 25
-    assert len(service.get_person_embedding_vectors(person.person_id)) == 25
+    assert res.samples_enrolled == 30
+    assert len(service.get_person_embedding_vectors(person.person_id)) == 30
 
 
 def test_guided_enrollment_commit_fails_if_any_direction_unmet(
@@ -1079,7 +1049,7 @@ def test_guided_enrollment_commit_fails_if_any_direction_unmet(
 
     detector, quality_gate, aligner, embedder, service, _ = mock_pipeline
     guided_config = EnrollmentConfig(
-        target_samples=25,
+        target_samples=30,
         minimum_samples=5,
         min_sample_interval_seconds=0.0,
     )
@@ -1111,20 +1081,6 @@ def test_guided_enrollment_commit_fails_if_any_direction_unmet(
             right_mouth_corner=(75.0, 140.0),
             left_mouth_corner=(125.0, 140.0),
         ),
-        HeadDirection.LEFT: FaceLandmarks(
-            right_eye=(70.0, 70.0),
-            left_eye=(130.0, 70.0),
-            nose_tip=(112.0, 104.3),
-            right_mouth_corner=(75.0, 140.0),
-            left_mouth_corner=(125.0, 140.0),
-        ),
-        HeadDirection.UP: FaceLandmarks(
-            right_eye=(70.0, 70.0),
-            left_eye=(130.0, 70.0),
-            nose_tip=(100.0, 90.0),
-            right_mouth_corner=(75.0, 140.0),
-            left_mouth_corner=(125.0, 140.0),
-        ),
     }
 
     sample_counter = 0
@@ -1132,7 +1088,7 @@ def test_guided_enrollment_commit_fails_if_any_direction_unmet(
         detector.set_detections(
             [FaceDetection(bbox=(20.0, 20.0, 100.0, 100.0), confidence=0.95, landmarks=lm)]
         )
-        for _ in range(5):
+        for _ in range(20):
             sample_counter += 1
             v = np.zeros(128, dtype=np.float32)
             v[sample_counter % 128] = float(sample_counter)
@@ -1141,7 +1097,7 @@ def test_guided_enrollment_commit_fails_if_any_direction_unmet(
 
     # 20 samples collected (FRONT, RIGHT, LEFT, UP all 5, DOWN is 0)
     assert controller.current_progress.samples_collected == 20
-    assert controller.current_progress.current_direction == HeadDirection.DOWN.value
+    assert controller.current_progress.current_direction == HeadDirection.LEFT.value
     assert controller.current_progress.is_complete is False
 
     # Attempt commit before DOWN
@@ -1166,7 +1122,7 @@ def test_real_turned_face_accepted_during_directional_stages(
 
     detector, quality_gate, aligner, embedder, service, _ = mock_pipeline
     guided_config = EnrollmentConfig(
-        target_samples=25,
+        target_samples=30,
         minimum_samples=5,
         min_sample_interval_seconds=0.0,
     )
@@ -1194,13 +1150,13 @@ def test_real_turned_face_accepted_during_directional_stages(
     detector.set_detections(
         [FaceDetection(bbox=(20.0, 20.0, 100.0, 100.0), confidence=0.95, landmarks=lm_front)]
     )
-    for i in range(5):
+    for i in range(10):
         vec = np.zeros(128, dtype=np.float32)
         vec[i] = 1.0
         embedder.set_vector(vec)
         prog = controller.process_frame(frame)
 
-    assert prog.direction_counts[HeadDirection.FRONT.value] == 5
+    assert prog.direction_counts[HeadDirection.FRONT.value] == 10
     assert prog.current_direction == HeadDirection.RIGHT.value
 
     # 2. In Stage 2 (RIGHT):
@@ -1222,7 +1178,7 @@ def test_real_turned_face_accepted_during_directional_stages(
 
     # MUST be accepted as RIGHT, not rejected as excessive_yaw!
     assert prog.direction_counts[HeadDirection.RIGHT.value] == 1
-    assert prog.samples_collected == 6
+    assert prog.samples_collected == 11
     assert prog.last_rejection_reason is None
 
     # Present FRONT pose while in RIGHT stage:
@@ -1249,212 +1205,3 @@ def test_real_turned_face_accepted_during_directional_stages(
     # Must be rejected, must NOT increment RIGHT counter
     assert prog.direction_counts[HeadDirection.RIGHT.value] == 1
     assert prog.last_rejection_reason == SampleRejectionReason.WRONG_DIRECTION
-
-
-def test_guided_enrollment_up_and_down_lifecycle_completion(
-    mock_pipeline: tuple,
-) -> None:
-    """Verify UP and DOWN directional stage enforcement, rejection of incorrect poses,
-
-    advancement from UP to DOWN after 5 UP samples, and completion at 25/25 total.
-    """
-    from dh360_hi.vision.detector import FaceLandmarks
-    from dh360_hi.vision.enrollment import (
-        EnrollmentConfig,
-        FaceEnrollmentController,
-        SampleRejectionReason,
-    )
-    from dh360_hi.vision.quality_gate import HeadDirection
-
-    detector, quality_gate, aligner, embedder, service, _ = mock_pipeline
-    guided_config = EnrollmentConfig(
-        target_samples=25,
-        minimum_samples=5,
-        min_sample_interval_seconds=0.0,
-    )
-    controller = FaceEnrollmentController(
-        detector=detector,
-        quality_gate=quality_gate,
-        aligner=aligner,
-        embedder=embedder,
-        person_service=service,
-        config=guided_config,
-    )
-    person = service.create_person("UpDown Lifecycle Person")
-    prog = controller.start_session(person.person_id)
-
-    frame = Frame(image=np.zeros((480, 640, 3), dtype=np.uint8), frame_id=1, timestamp=0.0)
-
-    # Realistic landmarks for each direction
-    # Resting face has slight natural asymmetry/offset (ratio = 0.52: nt_y = 106.4)
-    lm_front = FaceLandmarks(
-        right_eye=(70.0, 70.0),
-        left_eye=(130.0, 70.0),
-        nose_tip=(100.0, 106.4),
-        right_mouth_corner=(75.0, 140.0),
-        left_mouth_corner=(125.0, 140.0),
-    )
-    lm_right = FaceLandmarks(
-        right_eye=(70.0, 70.0),
-        left_eye=(130.0, 70.0),
-        nose_tip=(93.0, 106.4),
-        right_mouth_corner=(75.0, 140.0),
-        left_mouth_corner=(125.0, 140.0),
-    )
-    lm_left = FaceLandmarks(
-        right_eye=(70.0, 70.0),
-        left_eye=(130.0, 70.0),
-        nose_tip=(107.0, 106.4),
-        right_mouth_corner=(75.0, 140.0),
-        left_mouth_corner=(125.0, 140.0),
-    )
-    # UP pose with slight natural yaw (nt_x=96.0, nt_y=99.0 -> ratio=0.414, pitch_off=-0.106)
-    lm_up = FaceLandmarks(
-        right_eye=(70.0, 70.0),
-        left_eye=(130.0, 70.0),
-        nose_tip=(96.0, 99.0),
-        right_mouth_corner=(75.0, 140.0),
-        left_mouth_corner=(125.0, 140.0),
-    )
-    # DOWN pose with slight natural yaw (nt_x=104.0, nt_y=113.8 -> ratio=0.626, pitch_off=+0.106)
-    lm_down = FaceLandmarks(
-        right_eye=(70.0, 70.0),
-        left_eye=(130.0, 70.0),
-        nose_tip=(104.0, 113.8),
-        right_mouth_corner=(75.0, 140.0),
-        left_mouth_corner=(125.0, 140.0),
-    )
-
-    sample_counter = 0
-
-    # 1. Complete Stage 1 (FRONT): 5 frames
-    detector.set_detections(
-        [FaceDetection(bbox=(20, 20, 100, 100), confidence=0.95, landmarks=lm_front)]
-    )
-    for _ in range(5):
-        vec = np.zeros(128, dtype=np.float32)
-        vec[sample_counter % 128] = 1.0
-        vec[(sample_counter + 1) % 128] = float(sample_counter + 1)
-        embedder.set_vector(vec)
-        sample_counter += 1
-        prog = controller.process_frame(frame)
-
-    assert prog.direction_counts[HeadDirection.FRONT.value] == 5
-    assert prog.current_direction == HeadDirection.RIGHT.value
-
-    # 2. Complete Stage 2 (RIGHT): 5 frames
-    detector.set_detections(
-        [FaceDetection(bbox=(20, 20, 100, 100), confidence=0.95, landmarks=lm_right)]
-    )
-    for _ in range(5):
-        vec = np.zeros(128, dtype=np.float32)
-        vec[sample_counter % 128] = 1.0
-        vec[(sample_counter + 1) % 128] = float(sample_counter + 1)
-        embedder.set_vector(vec)
-        sample_counter += 1
-        prog = controller.process_frame(frame)
-
-    assert prog.direction_counts[HeadDirection.RIGHT.value] == 5
-    assert prog.current_direction == HeadDirection.LEFT.value
-
-    # 3. Complete Stage 3 (LEFT): 5 frames
-    detector.set_detections(
-        [FaceDetection(bbox=(20, 20, 100, 100), confidence=0.95, landmarks=lm_left)]
-    )
-    for _ in range(5):
-        vec = np.zeros(128, dtype=np.float32)
-        vec[sample_counter % 128] = 1.0
-        vec[(sample_counter + 1) % 128] = float(sample_counter + 1)
-        embedder.set_vector(vec)
-        sample_counter += 1
-        prog = controller.process_frame(frame)
-
-    assert prog.direction_counts[HeadDirection.LEFT.value] == 5
-    assert prog.samples_collected == 15
-    # Must now advance to UP
-    assert prog.current_direction == HeadDirection.UP.value
-    assert prog.direction_counts[HeadDirection.UP.value] == 0
-
-    # 4. In Stage 4 (UP): test rejection of non-UP poses
-    # Feeding FRONT pose -> DIRECTION_QUOTA_FULL (FRONT is already 5/5)
-    detector.set_detections(
-        [FaceDetection(bbox=(20, 20, 100, 100), confidence=0.95, landmarks=lm_front)]
-    )
-    prog = controller.process_frame(frame)
-    assert prog.last_rejection_reason == SampleRejectionReason.DIRECTION_QUOTA_FULL
-    assert prog.direction_counts[HeadDirection.UP.value] == 0
-    assert prog.samples_collected == 15
-
-    # Feeding DOWN pose -> WRONG_DIRECTION (DOWN is not the active stage)
-    detector.set_detections(
-        [FaceDetection(bbox=(20, 20, 100, 100), confidence=0.95, landmarks=lm_down)]
-    )
-    prog = controller.process_frame(frame)
-    assert prog.last_rejection_reason == SampleRejectionReason.WRONG_DIRECTION
-    assert prog.direction_counts[HeadDirection.UP.value] == 0
-    assert prog.samples_collected == 15
-
-    # Feed 5 valid UP frames -> accepted one-by-one
-    detector.set_detections(
-        [FaceDetection(bbox=(20, 20, 100, 100), confidence=0.95, landmarks=lm_up)]
-    )
-    for i in range(5):
-        vec = np.zeros(128, dtype=np.float32)
-        vec[sample_counter % 128] = 1.0
-        vec[(sample_counter + 1) % 128] = float(sample_counter + 1)
-        embedder.set_vector(vec)
-        sample_counter += 1
-        prog = controller.process_frame(frame)
-        assert prog.direction_counts[HeadDirection.UP.value] == i + 1
-
-    assert prog.direction_counts[HeadDirection.UP.value] == 5
-    assert prog.samples_collected == 20
-    # Must now advance to Stage 5 (DOWN)
-    assert prog.current_direction == HeadDirection.DOWN.value
-    assert prog.direction_counts[HeadDirection.DOWN.value] == 0
-
-    # 5. In Stage 5 (DOWN): test rejection of non-DOWN poses
-    # Feeding UP pose -> DIRECTION_QUOTA_FULL (UP is already 5/5)
-    detector.set_detections(
-        [FaceDetection(bbox=(20, 20, 100, 100), confidence=0.95, landmarks=lm_up)]
-    )
-    prog = controller.process_frame(frame)
-    assert prog.last_rejection_reason == SampleRejectionReason.DIRECTION_QUOTA_FULL
-    assert prog.direction_counts[HeadDirection.DOWN.value] == 0
-    assert prog.samples_collected == 20
-
-    # Feeding FRONT pose -> DIRECTION_QUOTA_FULL (FRONT is already 5/5)
-    detector.set_detections(
-        [FaceDetection(bbox=(20, 20, 100, 100), confidence=0.95, landmarks=lm_front)]
-    )
-    prog = controller.process_frame(frame)
-    assert prog.last_rejection_reason == SampleRejectionReason.DIRECTION_QUOTA_FULL
-    assert prog.direction_counts[HeadDirection.DOWN.value] == 0
-    assert prog.samples_collected == 20
-
-    # Feed 5 valid DOWN frames -> accepted one-by-one
-    detector.set_detections(
-        [FaceDetection(bbox=(20, 20, 100, 100), confidence=0.95, landmarks=lm_down)]
-    )
-    for i in range(5):
-        vec = np.zeros(128, dtype=np.float32)
-        vec[sample_counter % 128] = 1.0
-        vec[(sample_counter + 1) % 128] = float(sample_counter + 1)
-        embedder.set_vector(vec)
-        sample_counter += 1
-        prog = controller.process_frame(frame)
-        assert prog.direction_counts[HeadDirection.DOWN.value] == i + 1
-
-    # 6. Completion: All 5 directions at 5/5, total 25/25
-    assert prog.samples_collected == 25
-    assert prog.is_complete is True
-    assert prog.state == EnrollmentState.COMPLETED
-    for d in ["front", "right", "left", "up", "down"]:
-        assert prog.direction_counts[d] == 5
-
-    # Commit succeeds and stores 25 embeddings
-    res = controller.commit_session()
-    assert res.is_success is True
-    assert res.samples_enrolled == 25
-    stored_vectors = service.get_person_embedding_vectors(person.person_id)
-    assert len(stored_vectors) == 25

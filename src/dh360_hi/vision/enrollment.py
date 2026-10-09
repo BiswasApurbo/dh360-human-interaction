@@ -89,19 +89,15 @@ STAGE_DIRECTIONS: tuple[HeadDirection, ...] = (
     HeadDirection.FRONT,
     HeadDirection.RIGHT,
     HeadDirection.LEFT,
-    HeadDirection.UP,
-    HeadDirection.DOWN,
 )
 
 
 def default_direction_targets() -> dict[str, int]:
-    """Default per-direction sample targets for guided enrollment (5 directions * 5 = 25)."""
+    """Default per-direction sample targets for guided enrollment (3 directions * 10 = 30)."""
     return {
-        HeadDirection.FRONT.value: 5,
-        HeadDirection.RIGHT.value: 5,
-        HeadDirection.LEFT.value: 5,
-        HeadDirection.UP.value: 5,
-        HeadDirection.DOWN.value: 5,
+        HeadDirection.FRONT.value: 10,
+        HeadDirection.RIGHT.value: 10,
+        HeadDirection.LEFT.value: 10,
     }
 
 
@@ -131,8 +127,6 @@ def _get_stage_instruction(direction: HeadDirection) -> str:
         HeadDirection.FRONT: "look front",
         HeadDirection.RIGHT: "turn right",
         HeadDirection.LEFT: "turn left",
-        HeadDirection.UP: "look up",
-        HeadDirection.DOWN: "look down",
     }
     return instructions.get(direction, f"look {direction.value}")
 
@@ -141,9 +135,9 @@ def _get_stage_instruction(direction: HeadDirection) -> str:
 class EnrollmentConfig:
     """Configuration governing face enrollment sample requirements and diversity thresholds."""
 
-    target_samples: int = 25
+    target_samples: int = 30
     minimum_samples: int = 5
-    samples_per_direction: int = 5
+    samples_per_direction: int = 10
     direction_targets: dict[str, int] = field(default_factory=default_direction_targets)
     max_attempts: int = 120
     duplicate_similarity_threshold: float = 0.95
@@ -158,11 +152,11 @@ class EnrollmentConfig:
             raise ValueError(msg)
         # If target_samples was explicitly overridden (e.g. legacy test config target_samples=5)
         # without explicit direction_targets, disable direction quotas so legacy tests run free
-        if self.direction_targets == default_direction_targets() and self.target_samples != 25:
+        if self.direction_targets == default_direction_targets() and self.target_samples != 30:
             object.__setattr__(self, "direction_targets", {})
         elif self.direction_targets:
             total_dir_targets = sum(self.direction_targets.values())
-            if total_dir_targets != self.target_samples and self.target_samples == 25:
+            if total_dir_targets != self.target_samples and self.target_samples == 30:
                 object.__setattr__(self, "target_samples", total_dir_targets)
 
         if self.target_samples < self.minimum_samples:
@@ -196,8 +190,6 @@ class _ActiveSessionData:
             HeadDirection.FRONT.value: 0,
             HeadDirection.RIGHT.value: 0,
             HeadDirection.LEFT.value: 0,
-            HeadDirection.UP.value: 0,
-            HeadDirection.DOWN.value: 0,
         }
     )
     current_direction: HeadDirection | None = None
@@ -528,7 +520,7 @@ class FaceEnrollmentController(BaseFaceEnrollment):
         q_result = self._quality_gate.evaluate(frame, target_detection)
         rejection_reasons = list(q_result.rejection_reasons)
 
-        # During guided directional enrollment (RIGHT, LEFT, UP, DOWN), head yaw
+        # During guided directional enrollment (RIGHT, LEFT), head yaw
         # is the requested physical posture, not a frontality defect.
         if self._config.direction_targets:
             active_stage = self._get_active_stage_direction(s)
