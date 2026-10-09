@@ -127,6 +127,35 @@ def test_start_missing_person_returns_404(monkeypatch: pytest.MonkeyPatch) -> No
     assert response.status_code == 404
 
 
+def test_cancel_any_enrollment_session_returns_200(monkeypatch: pytest.MonkeyPatch) -> None:
+    token = _configure_operator(monkeypatch, "enrollment:manage")
+    app = create_app()
+    headers = {"Authorization": f"Bearer {token}"}
+    with TestClient(app) as client:
+        client.app.state.service = _StubService()
+
+        client.post(
+            f"/persons/{_PERSON_ID}/enrollment/sessions",
+            json={"mode": "add_samples"},
+            headers=headers,
+        )
+
+        cancel_resp = client.delete("/persons/enrollment/sessions/current", headers=headers)
+        assert cancel_resp.status_code == 200
+        assert cancel_resp.json()["cancelled"] is True
+        assert cancel_resp.json()["person_id"] == _PERSON_ID
+
+
+def test_cancel_any_enrollment_session_returns_409_if_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    token = _configure_operator(monkeypatch, "enrollment:manage")
+    app = create_app()
+    headers = {"Authorization": f"Bearer {token}"}
+    with TestClient(app) as client:
+        resp = client.delete("/persons/enrollment/sessions/current", headers=headers)
+        assert resp.status_code == 409
+        assert "No active enrollment session" in resp.json()["detail"]
+
+
 def test_session_endpoints_require_active_session(monkeypatch: pytest.MonkeyPatch) -> None:
     """Progress/step/commit/cancel all return 404 when no session is active."""
     token = _configure_operator(monkeypatch, "enrollment:manage")
