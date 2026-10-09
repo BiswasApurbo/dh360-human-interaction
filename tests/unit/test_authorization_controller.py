@@ -181,6 +181,29 @@ class TestAuthorizationControllerLifecycle:
         assert sess2.authorization_id != sess1.authorization_id
         assert sess2.status is AuthorizationStatus.ACTIVE
 
+    def test_cancel_active_session(self, controller: AuthorizationController) -> None:
+        """Verify an active session can be explicitly cancelled."""
+        sess1 = controller.start()
+        assert sess1.is_active
+
+        sess2 = controller.cancel()
+        assert not sess2.is_active
+        assert sess2.status == AuthorizationStatus.CANCELLED
+
+        # Verify a new session can be started after cancellation
+        sess3 = controller.start()
+        assert sess3.is_active
+        assert sess3.authorization_id != sess1.authorization_id
+
+    def test_cancel_raises_when_no_active_session(
+        self, controller: AuthorizationController
+    ) -> None:
+        """Verify cancel raises ValueError if no active session."""
+        import pytest
+
+        with pytest.raises(ValueError, match="No active authorization session to cancel"):
+            controller.cancel()
+
     def test_start_raises_after_controller_closed(
         self, controller: AuthorizationController
     ) -> None:

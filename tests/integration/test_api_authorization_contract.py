@@ -181,6 +181,37 @@ class TestAuthorizationSessionLifecycleEndpoints:
             for f in forbidden_fields:
                 assert f not in payload
 
+    def test_cancel_session_returns_200_and_ends_session(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        token = _configure_operator(monkeypatch, "authorization:manage")
+        sm = _mk_session_manager()
+        ctrl = AuthorizationController(session_manager=sm, timeout_seconds=5.0)
+        app = create_app(authorization_controller=ctrl)
+        headers = {"Authorization": f"Bearer {token}"}
+        with TestClient(app) as client:
+            client.post(_AUTH_SESSIONS_PATH, headers=headers)
+
+            resp = client.delete("/authorization/sessions/current", headers=headers)
+            assert resp.status_code == 200
+            assert resp.json()["status"] == "cancelled"
+
+            resp2 = client.post(_AUTH_SESSIONS_PATH, headers=headers)
+            assert resp2.status_code == 201
+
+    def test_cancel_returns_409_when_no_active_session(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        token = _configure_operator(monkeypatch, "authorization:manage")
+        sm = _mk_session_manager()
+        ctrl = AuthorizationController(session_manager=sm, timeout_seconds=5.0)
+        app = create_app(authorization_controller=ctrl)
+        headers = {"Authorization": f"Bearer {token}"}
+        with TestClient(app) as client:
+            resp = client.delete("/authorization/sessions/current", headers=headers)
+            assert resp.status_code == 409
+            assert "No active authorization session" in resp.json()["detail"]
+
     def test_second_active_post_returns_409_conflict(self, monkeypatch: pytest.MonkeyPatch) -> None:
         token = _configure_operator(monkeypatch, "authorization:manage")
         sm = _mk_session_manager()

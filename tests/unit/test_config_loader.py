@@ -37,7 +37,7 @@ def test_default_config_properties() -> None:
     assert cfg.worker.max_queue_size == 8
     assert cfg.identity.evidence_window_size == 7
     assert cfg.presence.enter_patience_frames == 3
-    assert cfg.enrollment.target_samples == 20
+    assert cfg.enrollment.target_samples == 30
 
 
 def test_presets_resolution() -> None:

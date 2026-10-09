@@ -80,6 +80,31 @@ class AuthorizationController:
             )
             return new_session
 
+    def cancel(self) -> AuthorizationSession:
+        """Cancel the active authorization session if one exists.
+
+        Returns the completed session if one was cancelled.
+        Raises ValueError if there is no active session.
+        """
+        session_to_notify = None
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("AuthorizationController is closed")
+            if self._session is None or not self._session.is_active:
+                raise ValueError("No active authorization session to cancel")
+
+            self._session = self._session.complete(AuthorizationStatus.CANCELLED)
+            session_to_notify = self._session
+            _logger.debug(
+                "AuthorizationController cancelled session %s",
+                session_to_notify.authorization_id,
+            )
+
+        if session_to_notify is not None:
+            self._notify_transition(session_to_notify)
+
+        return session_to_notify
+
     def _notify_transition(self, session: AuthorizationSession) -> None:
         """Safely invoke the transition callback without leaking exceptions."""
         if self._on_transition is not None:

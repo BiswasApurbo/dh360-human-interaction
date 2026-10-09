@@ -70,6 +70,31 @@ def get_current_authorization_session(
     return session.to_dict() if session is not None else None
 
 
+@router.delete(
+    "/authorization/sessions/current",
+    status_code=status.HTTP_200_OK,
+)
+def cancel_current_authorization_session(
+    request: Request,
+    _operator: OperatorPrincipal = _authorization_manage,
+) -> dict[str, Any]:
+    """Cancel the currently active authorization session.
+
+    Returns HTTP 200 with the cancelled AuthorizationSession snapshot.
+    Returns HTTP 409 if no session is active.
+    Returns HTTP 503 if the authorization controller is unavailable.
+    """
+    controller = _get_controller(request)
+    try:
+        session = controller.cancel()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    return session.to_dict()
+
+
 @router.get(
     "/authorization/sessions/{authorization_id}/context",
     status_code=status.HTTP_200_OK,

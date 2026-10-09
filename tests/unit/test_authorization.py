@@ -108,6 +108,7 @@ class TestAuthorizationStatus:
             "no_face",
             "lost",
             "timeout",
+            "cancelled",
         }
 
     @pytest.mark.parametrize(

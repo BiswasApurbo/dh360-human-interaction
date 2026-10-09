@@ -80,6 +80,7 @@ class AuthorizationStatus(StrEnum):
     NO_FACE = "no_face"  # No primary target selected (target/presence semantics)
     LOST = "lost"  # Identity lost AFTER a prior AUTHORIZED decision
     TIMEOUT = "timeout"  # Controller lifecycle outcome; never perception-derived
+    CANCELLED = "cancelled"  # Explicitly terminated by operator
 
 
 def _coerce_status(status: AuthorizationStatus | str) -> AuthorizationStatus:
@@ -148,7 +149,7 @@ class AuthorizationSession:
                 msg = "display_name cannot be empty or whitespace"
                 raise ValidationError(msg)
         else:
-            # ACTIVE / UNKNOWN / UNCERTAIN / NO_FACE / TIMEOUT claim no identity.
+            # ACTIVE / UNKNOWN / UNCERTAIN / NO_FACE / TIMEOUT / CANCELLED claim no identity.
             if self.person_id is not None:
                 msg = f"{self.status.value} authorization session cannot carry person_id"
                 raise ValidationError(msg)
@@ -188,7 +189,7 @@ class AuthorizationSession:
           (identity loss after a prior authorization decision); the authorized
           ``person_id``/``display_name`` are inherited unless explicitly replaced.
         * An ``AUTHORIZED`` session may only remain ``AUTHORIZED``, move to
-          ``LOST``/``TIMEOUT`` (observation statuses are pre-authorization only);
+          ``LOST``/``TIMEOUT``/``CANCELLED`` (observation statuses are pre-authorization only);
           ``TIMEOUT`` drops the identity claim (controller lifecycle outcome).
         """
         if self.is_completed:
@@ -208,8 +209,12 @@ class AuthorizationSession:
             AuthorizationStatus.AUTHORIZED,
             AuthorizationStatus.LOST,
             AuthorizationStatus.TIMEOUT,
+            AuthorizationStatus.CANCELLED,
         ):
-            msg = "AUTHORIZED session may only stay AUTHORIZED, move to LOST/TIMEOUT, or complete"
+            msg = (
+                "AUTHORIZED session may only stay AUTHORIZED, "
+                "move to LOST/TIMEOUT/CANCELLED, or complete"
+            )
             raise ValidationError(msg)
 
         if target_status in (AuthorizationStatus.AUTHORIZED, AuthorizationStatus.LOST):

@@ -255,7 +255,7 @@
 
     <div id="auth-action-section" style="display:block; margin-top:1rem; margin-bottom:1.5rem;">
       <button id="start-btn" onclick="startAuthorization()" style="width:100%;">Start Authorization</button>
-      <button id="show-register-btn" onclick="document.getElementById('registration-section').style.display='block'; this.style.display='none';" style="width:100%; margin-top:0.5rem; background:#4b5563;">Register New Person</button>
+      <button id="show-register-btn" onclick="showRegistrationForm()" style="width:100%; margin-top:0.5rem; background:#4b5563;">Register New Person</button>
     </div>
 
     <div class="status-panel">
@@ -622,6 +622,74 @@
       }
     }
 
+    async function cancelActiveSession(token) {
+      try {
+        const resp = await fetch("/authorization/sessions/current", {
+          method: "DELETE",
+          headers: {
+            "Authorization": "Bearer " + token
+          }
+        });
+
+        let shouldClear = false;
+        if (resp.status === 200) {
+          appendLog("cancelled previous active authorization session");
+          shouldClear = true;
+        } else if (resp.status === 409) {
+          const err = await resp.json().catch(() => ({}));
+          if (err.detail && err.detail.includes("No active")) {
+            shouldClear = true;
+          } else {
+            appendLog(`failed to cancel session (conflict): ${err.detail}`);
+            return false;
+          }
+        } else {
+          appendLog(`failed to cancel session: HTTP ${resp.status}`);
+          return false;
+        }
+
+        if (shouldClear) {
+          if (abortController) {
+            abortController.abort();
+            // Don't set to null here, let the finally block or the next connectSSE do it
+          }
+          isConnecting = false;
+          setSseIndicator("error", "Disconnected");
+          clearContextUI();
+
+          const statusEl = document.getElementById("auth-status");
+          if (statusEl) {
+            statusEl.textContent = "IDLE";
+            statusEl.className = "badge badge-none";
+          }
+          ["auth-person", "auth-id", "auth-started", "auth-updated", "auth-ended"].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = "-";
+          });
+        }
+        return true;
+      } catch(err) {
+        appendLog(`network error cancelling session: ${err.message}`);
+        return false;
+      }
+    }
+
+    async function showRegistrationForm() {
+      clearNotice();
+      const token = document.getElementById("token-input").value.trim();
+      if (!token) {
+        showNotice("Please enter an operator Bearer token with required scopes to register.", "error");
+        return;
+      }
+      const ok = await cancelActiveSession(token);
+      if (!ok) {
+        showNotice("Failed to cancel existing authorization session. Registration is blocked.", "error");
+        return;
+      }
+      document.getElementById('registration-section').style.display='block';
+      document.getElementById('show-register-btn').style.display='none';
+    }
+
     async function startAuthorization() {
       clearNotice();
       const token = document.getElementById("token-input").value.trim();
@@ -640,13 +708,31 @@
       startBtn.disabled = true;
 
       try {
-        const resp = await fetch("/authorization/sessions", {
+        let resp = await fetch("/authorization/sessions", {
           method: "POST",
           headers: {
             "Authorization": "Bearer " + token,
             "Content-Type": "application/json"
           }
         });
+
+        if (resp.status === 409) {
+          appendLog("active session conflict; attempting to cancel old session...");
+          const ok = await cancelActiveSession(token);
+          if (ok) {
+            resp = await fetch("/authorization/sessions", {
+              method: "POST",
+              headers: {
+                "Authorization": "Bearer " + token,
+                "Content-Type": "application/json"
+              }
+            });
+          } else {
+            showNotice("A session is already running and could not be safely cancelled.", "error");
+            startBtn.disabled = false;
+            return;
+          }
+        }
 
         if (resp.status === 201) {
           const data = await resp.json();
@@ -655,10 +741,8 @@
           updateSessionUI(data);
           connectSSE(token);
         } else if (resp.status === 409) {
-          const err = await resp.json().catch(() => ({}));
-          showNotice(`Active session in progress (${err.detail || 'Conflict'})`, "info");
+          showNotice("A session is already running and could not be safely cancelled.", "error");
           appendLog("authorization 409 active session already exists");
-          connectSSE(token);
         } else if (resp.status === 401 || resp.status === 403) {
           const err = await resp.json().catch(() => ({}));
           showNotice(`Authentication failed (${resp.status}): ${err.message || err.detail || 'Unauthorized'}`, "error");
@@ -687,14 +771,15 @@
       setSseIndicator("connecting", "Connecting...");
       appendLog("connecting to /interaction/events SSE stream...");
 
-      abortController = new AbortController();
+      const currentAbortController = new AbortController();
+      abortController = currentAbortController;
 
       try {
         const resp = await fetch("/interaction/events", {
           headers: {
             "Authorization": "Bearer " + token
           },
-          signal: abortController.signal
+          signal: currentAbortController.signal
         });
 
         if (!resp.ok) {
@@ -731,9 +816,11 @@
           appendLog(`SSE stream error: ${err.message}`);
         }
       } finally {
-        isConnecting = false;
-        abortController = null;
-        setSseIndicator("error", "Disconnected");
+        if (abortController === currentAbortController) {
+          isConnecting = false;
+          abortController = null;
+          setSseIndicator("error", "Disconnected");
+        }
       }
     }
 
@@ -770,9 +857,7 @@
           } else if (st === "UNKNOWN") {
             clearContextUI();
             showNotice("Person not registered. Please register.", "error");
-            document.getElementById("registration-section").style.display = "block";
-            const showBtn = document.getElementById("show-register-btn");
-            if(showBtn) showBtn.style.display = "none";
+
           } else if (st === "UNCERTAIN") {
             clearContextUI();
             showNotice("Identity could not be confirmed.", "error");
