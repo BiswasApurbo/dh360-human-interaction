@@ -32,11 +32,37 @@ scriptCode = scriptCode.replace(/isNewRegistration = true;/g, 'global.isNewRegis
 scriptCode = scriptCode.replace(/isNewRegistration = false;/g, 'global.isNewRegistration = false;');
 scriptCode = scriptCode.replace(/if \(isNewRegistration/g, 'if (global.isNewRegistration');
 
+// Expose isWorking
+scriptCode = scriptCode.replace(/let isWorking = false;/, 'global.isWorking = false;');
+scriptCode = scriptCode.replace(/isWorking = true;/g, 'global.isWorking = true;');
+scriptCode = scriptCode.replace(/isWorking = false;/g, 'global.isWorking = false;');
+scriptCode = scriptCode.replace(/if \(isWorking\)/g, 'if (global.isWorking)');
+
+// Expose enrollmentIntervalId
+scriptCode = scriptCode.replace(/let enrollmentIntervalId = null;/, 'global.enrollmentIntervalId = null;');
+scriptCode = scriptCode.replace(/enrollmentIntervalId = /g, 'global.enrollmentIntervalId = ');
+scriptCode = scriptCode.replace(/if \(enrollmentIntervalId/g, 'if (global.enrollmentIntervalId');
+
+// Expose isStepInProgress
+scriptCode = scriptCode.replace(/let isStepInProgress = false;/, 'global.isStepInProgress = false;');
+scriptCode = scriptCode.replace(/isStepInProgress = true;/g, 'global.isStepInProgress = true;');
+scriptCode = scriptCode.replace(/isStepInProgress = false;/g, 'global.isStepInProgress = false;');
+scriptCode = scriptCode.replace(/if \(isStepInProgress\)/g, 'if (global.isStepInProgress)');
+
+// Expose currentPersonId
+scriptCode = scriptCode.replace(/let currentPersonId = null;/, 'global.currentPersonId = null;');
+scriptCode = scriptCode.replace(/currentPersonId = /g, 'global.currentPersonId = ');
+scriptCode = scriptCode.replace(/currentPersonId ===/g, 'global.currentPersonId ===');
+
 global.abortController = null;
 global.isConnecting = false;
 global.registeredPersonsCount = null;
 global.enrolledIdentitiesCount = null;
 global.isNewRegistration = false;
+global.isWorking = false;
+global.enrollmentIntervalId = null;
+global.isStepInProgress = false;
+global.currentPersonId = null;
 global.fetchResponses = [];
 global.fetchArgs = [];
 global.fetch = async (url, options) => {
@@ -60,6 +86,8 @@ const domState = {
     "auth-updated": { textContent: "" },
     "auth-ended": { textContent: "" },
     "registration-section": { style: { display: 'none' } },
+    "enrollment-section": { style: { display: 'none' } },
+    "auth-action-section": { style: { display: 'block' } },
     "show-register-btn": { style: { display: 'block' }, disabled: false },
     "start-btn": { disabled: false },
     "display-name": { value: "Test" },
@@ -69,7 +97,7 @@ const domState = {
     "office-room": { value: "" },
     "working-hours": { value: "" },
     "profile-description": { value: "" },
-    "register-btn": { disabled: false },
+    "register-btn": { disabled: false, title: "" },
     "current-direction": { textContent: "" },
     "current-instruction": { textContent: "" },
     "direction-progress": { textContent: "" },
@@ -403,6 +431,69 @@ async function runTests() {
     await startEnrollmentForExistingPerson("existing-p1", "Existing Person");
     if (global.isNewRegistration) throw new Error("Existing person enrollment MUST NOT set isNewRegistration");
     console.log("✓ startEnrollmentForExistingPerson safely enrolls existing person without new registration rollback flag");
+
+    // Test Bug 2: updateRegisterButtonState enforces validation and reactive state
+    global.enrollmentIntervalId = null;
+    global.isStepInProgress = false;
+    global.isWorking = false;
+    global.isPreflightMode = false;
+    domState["token-input"].value = "";
+    domState["display-name"].value = "Apurbo";
+    updateRegisterButtonState();
+    if (!domState["register-btn"].disabled) throw new Error("Register button must be disabled when token is empty");
+    if (!domState["register-btn"].title.includes("token")) throw new Error("Button title must state token required");
+
+    domState["token-input"].value = "valid-token";
+    domState["display-name"].value = "";
+    updateRegisterButtonState();
+    if (!domState["register-btn"].disabled) throw new Error("Register button must be disabled when display name is empty");
+    if (!domState["register-btn"].title.includes("Display Name")) throw new Error("Button title must state Display Name required");
+
+    domState["display-name"].value = "Apurbo";
+    updateRegisterButtonState();
+    if (domState["register-btn"].disabled) throw new Error("Register button must be enabled when token and display name are valid");
+
+    global.isWorking = true;
+    updateRegisterButtonState();
+    if (!domState["register-btn"].disabled) throw new Error("Register button must be disabled when operation is in progress");
+    global.isWorking = false;
+    updateRegisterButtonState();
+    if (domState["register-btn"].disabled) throw new Error("Register button must recover and be enabled after operation completes");
+    console.log("✓ updateRegisterButtonState reactively validates token, display name, and operation state");
+
+    // Test cancelRegistrationForm hides form and restores buttons
+    domState["registration-section"].style.display = "block";
+    domState["show-register-btn"].style.display = "none";
+    cancelRegistrationForm();
+    if (domState["registration-section"].style.display !== "none") throw new Error("cancelRegistrationForm must hide registration section");
+    if (domState["show-register-btn"].style.display !== "inline-block") throw new Error("cancelRegistrationForm must restore show register button");
+    console.log("✓ cancelRegistrationForm cleanly closes registration form");
+
+    // Test Bug 1: confirmAndDeletePerson cleans up active authorization session if matching deleted person
+    domState["auth-person"].textContent = "Apurbo";
+    global.window.confirm = () => true;
+    global.fetchArgs = [];
+    global.fetchResponses = [
+        { status: 204 }, // DELETE /persons/p-apurbo
+        { status: 200 }, // DELETE /authorization/sessions/current (cleanup active session)
+        { status: 200, json: [] } // loadRegisteredPersons
+    ];
+    await confirmAndDeletePerson("p-apurbo", "Apurbo");
+    const authCancelCall = global.fetchArgs.find(a => a.options && a.options.method === "DELETE" && a.url === "/authorization/sessions/current");
+    if (!authCancelCall) throw new Error("confirmAndDeletePerson must cancel active session when deleted person matches active session");
+    console.log("✓ confirmAndDeletePerson invalidates active authorization session when matching person is deleted");
+
+    // Test confirmAndDeletePerson does NOT cancel active authorization session for an unrelated person
+    domState["auth-person"].textContent = "Apurbo";
+    global.fetchArgs = [];
+    global.fetchResponses = [
+        { status: 204 }, // DELETE /persons/p-unrelated
+        { status: 200, json: [] } // loadRegisteredPersons
+    ];
+    await confirmAndDeletePerson("p-unrelated", "Unrelated Person");
+    const unrelatedCancelCall = global.fetchArgs.find(a => a.options && a.options.method === "DELETE" && a.url === "/authorization/sessions/current");
+    if (unrelatedCancelCall) throw new Error("confirmAndDeletePerson must NOT cancel session when deleting unrelated person");
+    console.log("✓ confirmAndDeletePerson preserves active session when deleting unrelated person");
 
     console.log("All frontend logic tests passed successfully!");
 }

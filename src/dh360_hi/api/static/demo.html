@@ -137,6 +137,7 @@
     .badge-lost,
     .badge-timeout,
     .badge-expired,
+    .badge-cancelled,
     .badge-aborted {
       background: var(--badge-alert);
       color: var(--badge-alert-txt);
@@ -228,7 +229,10 @@
           <button type="button" onclick="addQARow()" style="background:#4b5563; font-size:0.8rem; padding:0.3rem 0.6rem;">+ Add Q&amp;A</button>
         </div>
       </div>
-      <button id="register-btn" onclick="handleRegister()" style="width:100%;">Register &amp; Start Enrollment</button>
+      <div style="display:flex; gap:0.5rem; margin-top:0.5rem;">
+        <button id="register-btn" onclick="handleRegister()" style="flex:1;">Register &amp; Start Enrollment</button>
+        <button id="cancel-register-form-btn" type="button" onclick="cancelRegistrationForm()" style="background:#4b5563; font-size:0.85rem; padding:0.4rem 0.8rem;">Cancel</button>
+      </div>
     </div>
 
     <div id="enrollment-section" style="display:none; margin-top:1rem;">
@@ -434,19 +438,73 @@
       if (tr) tr.remove();
     }
 
+    function updateRegisterButtonState() {
+      const regBtn = document.getElementById("register-btn");
+      if (!regBtn) return;
+
+      const token = (document.getElementById("token-input")?.value || "").trim();
+      const displayName = (document.getElementById("display-name")?.value || "").trim();
+
+      let disabled = false;
+      let reason = "";
+
+      if (isWorking) {
+        disabled = true;
+        reason = "An operation is currently in progress.";
+      } else if (isPreflightMode) {
+        disabled = true;
+        reason = "Biometric preflight check is in progress.";
+      } else if (enrollmentIntervalId || isStepInProgress) {
+        disabled = true;
+        reason = "Biometric enrollment is currently active.";
+      } else if (!token) {
+        disabled = true;
+        reason = "Operator Bearer token is required.";
+      } else if (!displayName) {
+        disabled = true;
+        reason = "Display Name is required.";
+      }
+
+      regBtn.disabled = disabled;
+      if (disabled && reason) {
+        regBtn.title = reason;
+      } else {
+        regBtn.title = "Register person and begin guided biometric enrollment";
+      }
+    }
+
+    function cancelRegistrationForm() {
+      clearNotice();
+      document.getElementById("registration-section").style.display = "none";
+      const showRegBtn = document.getElementById("show-register-btn");
+      if (showRegBtn) {
+        showRegBtn.style.display = "inline-block";
+        showRegBtn.disabled = false;
+      }
+      isWorking = false;
+      isPreflightMode = false;
+      updateRegisterButtonState();
+    }
+
     async function handleRegister() {
       clearNotice();
       const token = document.getElementById("token-input").value.trim();
       if (!token) {
         showNotice("Please enter an operator Bearer token first.", "error");
+        updateRegisterButtonState();
         return;
       }
 
       const displayName = document.getElementById("display-name").value.trim();
       if (!displayName) {
         showNotice("Display Name is required.", "error");
+        updateRegisterButtonState();
         return;
       }
+
+      if (isWorking) return;
+      isWorking = true;
+      updateRegisterButtonState();
 
       const preferredName = document.getElementById("preferred-name").value.trim();
       const role = document.getElementById("role").value.trim();
@@ -480,9 +538,6 @@
         qa_pairs: qaPairs.length > 0 ? qaPairs : null
       };
 
-      const registerBtn = document.getElementById("register-btn");
-      registerBtn.disabled = true;
-
       try {
         const resp = await fetch("/persons", {
           method: "POST",
@@ -510,19 +565,19 @@
             isNewRegistration = false;
             document.getElementById("enrollment-section").style.display = "none";
             document.getElementById("registration-section").style.display = "block";
-            registerBtn.disabled = false;
           }
         } else {
           const err = await resp.json().catch(() => ({}));
           const msg = err.detail || err.message || `HTTP ${resp.status}`;
           showNotice(`Person registration failed: ${msg}`, "error");
           appendLog(`person registration failed: HTTP ${resp.status}`);
-          registerBtn.disabled = false;
         }
       } catch (err) {
         showNotice(`Network error during registration: ${err.message}`, "error");
         appendLog(`network error during registration: ${err.message}`);
-        registerBtn.disabled = false;
+      } finally {
+        isWorking = false;
+        updateRegisterButtonState();
       }
     }
 
@@ -807,6 +862,7 @@
           regBtn.disabled = false;
           regBtn.style.display = 'inline-block';
         }
+        updateRegisterButtonState();
       } else if (st === "UNKNOWN") {
         clearPreflightTimers();
         isPreflightMode = false;
@@ -819,6 +875,7 @@
           regBtn.style.display = 'none';
           regBtn.disabled = false;
         }
+        updateRegisterButtonState();
       } else if (st === "UNCERTAIN") {
         clearPreflightTimers();
         isPreflightMode = false;
@@ -831,6 +888,7 @@
           regBtn.disabled = false;
           regBtn.style.display = 'inline-block';
         }
+        updateRegisterButtonState();
       } else if (st === "TIMEOUT") {
         clearPreflightTimers();
         isPreflightMode = false;
@@ -843,6 +901,7 @@
           regBtn.disabled = false;
           regBtn.style.display = 'inline-block';
         }
+        updateRegisterButtonState();
       } else if (st === "NO_FACE" || st === "LOST") {
         showNotice("Looking for face... Please face the camera directly to verify if you are already registered.", "info");
       }
@@ -1089,6 +1148,7 @@
         regBtn.style.display = 'none';
         regBtn.disabled = false;
         isWorking = false;
+        updateRegisterButtonState();
         return;
       }
 
@@ -1148,6 +1208,7 @@
         isPreflightMode = false;
       } finally {
         isWorking = false;
+        updateRegisterButtonState();
       }
     }
     async function startAuthorization() {
@@ -1591,6 +1652,25 @@
         if (resp.status === 204 || resp.status === 200) {
           appendLog(`deleted registered person: ${personId} (${personName})`);
           showNotice(`Person "${personName}" deleted successfully.`, "info");
+
+          if (currentPersonId === personId) {
+            currentPersonId = null;
+            if (enrollmentIntervalId) {
+              clearInterval(enrollmentIntervalId);
+              enrollmentIntervalId = null;
+            }
+            const enrollSec = document.getElementById("enrollment-section");
+            if (enrollSec) enrollSec.style.display = "none";
+            const authSec = document.getElementById("auth-action-section");
+            if (authSec) authSec.style.display = "block";
+          }
+
+          const authPersonEl = document.getElementById("auth-person");
+          if (authPersonEl && (authPersonEl.textContent === personName || authPersonEl.textContent === personId)) {
+            clearContextUI();
+            await cancelActiveSession(token);
+          }
+
           await loadRegisteredPersons();
         } else {
           const err = await resp.json().catch(() => ({}));
@@ -1607,9 +1687,25 @@
     window.addEventListener("DOMContentLoaded", () => {
       const tokenInput = document.getElementById("token-input");
       if (tokenInput) {
-        tokenInput.addEventListener("change", loadRegisteredPersons);
-        tokenInput.addEventListener("blur", loadRegisteredPersons);
+        tokenInput.addEventListener("input", updateRegisterButtonState);
+        tokenInput.addEventListener("change", () => {
+          updateRegisterButtonState();
+          loadRegisteredPersons();
+        });
+        tokenInput.addEventListener("blur", () => {
+          updateRegisterButtonState();
+          loadRegisteredPersons();
+        });
       }
+
+      const displayNameInput = document.getElementById("display-name");
+      if (displayNameInput) {
+        displayNameInput.addEventListener("input", updateRegisterButtonState);
+        displayNameInput.addEventListener("change", updateRegisterButtonState);
+        displayNameInput.addEventListener("keyup", updateRegisterButtonState);
+      }
+
+      updateRegisterButtonState();
       loadRegisteredPersons();
     });
   </script>

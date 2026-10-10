@@ -218,6 +218,15 @@ class HumanInteractionService:
         """Composed face enrollment controller instance, if configured."""
         return self._enrollment_controller
 
+    @property
+    def authorization_controller(self) -> Any | None:
+        """Attached AuthorizationController instance, if configured."""
+        return getattr(self, "_authorization_controller", None)
+
+    @authorization_controller.setter
+    def authorization_controller(self, ctrl: Any | None) -> None:
+        self._authorization_controller = ctrl
+
     # ------------------------------------------------------------------
     # Interaction Context Queries (DTO Boundary)
     # ------------------------------------------------------------------
@@ -577,6 +586,15 @@ class HumanInteractionService:
 
         if deleted:
             self._coordinator.forget_deleted_person(person_id)
+            if self._enrollment_controller is not None and self._enrollment_controller.is_active:
+                progress = self._enrollment_controller.current_progress
+                if progress is not None and progress.person_id == person_id:
+                    self._enrollment_controller.cancel_session()
+                    self._release_enrollment_capture()
+
+        auth_ctrl = getattr(self, "_authorization_controller", None)
+        if auth_ctrl is not None and hasattr(auth_ctrl, "invalidate_person"):
+            auth_ctrl.invalidate_person(person_id)
 
     # ------------------------------------------------------------------
     # Face Enrollment Workflow Commands (DTO Boundary)

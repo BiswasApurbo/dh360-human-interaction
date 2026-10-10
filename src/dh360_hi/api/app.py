@@ -85,6 +85,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         auth_ctrl._on_transition = _on_injected_transition
 
+    if auth_ctrl is not None and service is not None:
+        service.authorization_controller = auth_ctrl
+
     try:
         yield
     finally:
@@ -103,6 +106,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # 3. Stop application service and runtime workers
         svc: HumanInteractionService | None = getattr(app.state, "service", None)
         if svc is not None:
+            svc.authorization_controller = None
             with suppress(Exception):
                 svc.stop(timeout=3.0)
 
@@ -132,6 +136,7 @@ def create_app(
 
             authorization_controller._on_transition = _on_auth_trans
         app.state.authorization_controller = authorization_controller
+        service.authorization_controller = authorization_controller
     elif service.runtime is not None and service.runtime.session_manager is not None:
         timeout_sec = (
             cfg.runtime.session_timeout_seconds
@@ -147,6 +152,7 @@ def create_app(
             timeout_seconds=timeout_sec,
             on_transition=_on_auth_trans_created,
         )
+        service.authorization_controller = app.state.authorization_controller
     else:
         app.state.authorization_controller = None
 

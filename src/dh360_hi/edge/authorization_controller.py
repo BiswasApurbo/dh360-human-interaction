@@ -105,6 +105,30 @@ class AuthorizationController:
 
         return session_to_notify
 
+    def invalidate_person(self, person_id: str) -> AuthorizationSession | None:
+        """Cancel the active authorization session if associated with the specified person.
+
+        Only cancels the session if the active session is currently associated with person_id.
+        Does not terminate unrelated sessions.
+        """
+        session_to_notify = None
+        with self._lock:
+            if self._closed or self._session is None or not self._session.is_active:
+                return None
+            if self._session.person_id == person_id:
+                self._session = self._session.complete(AuthorizationStatus.CANCELLED)
+                session_to_notify = self._session
+                _logger.info(
+                    "AuthorizationController cancelled session %s due to deletion/invalidation of person %s",
+                    session_to_notify.authorization_id,
+                    person_id,
+                )
+
+        if session_to_notify is not None:
+            self._notify_transition(session_to_notify)
+
+        return session_to_notify
+
     def _notify_transition(self, session: AuthorizationSession) -> None:
         """Safely invoke the transition callback without leaking exceptions."""
         if self._on_transition is not None:

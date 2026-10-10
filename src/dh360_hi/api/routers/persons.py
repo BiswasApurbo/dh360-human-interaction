@@ -207,6 +207,9 @@ def delete_person(
         raise EntityNotFoundError("person", person_id) from exc
     if not deleted:
         raise EntityNotFoundError("person", person_id)
+    auth_ctrl = getattr(request.app.state, "authorization_controller", None)
+    if auth_ctrl is not None and hasattr(auth_ctrl, "invalidate_person"):
+        auth_ctrl.invalidate_person(person_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -221,4 +224,7 @@ def reset_person_biometrics(
         _get_service(request).reset_person_biometrics(person_id)
     except PersonNotFoundError as exc:
         raise EntityNotFoundError("person", person_id) from exc
+    auth_ctrl = getattr(request.app.state, "authorization_controller", None)
+    if auth_ctrl is not None and hasattr(auth_ctrl, "invalidate_person"):
+        auth_ctrl.invalidate_person(person_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

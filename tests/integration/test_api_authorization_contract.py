@@ -631,3 +631,65 @@ class TestAuthorizedSessionContextEndpoints:
             )
             assert resp.status_code == 404
             assert "not found" in resp.json()["detail"]
+
+    def test_delete_person_cancels_matching_authorization_session(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        token = _configure_operator(
+            monkeypatch,
+            "authorization:manage,persons:create,persons:read,persons:delete",
+        )
+        sm = _mk_session_manager()
+        ctrl = AuthorizationController(session_manager=sm, timeout_seconds=30.0)
+        app = create_app(authorization_controller=ctrl)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        with TestClient(app) as client:
+            # 1. Create target person and unrelated person
+            p_target = client.post(
+                "/persons",
+                headers=headers,
+                json={"display_name": "Target Person"},
+            ).json()["person_id"]
+
+            p_unrelated = client.post(
+                "/persons",
+                headers=headers,
+                json={"display_name": "Unrelated Person"},
+            ).json()["person_id"]
+
+            # 2. Start authorization session and identify target person
+            start_resp = client.post(_AUTH_SESSIONS_PATH, headers=headers)
+            assert start_resp.status_code == 201
+            auth_id = start_resp.json()["authorization_id"]
+
+            id_state = _mk_id_state(
+                1, IdentityState.IDENTIFIED, person_id=p_target, display_name="Target Person"
+            )
+            sm.process_frame_result(_mk_frame(primary_track_id=1, identity_states={1: id_state}))
+
+            curr = client.get(_AUTH_CURRENT_PATH, headers=headers)
+            assert curr.status_code == 200
+            assert curr.json()["status"] == "authorized"
+            assert curr.json()["person_id"] == p_target
+
+            # 3. Delete unrelated person: session must NOT be cancelled
+            del_unrelated = client.delete(f"/persons/{p_unrelated}", headers=headers)
+            assert del_unrelated.status_code == 204
+
+            curr_after_unrelated = client.get(_AUTH_CURRENT_PATH, headers=headers)
+            assert curr_after_unrelated.status_code == 200
+            assert curr_after_unrelated.json()["status"] == "authorized"
+            assert curr_after_unrelated.json()["person_id"] == p_target
+
+            # 4. Delete target person: matching session must be cancelled
+            del_target = client.delete(f"/persons/{p_target}", headers=headers)
+            assert del_target.status_code == 204
+
+            curr_after_target = client.get(_AUTH_CURRENT_PATH, headers=headers)
+            assert curr_after_target.status_code == 200
+            assert curr_after_target.json()["status"] == "cancelled"
+
+            # 5. Privileged context is inaccessible
+            ctx_resp = client.get(f"/authorization/sessions/{auth_id}/context", headers=headers)
+            assert ctx_resp.status_code == 403

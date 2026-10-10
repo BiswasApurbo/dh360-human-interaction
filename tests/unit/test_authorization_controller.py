@@ -619,3 +619,55 @@ class TestAuthorizationControllerTransitionNotification:
         current = ctrl.get_current()
         assert current is not None
         assert current.status is AuthorizationStatus.AUTHORIZED
+
+    def test_invalidate_person_cancels_only_matching_person(self) -> None:
+        events: list[AuthorizationSession] = []
+        mgr = SessionManager(config=SessionConfig(require_confirmed_presence=True))
+        ctrl = AuthorizationController(
+            session_manager=mgr,
+            timeout_seconds=30.0,
+            on_transition=events.append,
+        )
+        ctrl.start()
+
+        auth_state = _mk_id_state(
+            track_id=1,
+            state=IdentityState.IDENTIFIED,
+            person_id="p-target",
+            display_name="Target Person",
+        )
+        mgr.process_frame_result(_mk_frame(primary_track_id=1, identity_states={1: auth_state}))
+
+        curr = ctrl.get_current()
+        assert curr is not None
+        assert curr.status is AuthorizationStatus.AUTHORIZED
+        assert curr.person_id == "p-target"
+
+        # Invalidate a different person: should have no effect
+        res_other = ctrl.invalidate_person("p-other")
+        assert res_other is None
+        curr_after = ctrl.get_current()
+        assert curr_after is not None
+        assert curr_after.status is AuthorizationStatus.AUTHORIZED
+        assert curr_after.person_id == "p-target"
+
+        # Invalidate matching person: should cancel session and notify observer
+        res_target = ctrl.invalidate_person("p-target")
+        assert res_target is not None
+        assert res_target.status is AuthorizationStatus.CANCELLED
+        assert res_target.person_id is None
+        assert res_target.is_completed is True
+        assert ctrl.get_current() is not None
+        assert ctrl.get_current().status is AuthorizationStatus.CANCELLED
+        assert events[-1].status is AuthorizationStatus.CANCELLED
+
+        # Invalidate again when already cancelled: should return None
+        res_again = ctrl.invalidate_person("p-target")
+        assert res_again is None
+
+    def test_invalidate_person_when_no_active_session(self) -> None:
+        mgr = SessionManager(config=SessionConfig(require_confirmed_presence=True))
+        ctrl = AuthorizationController(session_manager=mgr)
+        assert ctrl.invalidate_person("p-any") is None
+        ctrl.close()
+        assert ctrl.invalidate_person("p-any") is None
