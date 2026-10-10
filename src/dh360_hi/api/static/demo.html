@@ -348,6 +348,8 @@
     let isStepInProgress = false;
     let lastLoggedRejection = null;
     let lastSampleCount = 0;
+    let preflightTimeoutId = null;
+    let preflightPollIntervalId = null;
 
     const DIRECTION_INSTRUCTIONS = {
       FRONT: "Look FRONT",
@@ -710,7 +712,106 @@
       }
     }
 
+    function clearPreflightTimers() {
+      if (preflightTimeoutId) {
+        clearTimeout(preflightTimeoutId);
+        preflightTimeoutId = null;
+      }
+      if (preflightPollIntervalId) {
+        clearInterval(preflightPollIntervalId);
+        preflightPollIntervalId = null;
+      }
+    }
+
+    async function handlePreflightOutcome(rawStatus, who) {
+      if (!isPreflightMode) return;
+      const st = (rawStatus || "").toUpperCase();
+
+      if (st === "AUTHORIZED") {
+        clearPreflightTimers();
+        isPreflightMode = false;
+        const token = document.getElementById("token-input").value.trim();
+        await cancelActiveSession(token);
+        const personLabel = who || "an enrolled person";
+        showNotice(`This person is already registered as ${personLabel}.`, "error");
+        document.getElementById('registration-section').style.display = 'none';
+        const regBtn = document.getElementById('show-register-btn');
+        if (regBtn) {
+          regBtn.disabled = false;
+          regBtn.style.display = 'inline-block';
+        }
+      } else if (st === "UNKNOWN") {
+        clearPreflightTimers();
+        isPreflightMode = false;
+        const token = document.getElementById("token-input").value.trim();
+        await cancelActiveSession(token);
+        clearNotice();
+        document.getElementById('registration-section').style.display = 'block';
+        const regBtn = document.getElementById('show-register-btn');
+        if (regBtn) {
+          regBtn.style.display = 'none';
+          regBtn.disabled = false;
+        }
+      } else if (st === "UNCERTAIN") {
+        clearPreflightTimers();
+        isPreflightMode = false;
+        const token = document.getElementById("token-input").value.trim();
+        await cancelActiveSession(token);
+        showNotice("Identity could not be confirmed. Registration is blocked. Please face the camera and try again.", "error");
+        document.getElementById('registration-section').style.display = 'none';
+        const regBtn = document.getElementById('show-register-btn');
+        if (regBtn) {
+          regBtn.disabled = false;
+          regBtn.style.display = 'inline-block';
+        }
+      } else if (st === "TIMEOUT") {
+        clearPreflightTimers();
+        isPreflightMode = false;
+        const token = document.getElementById("token-input").value.trim();
+        await cancelActiveSession(token);
+        showNotice("Preflight check timed out. Please face the camera directly and try again.", "error");
+        document.getElementById('registration-section').style.display = 'none';
+        const regBtn = document.getElementById('show-register-btn');
+        if (regBtn) {
+          regBtn.disabled = false;
+          regBtn.style.display = 'inline-block';
+        }
+      } else if (st === "NO_FACE" || st === "LOST") {
+        showNotice("Looking for face... Please face the camera directly to verify if you are already registered.", "info");
+      }
+    }
+
+    function startPreflightPolling(token) {
+      if (preflightPollIntervalId) {
+        clearInterval(preflightPollIntervalId);
+      }
+      preflightPollIntervalId = setInterval(async () => {
+        if (!isPreflightMode) {
+          clearInterval(preflightPollIntervalId);
+          preflightPollIntervalId = null;
+          return;
+        }
+        try {
+          const resp = await fetch("/authorization/sessions/current", {
+            headers: {
+              "Authorization": "Bearer " + token
+            }
+          });
+          if (resp.status === 200) {
+            const data = await resp.json();
+            if (data && (!currentAuthId || data.authorization_id === currentAuthId)) {
+              updateSessionUI(data);
+              await handlePreflightOutcome(data.status, data.display_name || data.person_id);
+            }
+          }
+        } catch (e) {
+          // ignore transient polling errors
+        }
+      }, 500);
+    }
+
     async function cancelActiveSession(token) {
+      clearPreflightTimers();
       try {
         const resp = await fetch("/authorization/sessions/current", {
           method: "DELETE",
@@ -720,12 +821,12 @@
         });
 
         let shouldClear = false;
-        if (resp.status === 200) {
+        if (resp.status === 200 || resp.status === 404) {
           appendLog("cancelled previous active authorization session");
           shouldClear = true;
         } else if (resp.status === 409) {
           const err = await resp.json().catch(() => ({}));
-          if (err.detail && err.detail.includes("No active")) {
+          if (err.detail && (err.detail.includes("No active") || err.detail.includes("not found"))) {
             shouldClear = true;
           } else {
             appendLog(`failed to cancel session (conflict): ${err.detail}`);
@@ -780,12 +881,12 @@
             "Authorization": "Bearer " + token
           }
         });
-        if (resp.status === 200) {
+        if (resp.status === 200 || resp.status === 404) {
           appendLog("cancelled previous active enrollment session");
           return true;
         } else if (resp.status === 409) {
           const err = await resp.json().catch(() => ({}));
-          if (err.detail && err.detail.includes("No active enrollment session")) {
+          if (err.detail && (err.detail.includes("No active enrollment session") || err.detail.includes("No active"))) {
             return true;
           } else {
             appendLog(`failed to cancel enrollment session (conflict): ${err.detail}`);
@@ -803,6 +904,7 @@
       if (isWorking) return;
       isWorking = true;
       clearNotice();
+      clearPreflightTimers();
       const token = document.getElementById("token-input").value.trim();
       if (!token) {
         showNotice("Please enter an operator Bearer token with required scopes to register.", "error");
@@ -816,7 +918,7 @@
       const okAuth = await cancelActiveSession(token);
       const okEnroll = await cancelActiveEnrollmentSession(token);
       if (!okAuth || !okEnroll) {
-        showNotice("Failed to cancel existing sessions. Registration is blocked.", "error");
+        showNotice("Failed to cancel existing sessions cleanly. Registration is blocked.", "error");
         regBtn.disabled = false;
         isWorking = false;
         return;
@@ -827,7 +929,7 @@
       appendLog("starting biometric preflight to check for duplicate registration...");
 
       try {
-        const resp = await fetch("/authorization/sessions", {
+        let resp = await fetch("/authorization/sessions", {
           method: "POST",
           headers: {
             "Authorization": "Bearer " + token,
@@ -835,19 +937,47 @@
           }
         });
 
+        if (resp.status === 409) {
+          appendLog("active session conflict in preflight; attempting to cancel old session...");
+          const ok = await cancelActiveSession(token);
+          if (ok) {
+            resp = await fetch("/authorization/sessions", {
+              method: "POST",
+              headers: {
+                "Authorization": "Bearer " + token,
+                "Content-Type": "application/json"
+              }
+            });
+          }
+        }
+
         if (resp.status === 201) {
           const data = await resp.json();
           currentAuthId = data.authorization_id;
           updateSessionUI(data);
           connectSSE(token);
+          startPreflightPolling(token);
           showNotice("Looking for face to verify if you are already registered...", "info");
+
+          preflightTimeoutId = setTimeout(async () => {
+            if (isPreflightMode) {
+              appendLog("preflight timed out waiting for identity decision");
+              await handlePreflightOutcome("TIMEOUT", "");
+            }
+          }, 8000);
         } else {
-          showNotice("Failed to start preflight check.", "error");
+          const err = await resp.json().catch(() => ({}));
+          const msg = err.detail || err.message || `HTTP ${resp.status}`;
+          showNotice(`Failed to start preflight check: ${msg}`, "error");
+          appendLog(`preflight start failed: HTTP ${resp.status} (${msg})`);
           regBtn.disabled = false;
+          isPreflightMode = false;
         }
       } catch (err) {
         showNotice(`Network error during preflight: ${err.message}`, "error");
+        appendLog(`preflight network error: ${err.message}`);
         regBtn.disabled = false;
+        isPreflightMode = false;
       } finally {
         isWorking = false;
       }
@@ -856,6 +986,7 @@
       if (isWorking) return;
       isWorking = true;
       clearNotice();
+      clearPreflightTimers();
       isPreflightMode = false;
       const token = document.getElementById("token-input").value.trim();
       const startBtn = document.getElementById("start-btn");
@@ -1014,29 +1145,7 @@
 
           const st = (payload.status || "").toUpperCase();
           if (isPreflightMode) {
-            if (st === "AUTHORIZED") {
-              const token = document.getElementById("token-input").value.trim();
-              await cancelActiveSession(token);
-              showNotice(`This person is already registered as ${who}.`, "error");
-              document.getElementById('registration-section').style.display='none';
-              document.getElementById('show-register-btn').disabled = false;
-            } else if (st === "UNKNOWN") {
-              const token = document.getElementById("token-input").value.trim();
-              await cancelActiveSession(token);
-              clearNotice();
-              isPreflightMode = false;
-              document.getElementById('registration-section').style.display='block';
-              document.getElementById('show-register-btn').style.display='none';
-              document.getElementById('show-register-btn').disabled = false;
-            } else if (st === "UNCERTAIN") {
-              showNotice("Identity could not be confirmed. Please adjust lighting and face the camera directly.", "error");
-            } else if (st === "NO_FACE" || st === "LOST") {
-              showNotice("Please face the camera so we can verify if you are already registered.", "info");
-            } else if (st === "TIMEOUT") {
-              showNotice("Preflight check timed out. Please try again.", "error");
-              isPreflightMode = false;
-              document.getElementById('show-register-btn').disabled = false;
-            }
+            await handlePreflightOutcome(st, who);
           } else {
             if (st === "AUTHORIZED") {
               const token = document.getElementById("token-input").value.trim();

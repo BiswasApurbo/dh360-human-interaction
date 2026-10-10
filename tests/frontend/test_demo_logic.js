@@ -88,7 +88,7 @@ global.setSseIndicator = () => {};
 global.clearContextUI = () => {};
 global.TextDecoder = class { decode() { return ""; } };
 
-global.setInterval = () => 1;
+global.setInterval = (fn) => { global._latestIntervalFn = fn; return 1; };
 global.clearInterval = () => {};
 
 eval(scriptCode);
@@ -118,12 +118,39 @@ async function runTests() {
     await handleSseBlock('event: authorization_updated\ndata: {"status": "UNCERTAIN"}');
     if (domState["registration-section"].style.display === 'block') throw new Error("Registration should be hidden on UNCERTAIN");
     if (!domState["notice-box"].textContent.includes("Identity could not be confirmed")) throw new Error("Should notify uncertain");
-    
+    if (global.isPreflightMode) throw new Error("UNCERTAIN must reach terminal state and exit preflight mode");
+    if (domState["show-register-btn"].disabled) throw new Error("Button should be re-enabled for retry on UNCERTAIN");
+
+    global.isPreflightMode = true;
     global.fetchResponses = [{ status: 200 }];
     await handleSseBlock('event: authorization_updated\ndata: {"status": "UNKNOWN"}');
     if (domState["registration-section"].style.display !== 'block') throw new Error("Registration should be shown on UNKNOWN");
-    if (global.isPreflightMode) throw new Error("Should exit preflight mode");
-    console.log("✓ UNKNOWN and UNCERTAIN have different outcomes");
+    if (global.isPreflightMode) throw new Error("Should exit preflight mode on UNKNOWN");
+    console.log("✓ UNKNOWN and UNCERTAIN have different outcomes and both reach terminal states");
+
+    // Test TIMEOUT reaches terminal state
+    global.isPreflightMode = true;
+    domState["show-register-btn"].disabled = true;
+    global.fetchResponses = [{ status: 200 }];
+    await handleSseBlock('event: authorization_updated\ndata: {"status": "TIMEOUT"}');
+    if (global.isPreflightMode) throw new Error("TIMEOUT must exit preflight mode");
+    if (!domState["notice-box"].textContent.includes("timed out")) throw new Error("TIMEOUT should show timeout notice");
+    if (domState["show-register-btn"].disabled) throw new Error("Button should be re-enabled on TIMEOUT");
+    console.log("✓ Preflight TIMEOUT reaches terminal outcome and offers retry");
+
+    // Test polling fallback catches terminal status without SSE
+    global.isPreflightMode = true;
+    domState["registration-section"].style.display = 'none';
+    domState["show-register-btn"].disabled = true;
+    global.fetchResponses = [
+        { status: 200, json: { authorization_id: "auth-123", status: "authorized", display_name: "Apurbo" } },
+        { status: 200 }
+    ];
+    await global._latestIntervalFn();
+    if (global.isPreflightMode) throw new Error("Polling fallback must resolve preflight mode");
+    if (!domState["notice-box"].textContent.includes("already registered")) throw new Error("Polling fallback should show already registered notice");
+    if (domState["show-register-btn"].disabled) throw new Error("Button should be re-enabled after polling resolution");
+    console.log("✓ Preflight polling fallback resolves terminal outcome without SSE events");
 
     global.fetchArgs = [];
     global.fetchResponses = [

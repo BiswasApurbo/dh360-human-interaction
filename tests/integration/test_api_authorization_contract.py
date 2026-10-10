@@ -321,6 +321,60 @@ class TestCompositionAndLifecycle:
             client.get(_AUTH_CURRENT_PATH, headers=headers)
             assert mock_process.call_count == 0
 
+    def test_session_replacement_and_cancellation_lifecycle(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verify sessions can be cancelled, replaced, and safely handled when no session is active."""
+        token = _configure_operator(monkeypatch, "authorization:manage")
+        sm = _mk_session_manager()
+        ctrl = AuthorizationController(session_manager=sm, timeout_seconds=10.0)
+        app = create_app(authorization_controller=ctrl)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        with TestClient(app) as client:
+            # 1. Start initial session
+            r1 = client.post(_AUTH_SESSIONS_PATH, headers=headers)
+            assert r1.status_code == 201
+            s1_id = r1.json()["authorization_id"]
+
+            # 2. Attempting to start another session while active yields 409 Conflict
+            r_conflict = client.post(_AUTH_SESSIONS_PATH, headers=headers)
+            assert r_conflict.status_code == 409
+            assert "already exists" in r_conflict.json()["detail"]
+
+            # 3. Cancel active session
+            r_cancel = client.delete(_AUTH_CURRENT_PATH, headers=headers)
+            assert r_cancel.status_code == 200
+            assert r_cancel.json()["authorization_id"] == s1_id
+            assert r_cancel.json()["status"] == "cancelled"
+
+            # 4. Immediate replacement starts fresh session
+            r2 = client.post(_AUTH_SESSIONS_PATH, headers=headers)
+            assert r2.status_code == 201
+            s2_id = r2.json()["authorization_id"]
+            assert s2_id != s1_id
+
+            # 5. GET /authorization/sessions/current reflects new session
+            r_curr = client.get(_AUTH_CURRENT_PATH, headers=headers)
+            assert r_curr.status_code == 200
+            assert r_curr.json()["authorization_id"] == s2_id
+            assert r_curr.json()["status"] == "active"
+
+            # 6. Cancel replacement session
+            r_cancel2 = client.delete(_AUTH_CURRENT_PATH, headers=headers)
+            assert r_cancel2.status_code == 200
+            assert r_cancel2.json()["authorization_id"] == s2_id
+
+            # 7. Repeated cancellation when no active session returns 409
+            r_cancel_again = client.delete(_AUTH_CURRENT_PATH, headers=headers)
+            assert r_cancel_again.status_code == 409
+            assert "No active authorization session" in r_cancel_again.json()["detail"]
+
+            # 8. Starting session after 409 cancel succeeds
+            r3 = client.post(_AUTH_SESSIONS_PATH, headers=headers)
+            assert r3.status_code == 201
+            assert r3.json()["authorization_id"] != s2_id
+
     def test_authorization_transition_emits_sse_event(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
