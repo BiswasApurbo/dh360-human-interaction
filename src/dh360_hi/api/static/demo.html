@@ -350,6 +350,8 @@
     let lastSampleCount = 0;
     let preflightTimeoutId = null;
     let preflightPollIntervalId = null;
+    let authPollIntervalId = null;
+    let registeredPersonsCount = null;
 
     const DIRECTION_INSTRUCTIONS = {
       FRONT: "Look FRONT",
@@ -723,6 +725,14 @@
       }
     }
 
+    function clearAuthTimers() {
+      clearPreflightTimers();
+      if (authPollIntervalId) {
+        clearInterval(authPollIntervalId);
+        authPollIntervalId = null;
+      }
+    }
+
     async function handlePreflightOutcome(rawStatus, who) {
       if (!isPreflightMode) return;
       const st = (rawStatus || "").toUpperCase();
@@ -810,8 +820,60 @@
       }, 500);
     }
 
+    function startAuthPolling(token) {
+      if (authPollIntervalId) {
+        clearInterval(authPollIntervalId);
+      }
+      authPollIntervalId = setInterval(async () => {
+        if (!currentAuthId || isPreflightMode) {
+          clearInterval(authPollIntervalId);
+          authPollIntervalId = null;
+          return;
+        }
+        try {
+          const resp = await fetch("/authorization/sessions/current", {
+            headers: {
+              "Authorization": "Bearer " + token
+            }
+          });
+          if (resp.status === 200) {
+            const data = await resp.json();
+            if (data && (!currentAuthId || data.authorization_id === currentAuthId)) {
+              updateSessionUI(data);
+              const st = (data.status || "").toUpperCase();
+              if (st === "AUTHORIZED") {
+                clearInterval(authPollIntervalId);
+                authPollIntervalId = null;
+                fetchAuthorizedContext(token, data.authorization_id || currentAuthId);
+              } else if (st === "UNKNOWN") {
+                clearInterval(authPollIntervalId);
+                authPollIntervalId = null;
+                clearContextUI();
+                showNotice("Person not registered. Please register.", "error");
+              } else if (st === "UNCERTAIN") {
+                clearInterval(authPollIntervalId);
+                authPollIntervalId = null;
+                clearContextUI();
+                showNotice("Identity could not be confirmed.", "error");
+              } else if (st === "TIMEOUT") {
+                clearInterval(authPollIntervalId);
+                authPollIntervalId = null;
+                clearContextUI();
+                showNotice("Authorization timed out. Please face the camera and try again.", "error");
+              }
+            }
+          } else if (resp.status === 404 || resp.status === 409) {
+            clearInterval(authPollIntervalId);
+            authPollIntervalId = null;
+          }
+        } catch (e) {
+          // ignore transient polling errors
+        }
+      }, 1000);
+    }
+
     async function cancelActiveSession(token) {
-      clearPreflightTimers();
+      clearAuthTimers();
       try {
         const resp = await fetch("/authorization/sessions/current", {
           method: "DELETE",
@@ -904,7 +966,7 @@
       if (isWorking) return;
       isWorking = true;
       clearNotice();
-      clearPreflightTimers();
+      clearAuthTimers();
       const token = document.getElementById("token-input").value.trim();
       if (!token) {
         showNotice("Please enter an operator Bearer token with required scopes to register.", "error");
@@ -919,6 +981,35 @@
       const okEnroll = await cancelActiveEnrollmentSession(token);
       if (!okAuth || !okEnroll) {
         showNotice("Failed to cancel existing sessions cleanly. Registration is blocked.", "error");
+        regBtn.disabled = false;
+        isWorking = false;
+        return;
+      }
+
+      // Check registered persons count to avoid waiting on an empty gallery
+      let count = registeredPersonsCount;
+      if (count === null) {
+        try {
+          const resp = await fetch("/persons", {
+            headers: {
+              "Authorization": "Bearer " + token
+            }
+          });
+          if (resp.status === 200) {
+            const persons = await resp.json();
+            count = Array.isArray(persons) ? persons.length : 0;
+            registeredPersonsCount = count;
+          }
+        } catch (e) {
+          // ignore error
+        }
+      }
+
+      if (count === 0) {
+        appendLog("no registered people found; skipping preflight duplicate check");
+        clearNotice();
+        document.getElementById('registration-section').style.display = 'block';
+        regBtn.style.display = 'none';
         regBtn.disabled = false;
         isWorking = false;
         return;
@@ -986,7 +1077,7 @@
       if (isWorking) return;
       isWorking = true;
       clearNotice();
-      clearPreflightTimers();
+      clearAuthTimers();
       isPreflightMode = false;
       const token = document.getElementById("token-input").value.trim();
       const startBtn = document.getElementById("start-btn");
@@ -1015,6 +1106,33 @@
       document.getElementById('enrollment-section').style.display='none';
       document.getElementById('show-register-btn').style.display='inline-block';
 
+      // Check registered persons count to avoid futile authorization against empty gallery
+      let count = registeredPersonsCount;
+      if (count === null) {
+        try {
+          const resp = await fetch("/persons", {
+            headers: {
+              "Authorization": "Bearer " + token
+            }
+          });
+          if (resp.status === 200) {
+            const persons = await resp.json();
+            count = Array.isArray(persons) ? persons.length : 0;
+            registeredPersonsCount = count;
+          }
+        } catch (e) {
+          // ignore error
+        }
+      }
+
+      if (count === 0) {
+        showNotice("No registered people found. Please click 'Register New Person' first to enroll.", "error");
+        appendLog("authorization aborted: no registered people in database");
+        startBtn.disabled = false;
+        isWorking = false;
+        return;
+      }
+
       try {
         const resp = await fetch("/authorization/sessions", {
           method: "POST",
@@ -1030,6 +1148,7 @@
           appendLog(`authorization session started: ${data.authorization_id}`);
           updateSessionUI(data);
           connectSSE(token);
+          startAuthPolling(token);
         } else if (resp.status === 401 || resp.status === 403) {
           const err = await resp.json().catch(() => ({}));
           showNotice(`Authentication failed (${resp.status}): ${err.message || err.detail || 'Unauthorized'}`, "error");
@@ -1148,14 +1267,33 @@
             await handlePreflightOutcome(st, who);
           } else {
             if (st === "AUTHORIZED") {
+              if (authPollIntervalId) {
+                clearInterval(authPollIntervalId);
+                authPollIntervalId = null;
+              }
               const token = document.getElementById("token-input").value.trim();
               fetchAuthorizedContext(token, payload.authorization_id || currentAuthId);
             } else if (st === "UNKNOWN") {
+              if (authPollIntervalId) {
+                clearInterval(authPollIntervalId);
+                authPollIntervalId = null;
+              }
               clearContextUI();
               showNotice("Person not registered. Please register.", "error");
             } else if (st === "UNCERTAIN") {
+              if (authPollIntervalId) {
+                clearInterval(authPollIntervalId);
+                authPollIntervalId = null;
+              }
               clearContextUI();
               showNotice("Identity could not be confirmed.", "error");
+            } else if (st === "TIMEOUT") {
+              if (authPollIntervalId) {
+                clearInterval(authPollIntervalId);
+                authPollIntervalId = null;
+              }
+              clearContextUI();
+              showNotice("Authorization timed out. Please face the camera and try again.", "error");
             } else {
               clearContextUI();
             }
@@ -1241,6 +1379,7 @@
       if (!tbody) return;
       if (!token) {
         tbody.innerHTML = '<tr><td colspan="3" style="padding:0.75rem 0.5rem; color:#6b7280; text-align:center;">Enter operator token to view registered people</td></tr>';
+        registeredPersonsCount = null;
         return;
       }
 
@@ -1253,6 +1392,7 @@
 
         if (resp.status === 200) {
           const persons = await resp.json();
+          registeredPersonsCount = Array.isArray(persons) ? persons.length : 0;
           if (!Array.isArray(persons) || persons.length === 0) {
             tbody.innerHTML = '<tr><td colspan="3" style="padding:0.75rem 0.5rem; color:#6b7280; text-align:center;">No registered people found.</td></tr>';
             return;
@@ -1295,10 +1435,12 @@
             tbody.appendChild(tr);
           });
         } else {
+          registeredPersonsCount = null;
           const err = await resp.json().catch(() => ({}));
           tbody.innerHTML = `<tr><td colspan="3" style="padding:0.75rem 0.5rem; color:#dc2626; text-align:center;">Failed to load people (HTTP ${resp.status}): ${escapeHtml(err.detail || err.message || "")}</td></tr>`;
         }
       } catch (err) {
+        registeredPersonsCount = null;
         tbody.innerHTML = `<tr><td colspan="3" style="padding:0.75rem 0.5rem; color:#dc2626; text-align:center;">Network error: ${escapeHtml(err.message)}</td></tr>`;
       }
     }

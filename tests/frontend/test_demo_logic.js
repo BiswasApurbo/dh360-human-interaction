@@ -20,8 +20,12 @@ scriptCode = scriptCode.replace(/abortController\.abort\(\);/g, 'global.abortCon
 scriptCode = scriptCode.replace(/if \(isConnecting \|\| abortController\)/g, 'if (global.isConnecting || global.abortController)');
 scriptCode = scriptCode.replace(/abortController === currentAbortController/g, 'global.abortController === currentAbortController');
 
+// Expose registeredPersonsCount
+scriptCode = scriptCode.replace(/let registeredPersonsCount = null;/, 'global.registeredPersonsCount = null;');
+
 global.abortController = null;
 global.isConnecting = false;
+global.registeredPersonsCount = null;
 global.fetchResponses = [];
 global.fetchArgs = [];
 global.fetch = async (url, options) => {
@@ -96,6 +100,41 @@ eval(scriptCode);
 async function runTests() {
     console.log("Running frontend logic regression tests...");
 
+    // Test empty gallery: showRegistrationForm skips preflight check directly to form
+    global.registeredPersonsCount = 0;
+    domState["registration-section"].style.display = 'none';
+    domState["show-register-btn"].style.display = 'block';
+    domState["show-register-btn"].disabled = false;
+    global.fetchResponses = [
+        { status: 200 }, // DELETE /authorization/sessions/current
+        { status: 409, json: { detail: "No active enrollment session" } } // DELETE /persons/enrollment/sessions/current
+    ];
+    await showRegistrationForm();
+    if (global.isPreflightMode) throw new Error("Should NOT enter preflight mode when gallery is empty");
+    if (domState["registration-section"].style.display !== 'block') throw new Error("Registration section should be shown immediately when gallery is empty");
+    if (domState["show-register-btn"].style.display !== 'none') throw new Error("Show register button should be hidden when form is open");
+    console.log("✓ Empty gallery skips duplicate preflight and immediately displays registration form");
+
+    // Test empty gallery: startAuthorization blocks and notifies operator
+    global.registeredPersonsCount = 0;
+    domState["notice-box"].textContent = "";
+    domState["start-btn"].disabled = false;
+    global.fetchResponses = [
+        { status: 200 }, // DELETE /authorization/sessions/current
+        { status: 409, json: { detail: "No active enrollment session" } } // DELETE /persons/enrollment/sessions/current
+    ];
+    await startAuthorization();
+    if (!domState["notice-box"].textContent.includes("No registered people found")) {
+        throw new Error("startAuthorization should notify operator when gallery is empty");
+    }
+    if (domState["start-btn"].disabled) throw new Error("Start button should remain enabled");
+    console.log("✓ Empty gallery blocks startAuthorization and prompts operator to register first");
+
+    // Test non-empty gallery: preflight duplicate detection runs
+    global.registeredPersonsCount = 1;
+    domState["registration-section"].style.display = 'none';
+    domState["show-register-btn"].style.display = 'block';
+    domState["show-register-btn"].disabled = false;
     global.fetchResponses = [
         { status: 200 },
         { status: 409, json: { detail: "No active enrollment session" } },
@@ -152,6 +191,7 @@ async function runTests() {
     if (domState["show-register-btn"].disabled) throw new Error("Button should be re-enabled after polling resolution");
     console.log("✓ Preflight polling fallback resolves terminal outcome without SSE events");
 
+    global.registeredPersonsCount = 1;
     global.fetchArgs = [];
     global.fetchResponses = [
         { status: 200 },
@@ -163,6 +203,14 @@ async function runTests() {
     if (global.fetchArgs[1].url !== "/persons/enrollment/sessions/current" || global.fetchArgs[1].options.method !== "DELETE") throw new Error("Enroll cancel must be second");
     if (global.fetchArgs[2].url !== "/authorization/sessions" || global.fetchArgs[2].options.method !== "POST") throw new Error("Auth start must be third");
     console.log("✓ Session cancellation completes before a replacement starts");
+
+    global.isPreflightMode = false;
+    domState["notice-box"].textContent = "";
+    await handleSseBlock('event: authorization_updated\ndata: {"status": "TIMEOUT"}');
+    if (!domState["notice-box"].textContent.includes("Authorization timed out")) {
+        throw new Error("Normal authorization TIMEOUT should show retryable timeout notice");
+    }
+    console.log("✓ Normal authorization TIMEOUT shows clear retryable message");
 
     global.abortController = { abort: () => {} };
     global.fetchResponses = [{ status: 200 }];
