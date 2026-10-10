@@ -23,9 +23,20 @@ scriptCode = scriptCode.replace(/abortController === currentAbortController/g, '
 // Expose registeredPersonsCount
 scriptCode = scriptCode.replace(/let registeredPersonsCount = null;/, 'global.registeredPersonsCount = null;');
 
+// Expose enrolledIdentitiesCount
+scriptCode = scriptCode.replace(/let enrolledIdentitiesCount = null;/, 'global.enrolledIdentitiesCount = null;');
+
+// Expose isNewRegistration
+scriptCode = scriptCode.replace(/let isNewRegistration = false;/, 'global.isNewRegistration = false;');
+scriptCode = scriptCode.replace(/isNewRegistration = true;/g, 'global.isNewRegistration = true;');
+scriptCode = scriptCode.replace(/isNewRegistration = false;/g, 'global.isNewRegistration = false;');
+scriptCode = scriptCode.replace(/if \(isNewRegistration/g, 'if (global.isNewRegistration');
+
 global.abortController = null;
 global.isConnecting = false;
 global.registeredPersonsCount = null;
+global.enrolledIdentitiesCount = null;
+global.isNewRegistration = false;
 global.fetchResponses = [];
 global.fetchArgs = [];
 global.fetch = async (url, options) => {
@@ -335,6 +346,63 @@ async function runTests() {
         throw new Error("confirmAndDeletePerson must send DELETE /persons/{personId}");
     }
     console.log("✓ confirmAndDeletePerson asks for confirmation and deletes via DELETE /persons/{id}");
+
+    // Test empty recognition gallery via health check: 0 enrolled identities blocks startAuthorization even if registeredPersonsCount === 1
+    global.enrolledIdentitiesCount = 0;
+    global.registeredPersonsCount = 1;
+    domState["notice-box"].textContent = "";
+    domState["start-btn"].disabled = false;
+    global.fetchResponses = [
+        { status: 200 }, // DELETE /authorization/sessions/current
+        { status: 409, json: { detail: "No active enrollment session" } } // DELETE /persons/enrollment/sessions/current
+    ];
+    await startAuthorization();
+    if (!domState["notice-box"].textContent.includes("No registered people found")) {
+        throw new Error("startAuthorization should block and notify when recognition gallery has 0 enrolled identities");
+    }
+    console.log("✓ Empty recognition gallery (0 enrolled identities) blocks startAuthorization");
+
+    // Test empty recognition gallery via health check skips preflight
+    global.enrolledIdentitiesCount = 0;
+    global.registeredPersonsCount = 1;
+    domState["registration-section"].style.display = 'none';
+    domState["show-register-btn"].style.display = 'block';
+    domState["show-register-btn"].disabled = false;
+    global.fetchResponses = [
+        { status: 200 }, // DELETE /authorization/sessions/current
+        { status: 409, json: { detail: "No active enrollment session" } } // DELETE /persons/enrollment/sessions/current
+    ];
+    await showRegistrationForm();
+    if (global.isPreflightMode) throw new Error("Should NOT enter preflight mode when gallery has 0 enrolled identities");
+    if (domState["registration-section"].style.display !== 'block') throw new Error("Registration section should be shown immediately when gallery has 0 enrolled identities");
+    console.log("✓ Empty recognition gallery skips preflight duplicate check and displays registration form");
+
+    // Test polling step failure (state === 'FAILED') stops polling and rolls back new registration
+    global.isNewRegistration = true;
+    pollEnrollmentStep("test-token", "failed-person-999");
+    global.fetchResponses = [
+        { status: 200, json: { state: "FAILED", last_rejection_reason: "timeout", last_rejection_details: "Enrollment timed out" } },
+        { status: 200 }, // DELETE /persons/failed-person-999
+        { status: 200, json: [] } // loadRegisteredPersons
+    ];
+    global.fetchArgs = [];
+    await global._latestIntervalFn();
+    const rollbackCall = global.fetchArgs.find(a => a.options && a.options.method === "DELETE" && a.url.includes("failed-person-999"));
+    if (!rollbackCall) throw new Error("pollEnrollmentStep MUST roll back newly registered person on FAILED state");
+    if (!domState["notice-box"].textContent.includes("Enrollment ended")) throw new Error("Failure notice must be shown");
+    console.log("✓ Enrollment step FAILED state cleanly stops polling and rolls back incomplete person");
+
+    // Test startEnrollmentForExistingPerson initiates enrollment without rollback flag
+    global.fetchArgs = [];
+    global.fetchResponses = [
+        { status: 200 }, // cancel active auth
+        { status: 200 }, // cancel active enroll
+        { status: 200 }, // PATCH consent
+        { status: 201, json: {} } // POST enrollment session
+    ];
+    await startEnrollmentForExistingPerson("existing-p1", "Existing Person");
+    if (global.isNewRegistration) throw new Error("Existing person enrollment MUST NOT set isNewRegistration");
+    console.log("✓ startEnrollmentForExistingPerson safely enrolls existing person without new registration rollback flag");
 
     console.log("All frontend logic tests passed successfully!");
 }

@@ -201,9 +201,9 @@ def classify_head_direction(
     pitch_mag = abs(pitch_offset)
 
     # When both horizontal turn and vertical tilt reach threshold,
-    # vertical pitch is weighted to account for natural perspective foreshortening.
+    # the larger deviation determines the orientation.
     if is_yaw and (is_pitch_up or is_pitch_down):
-        if pitch_mag * 1.5 >= yaw_mag:
+        if pitch_mag >= yaw_mag:
             return HeadDirection.UP if is_pitch_up else HeadDirection.DOWN
         return HeadDirection.RIGHT if yaw_offset > 0 else HeadDirection.LEFT
 

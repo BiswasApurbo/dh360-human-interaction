@@ -352,6 +352,8 @@
     let preflightPollIntervalId = null;
     let authPollIntervalId = null;
     let registeredPersonsCount = null;
+    let enrolledIdentitiesCount = null;
+    let isNewRegistration = false;
 
     const DIRECTION_INSTRUCTIONS = {
       FRONT: "Look FRONT",
@@ -494,6 +496,7 @@
         if (resp.status === 201) {
           const data = await resp.json();
           currentPersonId = data.person_id;
+          isNewRegistration = true;
           appendLog(`person created: ${currentPersonId} (${data.display_name})`);
           document.getElementById("registration-section").style.display = "none";
           document.getElementById("enrollment-section").style.display = "block";
@@ -504,6 +507,7 @@
             appendLog(`rolling back newly created person: ${currentPersonId}`);
             await fetch(`/persons/${currentPersonId}`, { method: "DELETE", headers: { "Authorization": "Bearer " + token } });
             currentPersonId = null;
+            isNewRegistration = false;
             document.getElementById("enrollment-section").style.display = "none";
             document.getElementById("registration-section").style.display = "block";
             registerBtn.disabled = false;
@@ -662,6 +666,33 @@
               appendLog(`accepted sample ${data.samples_collected}/${data.target_samples || 30} [${dir}]`);
             }
 
+            const isFailed = Boolean(data.state && (data.state.toUpperCase() === "FAILED" || data.state.toUpperCase() === "CANCELLED"));
+            if (isFailed) {
+              clearInterval(enrollmentIntervalId);
+              enrollmentIntervalId = null;
+              const reason = data.last_rejection_details || data.last_rejection_reason || "Enrollment failed or timed out.";
+              showNotice(`Enrollment ended (${data.state}): ${reason}`, "error");
+              appendLog(`enrollment session ${data.state}: ${reason}`);
+              const targetId = currentPersonId || personId;
+              if (isNewRegistration && targetId) {
+                appendLog(`rolling back incomplete person profile: ${targetId}`);
+                await fetch(`/persons/${targetId}`, { method: "DELETE", headers: { "Authorization": "Bearer " + token } });
+                currentPersonId = null;
+              }
+              isNewRegistration = false;
+              document.getElementById("enrollment-section").style.display = "none";
+              document.getElementById("auth-action-section").style.display = "block";
+              const regBtn = document.getElementById("register-btn");
+              if (regBtn) regBtn.disabled = false;
+              const showRegBtn = document.getElementById("show-register-btn");
+              if (showRegBtn) {
+                showRegBtn.disabled = false;
+                showRegBtn.style.display = "inline-block";
+              }
+              await loadRegisteredPersons();
+              return;
+            }
+
             const isComplete = Boolean(data.is_complete || (data.state && data.state.toUpperCase() === "COMPLETED"));
             if (isComplete && !isEnrollmentCommitted) {
               isEnrollmentCommitted = true;
@@ -671,7 +702,30 @@
             }
           } else {
             const err = await resp.json().catch(() => ({}));
-            appendLog(`enrollment step error: HTTP ${resp.status} (${err.detail || err.message || ""})`);
+            const msg = err.detail || err.message || `HTTP ${resp.status}`;
+            appendLog(`enrollment step error: HTTP ${resp.status} (${msg})`);
+            if (resp.status === 404 || resp.status === 409 || resp.status === 400) {
+              clearInterval(enrollmentIntervalId);
+              enrollmentIntervalId = null;
+              showNotice(`Enrollment interrupted: ${msg}`, "error");
+              const targetId = currentPersonId || personId;
+              if (isNewRegistration && targetId) {
+                appendLog(`rolling back incomplete person profile: ${targetId}`);
+                await fetch(`/persons/${targetId}`, { method: "DELETE", headers: { "Authorization": "Bearer " + token } });
+                currentPersonId = null;
+              }
+              isNewRegistration = false;
+              document.getElementById("enrollment-section").style.display = "none";
+              document.getElementById("auth-action-section").style.display = "block";
+              const regBtn = document.getElementById("register-btn");
+              if (regBtn) regBtn.disabled = false;
+              const showRegBtn = document.getElementById("show-register-btn");
+              if (showRegBtn) {
+                showRegBtn.disabled = false;
+                showRegBtn.style.display = "inline-block";
+              }
+              await loadRegisteredPersons();
+            }
           }
         } catch (err) {
           appendLog(`enrollment step network error: ${err.message}`);
@@ -701,6 +755,9 @@
           const target = document.getElementById("total-progress").textContent.split("/")[1] || "30";
           document.getElementById("total-progress").textContent = `${persistedCount}/${target}`;
           document.getElementById("auth-action-section").style.display = "block";
+          isNewRegistration = false;
+          currentPersonId = null;
+          await getEnrolledIdentitiesCount(token);
           loadRegisteredPersons();
         } else {
           const err = await resp.json().catch(() => ({}));
@@ -962,6 +1019,23 @@
       }
     }
 
+    async function getEnrolledIdentitiesCount(token) {
+      try {
+        const resp = await fetch("/health");
+        if (resp.status === 200) {
+          const data = await resp.json();
+          const recognizerSub = data?.subsystems?.recognizer;
+          if (recognizerSub?.details?.enrolled_identities !== undefined) {
+            enrolledIdentitiesCount = recognizerSub.details.enrolled_identities;
+            return enrolledIdentitiesCount;
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+      return null;
+    }
+
     async function showRegistrationForm() {
       if (isWorking) return;
       isWorking = true;
@@ -986,22 +1060,25 @@
         return;
       }
 
-      // Check registered persons count to avoid waiting on an empty gallery
-      let count = registeredPersonsCount;
+      // Check recognition gallery count to avoid waiting on an empty gallery
+      let count = enrolledIdentitiesCount !== null ? enrolledIdentitiesCount : registeredPersonsCount;
       if (count === null) {
-        try {
-          const resp = await fetch("/persons", {
-            headers: {
-              "Authorization": "Bearer " + token
+        count = await getEnrolledIdentitiesCount(token);
+        if (count === null) {
+          try {
+            const resp = await fetch("/persons", {
+              headers: {
+                "Authorization": "Bearer " + token
+              }
+            });
+            if (resp.status === 200) {
+              const persons = await resp.json();
+              registeredPersonsCount = Array.isArray(persons) ? persons.length : 0;
+              count = registeredPersonsCount;
             }
-          });
-          if (resp.status === 200) {
-            const persons = await resp.json();
-            count = Array.isArray(persons) ? persons.length : 0;
-            registeredPersonsCount = count;
+          } catch (e) {
+            // ignore error
           }
-        } catch (e) {
-          // ignore error
         }
       }
 
@@ -1106,22 +1183,25 @@
       document.getElementById('enrollment-section').style.display='none';
       document.getElementById('show-register-btn').style.display='inline-block';
 
-      // Check registered persons count to avoid futile authorization against empty gallery
-      let count = registeredPersonsCount;
+      // Check recognition gallery count to avoid futile authorization against empty gallery
+      let count = enrolledIdentitiesCount !== null ? enrolledIdentitiesCount : registeredPersonsCount;
       if (count === null) {
-        try {
-          const resp = await fetch("/persons", {
-            headers: {
-              "Authorization": "Bearer " + token
+        count = await getEnrolledIdentitiesCount(token);
+        if (count === null) {
+          try {
+            const resp = await fetch("/persons", {
+              headers: {
+                "Authorization": "Bearer " + token
+              }
+            });
+            if (resp.status === 200) {
+              const persons = await resp.json();
+              registeredPersonsCount = Array.isArray(persons) ? persons.length : 0;
+              count = registeredPersonsCount;
             }
-          });
-          if (resp.status === 200) {
-            const persons = await resp.json();
-            count = Array.isArray(persons) ? persons.length : 0;
-            registeredPersonsCount = count;
+          } catch (e) {
+            // ignore error
           }
-        } catch (e) {
-          // ignore error
         }
       }
 
@@ -1420,6 +1500,15 @@
             actionTd.style.padding = "0.5rem";
             actionTd.style.textAlign = "right";
 
+            const enrollBtn = document.createElement("button");
+            enrollBtn.textContent = "Enroll";
+            enrollBtn.style.background = "#2563eb";
+            enrollBtn.style.padding = "0.25rem 0.6rem";
+            enrollBtn.style.fontSize = "0.8rem";
+            enrollBtn.style.borderRadius = "4px";
+            enrollBtn.style.marginRight = "0.35rem";
+            enrollBtn.onclick = () => startEnrollmentForExistingPerson(p.person_id, p.display_name || p.preferred_name || p.person_id);
+
             const delBtn = document.createElement("button");
             delBtn.textContent = "Delete";
             delBtn.style.background = "#dc2626";
@@ -1428,12 +1517,14 @@
             delBtn.style.borderRadius = "4px";
             delBtn.onclick = () => confirmAndDeletePerson(p.person_id, p.display_name || p.preferred_name || p.person_id);
 
+            actionTd.appendChild(enrollBtn);
             actionTd.appendChild(delBtn);
             tr.appendChild(nameTd);
             tr.appendChild(idTd);
             tr.appendChild(actionTd);
             tbody.appendChild(tr);
           });
+          await getEnrolledIdentitiesCount(token);
         } else {
           registeredPersonsCount = null;
           const err = await resp.json().catch(() => ({}));
@@ -1443,6 +1534,38 @@
         registeredPersonsCount = null;
         tbody.innerHTML = `<tr><td colspan="3" style="padding:0.75rem 0.5rem; color:#dc2626; text-align:center;">Network error: ${escapeHtml(err.message)}</td></tr>`;
       }
+    }
+
+    async function startEnrollmentForExistingPerson(personId, personName) {
+      if (isWorking) return;
+      isWorking = true;
+      clearNotice();
+      clearAuthTimers();
+      const token = document.getElementById("token-input").value.trim();
+      if (!token) {
+        showNotice("Operator token required to start enrollment.", "error");
+        isWorking = false;
+        return;
+      }
+      const okAuth = await cancelActiveSession(token);
+      const okEnroll = await cancelActiveEnrollmentSession(token);
+      if (!okAuth || !okEnroll) {
+        showNotice("Failed to cancel existing sessions cleanly.", "error");
+        isWorking = false;
+        return;
+      }
+      isNewRegistration = false;
+      currentPersonId = personId;
+      document.getElementById("registration-section").style.display = "none";
+      document.getElementById("enrollment-section").style.display = "block";
+      showNotice(`Starting guided biometric enrollment for ${personName}...`, "info");
+      const enrollOk = await startEnrollment(token, personId);
+      if (!enrollOk) {
+        document.getElementById("enrollment-section").style.display = "none";
+        document.getElementById("auth-action-section").style.display = "block";
+        currentPersonId = null;
+      }
+      isWorking = false;
     }
 
     async function confirmAndDeletePerson(personId, personName) {

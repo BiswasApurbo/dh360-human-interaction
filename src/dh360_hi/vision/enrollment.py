@@ -131,6 +131,26 @@ def _get_stage_instruction(direction: HeadDirection) -> str:
     return instructions.get(direction, f"look {direction.value}")
 
 
+def _compute_bbox_iou(
+    bbox1: tuple[float, float, float, float],
+    bbox2: tuple[float, float, float, float],
+) -> float:
+    """Compute Intersection-over-Union (IoU) between two (x, y, w, h) bounding boxes."""
+    x1_a, y1_a, w_a, h_a = bbox1
+    x1_b, y1_b, w_b, h_b = bbox2
+    x2_a, y2_a = x1_a + w_a, y1_a + h_a
+    x2_b, y2_b = x1_b + w_b, y1_b + h_b
+    inter_x1 = max(x1_a, x1_b)
+    inter_y1 = max(y1_a, y1_b)
+    inter_x2 = min(x2_a, x2_b)
+    inter_y2 = min(y2_a, y2_b)
+    inter_w = max(0.0, inter_x2 - inter_x1)
+    inter_h = max(0.0, inter_y2 - inter_y1)
+    inter_area = inter_w * inter_h
+    union_area = (w_a * h_a) + (w_b * h_b) - inter_area
+    return inter_area / union_area if union_area > 0 else 0.0
+
+
 @dataclass(frozen=True)
 class EnrollmentConfig:
     """Configuration governing face enrollment sample requirements and diversity thresholds."""
@@ -139,10 +159,10 @@ class EnrollmentConfig:
     minimum_samples: int = 5
     samples_per_direction: int = 10
     direction_targets: dict[str, int] = field(default_factory=default_direction_targets)
-    max_attempts: int = 120
+    max_attempts: int = 240
     duplicate_similarity_threshold: float = 0.95
     min_sample_interval_seconds: float = 0.2
-    timeout_seconds: float = 60.0
+    timeout_seconds: float = 120.0
     model_name: str = "SFace"
     model_version: str = "2021dec"
 
@@ -505,16 +525,38 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             return self._build_progress(s)
 
         # 4. Single-Face Requirement (Dominant-Face Lock)
-        if len(det_result.detections) > 1:
-            s.last_rejection_reason = SampleRejectionReason.MULTIPLE_FACES
-            s.last_rejection_details = (
-                f"{len(det_result.detections)} faces detected in frame; "
-                f"exactly one face required during enrollment"
-            )
-            s.rejection_counts[SampleRejectionReason.MULTIPLE_FACES.value] += 1
-            return self._build_progress(s)
+        # Filter low-confidence detections and deduplicate overlapping bounding boxes
+        min_conf = getattr(self._quality_gate.thresholds, "min_confidence", 0.70)
+        valid_candidates: list[FaceDetection] = []
+        for det in det_result.detections:
+            if det.confidence < min_conf:
+                continue
+            is_dup = False
+            for existing in valid_candidates:
+                if _compute_bbox_iou(det.bbox, existing.bbox) >= 0.30:
+                    is_dup = True
+                    break
+            if not is_dup:
+                valid_candidates.append(det)
 
-        target_detection = det_result.detections[0]
+        if len(valid_candidates) == 0:
+            target_detection = max(det_result.detections, key=lambda d: d.area)
+        else:
+            valid_candidates.sort(key=lambda d: d.area, reverse=True)
+            primary = valid_candidates[0]
+            competing_candidates = [
+                d for d in valid_candidates[1:]
+                if d.area >= 0.35 * primary.area
+            ]
+            if len(competing_candidates) > 0:
+                s.last_rejection_reason = SampleRejectionReason.MULTIPLE_FACES
+                s.last_rejection_details = (
+                    f"{len(competing_candidates) + 1} distinct faces detected in frame; "
+                    f"exactly one face required during enrollment"
+                )
+                s.rejection_counts[SampleRejectionReason.MULTIPLE_FACES.value] += 1
+                return self._build_progress(s)
+            target_detection = primary
 
         # 5. Quality Gate Evaluation
         q_result = self._quality_gate.evaluate(frame, target_detection)
