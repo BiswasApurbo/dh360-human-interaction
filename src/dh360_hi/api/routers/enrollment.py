@@ -26,7 +26,7 @@ from dh360_hi.contracts.errors import (
     ConflictAppError,
     EntityNotFoundError,
 )
-from dh360_hi.vision.frame import WebcamFrameSource
+from dh360_hi.vision.frame import FrameSource, WebcamFrameSource
 
 router = APIRouter(prefix="/persons", tags=["enrollment"])
 _enrollment_manage = Depends(require_scope(OperatorScope.ENROLLMENT_MANAGE))
@@ -83,7 +83,10 @@ def start_enrollment_session(
     _require_person(service, person_id)
     if service.get_enrollment_progress() is not None:
         raise ConflictAppError("An enrollment session is already active")
-    capture = WebcamFrameSource(camera_index=service.config.camera_index)
+    runtime = getattr(service, "runtime", None)
+    capture: FrameSource | None = None
+    if runtime is None or not getattr(runtime, "is_running", False):
+        capture = WebcamFrameSource(camera_index=service.config.camera_index)
     progress = service.start_enrollment(
         person_id=person_id,
         mode=payload.mode,

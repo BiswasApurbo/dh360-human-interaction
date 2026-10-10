@@ -143,6 +143,7 @@ class EdgeInteractionRuntime:
         self._last_error: str | None = None
         self._start_time: float | None = None
         self._frame_timestamps: deque[float] = deque(maxlen=30)
+        self._latest_frame: Frame | None = None
 
     # ------------------------------------------------------------------
     # Properties
@@ -178,6 +179,12 @@ class EdgeInteractionRuntime:
     def event_bus(self) -> EventBus:
         """In-process domain event bus."""
         return self._event_bus
+
+    @property
+    def latest_frame(self) -> Frame | None:
+        """Most recent captured camera frame from the continuous runtime loop."""
+        with self._lock:
+            return self._latest_frame
 
     @property
     def metrics(self) -> RuntimeMetrics:
@@ -275,6 +282,7 @@ class EdgeInteractionRuntime:
             self._state = RuntimeState.STOPPED
             self._stop_event.set()
             self._pause_condition.notify_all()
+            self._latest_frame = None
 
             thread_to_join = self._thread
             self._thread = None
@@ -426,6 +434,9 @@ class EdgeInteractionRuntime:
                 msg = "FrameSource returned None (end of stream or capture failure)"
                 raise RuntimeError(msg)
 
+            with self._lock:
+                self._latest_frame = frame
+
             # 1. Vision Perception Fast-Path
             frame_result = self._pipeline.process_frame(frame)
 
@@ -478,6 +489,9 @@ class EdgeInteractionRuntime:
                     with self._lock:
                         self._state = RuntimeState.STOPPED
                     break
+
+                with self._lock:
+                    self._latest_frame = frame
 
                 t_start = time.monotonic()
                 frame_result = self._pipeline.process_frame(frame)

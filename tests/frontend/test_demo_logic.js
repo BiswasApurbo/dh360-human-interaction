@@ -59,12 +59,29 @@ const domState = {
     "current-instruction": { textContent: "" },
     "direction-progress": { textContent: "" },
     "total-progress": { textContent: "" },
+    "enrollment-feedback": { textContent: "", style: {} },
+    "people-tbody": {
+        innerHTML: "",
+        children: [],
+        appendChild: function(c) { this.children.push(c); }
+    },
     "notice-box": { style: {}, textContent: "", className: "" }
 };
 
 global.document = {
     getElementById: (id) => domState[id] || { style: {}, textContent: "" },
-    querySelectorAll: () => []
+    querySelectorAll: () => [],
+    createElement: (tag) => ({
+        tag,
+        style: {},
+        textContent: "",
+        children: [],
+        appendChild: function(c) { this.children.push(c); }
+    })
+};
+global.window = {
+    confirm: () => true,
+    addEventListener: () => {}
 };
 global.appendLog = () => {};
 global.setSseIndicator = () => {};
@@ -157,6 +174,92 @@ async function runTests() {
     const deleteNewArg = global.fetchArgs.find(a => a.options.method === "DELETE" && a.url === "/persons/new-person-456");
     if (!deleteNewArg) throw new Error("handleRegister MUST rollback the newly created person if enrollment fails!");
     console.log("✓ handleRegister safely rolls back ONLY the newly created profile");
+
+    // Test Issue 1: updateEnrollmentProgressUI displays rejection feedback and stage instructions
+    updateEnrollmentProgressUI({
+        current_direction: "FRONT",
+        direction_counts: { front: 0, right: 0, left: 0 },
+        direction_targets: { front: 10, right: 10, left: 10 },
+        samples_collected: 0,
+        target_samples: 30,
+        last_rejection_reason: "NO_FACE",
+        last_rejection_details: "No face detected in camera frame"
+    });
+    if (!domState["enrollment-feedback"].textContent.includes("No face detected")) {
+        throw new Error("Enrollment feedback should display rejection details");
+    }
+    if (!domState["current-instruction"].textContent.includes("Stage 1/3")) {
+        throw new Error("Current instruction should indicate stage number and direction prompt");
+    }
+
+    updateEnrollmentProgressUI({
+        current_direction: "RIGHT",
+        direction_counts: { front: 10, right: 2, left: 0 },
+        direction_targets: { front: 10, right: 10, left: 10 },
+        samples_collected: 12,
+        target_samples: 30,
+        last_rejection_reason: null,
+        last_rejection_details: null
+    });
+    if (!domState["enrollment-feedback"].textContent.includes("Sample accepted (12/30)")) {
+        throw new Error("Enrollment feedback should display sample acceptance when accepted");
+    }
+    if (!domState["current-instruction"].textContent.includes("Stage 2/3")) {
+        throw new Error("Current instruction should indicate Stage 2/3 for RIGHT");
+    }
+    console.log("✓ updateEnrollmentProgressUI correctly displays rejection feedback and stage instructions");
+
+    // Test Issue 2: loadRegisteredPersons populates table without exposing embeddings
+    global.fetchArgs = [];
+    global.fetchResponses = [
+        {
+            status: 200,
+            json: [
+                { person_id: "p-apurbo", display_name: "Apurbo", preferred_name: "Apurbo B." },
+                { person_id: "p-jane", display_name: "Jane Doe", preferred_name: null }
+            ]
+        }
+    ];
+    domState["people-tbody"].children = [];
+    await loadRegisteredPersons();
+    if (global.fetchArgs[0].url !== "/persons" || global.fetchArgs[0].options.headers.Authorization !== "Bearer test-token") {
+        throw new Error("loadRegisteredPersons must query /persons with Authorization header");
+    }
+    if (domState["people-tbody"].children.length !== 2) {
+        throw new Error("loadRegisteredPersons should create rows for each registered person");
+    }
+    const row0 = domState["people-tbody"].children[0];
+    const row0Text = row0.children.map(c => c.textContent).join(" ");
+    if (!row0Text.includes("Apurbo") || !row0Text.includes("p-apurbo")) {
+        throw new Error("Table row must contain person name and person ID");
+    }
+    if (row0Text.includes("embedding")) {
+        throw new Error("Table row must not expose biometric embeddings");
+    }
+    console.log("✓ loadRegisteredPersons queries /persons and displays person profiles safely");
+
+    // Test Issue 2: confirmAndDeletePerson requires confirmation and calls DELETE /persons/{id}
+    global.window.confirm = () => false; // User cancels confirmation
+    global.fetchArgs = [];
+    await confirmAndDeletePerson("p-jane", "Jane Doe");
+    if (global.fetchArgs.length !== 0) {
+        throw new Error("Deletion must NOT proceed when confirmation is cancelled");
+    }
+
+    global.window.confirm = () => true; // User confirms
+    global.fetchArgs = [];
+    global.fetchResponses = [
+        { status: 204 }, // DELETE /persons/p-jane
+        { status: 200, json: [{ person_id: "p-apurbo", display_name: "Apurbo" }] } // reload GET /persons
+    ];
+    await confirmAndDeletePerson("p-jane", "Jane Doe");
+    if (global.fetchArgs.length < 2) {
+        throw new Error("confirmAndDeletePerson must issue DELETE and reload table");
+    }
+    if (global.fetchArgs[0].url !== "/persons/p-jane" || global.fetchArgs[0].options.method !== "DELETE") {
+        throw new Error("confirmAndDeletePerson must send DELETE /persons/{personId}");
+    }
+    console.log("✓ confirmAndDeletePerson asks for confirmation and deletes via DELETE /persons/{id}");
 
     console.log("All frontend logic tests passed successfully!");
 }

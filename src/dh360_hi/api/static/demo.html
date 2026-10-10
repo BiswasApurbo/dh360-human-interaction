@@ -250,6 +250,10 @@
           <span class="field-label">Total Accepted:</span>
           <span id="total-progress" class="field-val">0/30</span>
         </div>
+        <div class="field-row">
+          <span class="field-label">Sample Status:</span>
+          <span id="enrollment-feedback" class="field-val" style="color:#4b5563;">Waiting for camera frame...</span>
+        </div>
       </div>
     </div>
 
@@ -303,6 +307,29 @@
       <div class="field-row" style="flex-direction:column; align-items:flex-start; border-bottom:none;"><span class="field-label" style="width:100%; margin-bottom:0.25rem;">Q&amp;A Pairs:</span><div id="ctx-qa" style="font-family:inherit; font-size:0.85rem; color:#374151; width:100%; margin-top:0.25rem;">None</div></div>
     </div>
 
+    <div id="people-section" class="status-panel" style="margin-top:1rem;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+        <h3 style="font-size: 1rem; font-weight:600; margin:0; color:#111827;">Registered People</h3>
+        <button id="refresh-people-btn" onclick="loadRegisteredPersons()" style="padding:0.3rem 0.65rem; font-size:0.8rem; background:#4b5563; border:none; color:white; border-radius:4px; cursor:pointer;">Refresh</button>
+      </div>
+      <div id="people-table-container" style="overflow-x:auto;">
+        <table id="people-table" style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+          <thead>
+            <tr style="border-bottom:2px solid #e5e7eb; text-align:left;">
+              <th style="padding:0.4rem 0.5rem; color:#4b5563;">Name</th>
+              <th style="padding:0.4rem 0.5rem; color:#4b5563;">Person ID</th>
+              <th style="padding:0.4rem 0.5rem; color:#4b5563; text-align:right;">Action</th>
+            </tr>
+          </thead>
+          <tbody id="people-tbody">
+            <tr>
+              <td colspan="3" style="padding:0.75rem 0.5rem; color:#6b7280; text-align:center;">Loading registered people...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <div class="log-container">
       <div class="log-header">Event Log</div>
       <div id="log-box" class="log-box"></div>
@@ -319,6 +346,8 @@
     let enrollmentIntervalId = null;
     let isEnrollmentCommitted = false;
     let isStepInProgress = false;
+    let lastLoggedRejection = null;
+    let lastSampleCount = 0;
 
     const DIRECTION_INSTRUCTIONS = {
       FRONT: "Look FRONT",
@@ -536,9 +565,28 @@
       }
     }
 
+    function formatRejectionFeedback(reason, details, dir) {
+      if (details) return details;
+      const r = (reason || "").toLowerCase();
+      if (r === "no_face") return "No face detected in camera frame. Please face the camera.";
+      if (r === "multiple_faces") return "Multiple faces detected. Exactly one face required.";
+      if (r === "wrong_direction") return `Please look ${dir}.`;
+      if (r === "direction_quota_full") return `Stage ${dir} quota complete. Moving to next stage...`;
+      if (r === "duplicate_sample") return "Sample too similar to previous. Move head slightly.";
+      if (r === "quality_rejected") return "Sample quality low (blurry or extreme angle).";
+      if (r === "alignment_failed") return "Facial landmark alignment failed.";
+      if (r === "embedding_failed") return "Biometric feature extraction failed.";
+      if (r === "timeout") return "Enrollment timed out.";
+      if (r === "max_attempts_exceeded") return "Max attempts reached.";
+      return `Sample not accepted: ${reason}`;
+    }
+
     function updateEnrollmentProgressUI(data) {
       const dir = (data.current_direction || "FRONT").toUpperCase();
-      const instr = DIRECTION_INSTRUCTIONS[dir] || `Look ${dir}`;
+      const stageIdx = dir === "FRONT" ? "1/3" : (dir === "RIGHT" ? "2/3" : (dir === "LEFT" ? "3/3" : ""));
+      const stagePrompt = dir === "FRONT" ? "Look FRONT" : (dir === "RIGHT" ? "Turn head slightly RIGHT" : (dir === "LEFT" ? "Turn head slightly LEFT" : `Look ${dir}`));
+      const instr = stageIdx ? `Stage ${stageIdx}: ${stagePrompt}` : (DIRECTION_INSTRUCTIONS[dir] || `Look ${dir}`);
+
       document.getElementById("current-direction").textContent = dir;
       document.getElementById("current-instruction").textContent = instr;
 
@@ -561,6 +609,21 @@
       const total = data.samples_collected !== undefined ? data.samples_collected : (data.total_samples !== undefined ? data.total_samples : 0);
       const target = data.target_samples !== undefined ? data.target_samples : 30;
       document.getElementById("total-progress").textContent = `${total}/${target}`;
+
+      const feedbackEl = document.getElementById("enrollment-feedback");
+      if (feedbackEl) {
+        if (data.last_rejection_reason) {
+          const msg = formatRejectionFeedback(data.last_rejection_reason, data.last_rejection_details, dir);
+          feedbackEl.textContent = `[Stage: ${dir}] ${msg}`;
+          feedbackEl.style.color = "#dc2626";
+        } else if (total > 0) {
+          feedbackEl.textContent = `[Stage: ${dir}] Sample accepted (${total}/${target})`;
+          feedbackEl.style.color = "#15803d";
+        } else {
+          feedbackEl.textContent = `[Stage: ${dir}] Waiting for valid sample...`;
+          feedbackEl.style.color = "#4b5563";
+        }
+      }
     }
 
     function pollEnrollmentStep(token, personId) {
@@ -584,6 +647,16 @@
           if (resp.status === 200) {
             const data = await resp.json();
             updateEnrollmentProgressUI(data);
+
+            const dir = (data.current_direction || "FRONT").toUpperCase();
+            if (data.last_rejection_reason && data.last_rejection_reason !== lastLoggedRejection) {
+              lastLoggedRejection = data.last_rejection_reason;
+              appendLog(`sample rejected [${dir}]: ${data.last_rejection_details || data.last_rejection_reason}`);
+            } else if (!data.last_rejection_reason && (data.samples_collected !== undefined && data.samples_collected > lastSampleCount)) {
+              lastSampleCount = data.samples_collected;
+              lastLoggedRejection = null;
+              appendLog(`accepted sample ${data.samples_collected}/${data.target_samples || 30} [${dir}]`);
+            }
 
             const isComplete = Boolean(data.is_complete || (data.state && data.state.toUpperCase() === "COMPLETED"));
             if (isComplete && !isEnrollmentCommitted) {
@@ -624,6 +697,7 @@
           const target = document.getElementById("total-progress").textContent.split("/")[1] || "30";
           document.getElementById("total-progress").textContent = `${persistedCount}/${target}`;
           document.getElementById("auth-action-section").style.display = "block";
+          loadRegisteredPersons();
         } else {
           const err = await resp.json().catch(() => ({}));
           const msg = err.detail || err.message || `HTTP ${resp.status}`;
@@ -690,6 +764,15 @@
     }
 
     async function cancelActiveEnrollmentSession(token) {
+      if (enrollmentIntervalId) {
+        clearInterval(enrollmentIntervalId);
+        enrollmentIntervalId = null;
+      }
+      isEnrollmentCommitted = false;
+      isStepInProgress = false;
+      lastLoggedRejection = null;
+      lastSampleCount = 0;
+
       try {
         const resp = await fetch("/persons/enrollment/sessions/current", {
           method: "DELETE",
@@ -796,8 +879,9 @@
         return;
       }
 
-      // Hide registration if it was open
+      // Hide registration and enrollment if they were open
       document.getElementById('registration-section').style.display='none';
+      document.getElementById('enrollment-section').style.display='none';
       document.getElementById('show-register-btn').style.display='inline-block';
 
       try {
@@ -1041,6 +1125,119 @@
         qaContainer.textContent = "None";
       }
     }
+
+    async function loadRegisteredPersons() {
+      const token = document.getElementById("token-input").value.trim();
+      const tbody = document.getElementById("people-tbody");
+      if (!tbody) return;
+      if (!token) {
+        tbody.innerHTML = '<tr><td colspan="3" style="padding:0.75rem 0.5rem; color:#6b7280; text-align:center;">Enter operator token to view registered people</td></tr>';
+        return;
+      }
+
+      try {
+        const resp = await fetch("/persons", {
+          headers: {
+            "Authorization": "Bearer " + token
+          }
+        });
+
+        if (resp.status === 200) {
+          const persons = await resp.json();
+          if (!Array.isArray(persons) || persons.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" style="padding:0.75rem 0.5rem; color:#6b7280; text-align:center;">No registered people found.</td></tr>';
+            return;
+          }
+
+          tbody.innerHTML = "";
+          persons.forEach(p => {
+            const tr = document.createElement("tr");
+            tr.style.borderBottom = "1px solid #f3f4f6";
+
+            const nameTd = document.createElement("td");
+            nameTd.style.padding = "0.5rem";
+            nameTd.style.fontWeight = "500";
+            const displayName = p.preferred_name ? `${p.display_name} (${p.preferred_name})` : (p.display_name || "Unknown");
+            nameTd.textContent = displayName;
+
+            const idTd = document.createElement("td");
+            idTd.style.padding = "0.5rem";
+            idTd.style.fontFamily = "ui-monospace, monospace";
+            idTd.style.fontSize = "0.8rem";
+            idTd.style.color = "#6b7280";
+            idTd.textContent = p.person_id;
+
+            const actionTd = document.createElement("td");
+            actionTd.style.padding = "0.5rem";
+            actionTd.style.textAlign = "right";
+
+            const delBtn = document.createElement("button");
+            delBtn.textContent = "Delete";
+            delBtn.style.background = "#dc2626";
+            delBtn.style.padding = "0.25rem 0.6rem";
+            delBtn.style.fontSize = "0.8rem";
+            delBtn.style.borderRadius = "4px";
+            delBtn.onclick = () => confirmAndDeletePerson(p.person_id, p.display_name || p.preferred_name || p.person_id);
+
+            actionTd.appendChild(delBtn);
+            tr.appendChild(nameTd);
+            tr.appendChild(idTd);
+            tr.appendChild(actionTd);
+            tbody.appendChild(tr);
+          });
+        } else {
+          const err = await resp.json().catch(() => ({}));
+          tbody.innerHTML = `<tr><td colspan="3" style="padding:0.75rem 0.5rem; color:#dc2626; text-align:center;">Failed to load people (HTTP ${resp.status}): ${escapeHtml(err.detail || err.message || "")}</td></tr>`;
+        }
+      } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="3" style="padding:0.75rem 0.5rem; color:#dc2626; text-align:center;">Network error: ${escapeHtml(err.message)}</td></tr>`;
+      }
+    }
+
+    async function confirmAndDeletePerson(personId, personName) {
+      const token = document.getElementById("token-input").value.trim();
+      if (!token) {
+        showNotice("Operator token required to delete person.", "error");
+        return;
+      }
+
+      const confirmed = window.confirm(`Are you sure you want to delete "${personName}"? This will permanently remove their profile and all biometric embeddings.`);
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        const resp = await fetch(`/persons/${personId}`, {
+          method: "DELETE",
+          headers: {
+            "Authorization": "Bearer " + token
+          }
+        });
+
+        if (resp.status === 204 || resp.status === 200) {
+          appendLog(`deleted registered person: ${personId} (${personName})`);
+          showNotice(`Person "${personName}" deleted successfully.`, "info");
+          await loadRegisteredPersons();
+        } else {
+          const err = await resp.json().catch(() => ({}));
+          const msg = err.detail || err.message || `HTTP ${resp.status}`;
+          appendLog(`failed to delete person ${personId}: ${msg}`);
+          showNotice(`Failed to delete person: ${msg}`, "error");
+        }
+      } catch (err) {
+        appendLog(`network error deleting person ${personId}: ${err.message}`);
+        showNotice(`Network error deleting person: ${err.message}`, "error");
+      }
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      const tokenInput = document.getElementById("token-input");
+      if (tokenInput) {
+        tokenInput.addEventListener("change", loadRegisteredPersons);
+        tokenInput.addEventListener("blur", loadRegisteredPersons);
+      }
+      loadRegisteredPersons();
+    });
   </script>
 </body>
 </html>

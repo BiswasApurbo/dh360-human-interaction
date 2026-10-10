@@ -641,20 +641,33 @@ class HumanInteractionService:
             raise ServiceUnavailableError("enrollment", msg)
 
         with self._lock:
-            if self._enrollment_capture is None:
+            frame: Frame | None = None
+            if self._enrollment_capture is not None:
+                try:
+                    frame = self._enrollment_capture.read()
+                    if frame is None:
+                        msg = "Camera capture failed or reached end of stream"
+                        raise ServiceUnavailableError("enrollment_capture", msg)
+                except Exception:
+                    # Ensure capture source is released on any error (including timeout)
+                    self._release_enrollment_capture()
+                    raise
+            elif self.runtime is not None and self.runtime.is_running:
+                frame = self.runtime.latest_frame
+                if frame is None:
+                    import time
+
+                    time.sleep(0.05)
+                    frame = self.runtime.latest_frame
+                if frame is None:
+                    msg = "No frame available from active perception runtime"
+                    raise ServiceUnavailableError("enrollment_capture", msg)
+            else:
                 msg = "No active server-side capture source for this enrollment session"
                 raise ServiceUnavailableError("enrollment_capture", msg)
-            try:
-                frame = self._enrollment_capture.read()
-                if frame is None:
-                    msg = "Camera capture failed or reached end of stream"
-                    raise ServiceUnavailableError("enrollment_capture", msg)
-                progress = self._enrollment_controller.process_frame(frame)
-                return EnrollmentProgressDTO.from_progress(progress)
-            except Exception:
-                # Ensure capture source is released on any error (including timeout)
-                self._release_enrollment_capture()
-                raise
+
+            progress = self._enrollment_controller.process_frame(frame)
+            return EnrollmentProgressDTO.from_progress(progress)
 
     def process_enrollment_frame(
         self,

@@ -895,3 +895,45 @@ def test_commit_enrollment_releases_capture_and_uses_barrier() -> None:
     assert source.is_opened is False
     mocks["runtime"].begin_mutation_barrier.assert_called_once()
     mocks["runtime"].end_mutation_barrier.assert_called_once()
+
+
+def test_step_enrollment_uses_runtime_latest_frame_when_running() -> None:
+    """Verify step_enrollment consumes runtime.latest_frame when runtime is actively running."""
+    from dh360_hi.vision.frame import Frame
+
+    svc, mocks = _mk_service_harness(runtime_state=RuntimeState.RUNNING, with_enrollment=True)
+    mocks["runtime"].is_running = True
+    test_frame = Frame(
+        image=np.zeros((100, 100, 3), dtype=np.uint8),
+        frame_id=7,
+        timestamp=1.23,
+    )
+    mocks["runtime"].latest_frame = test_frame
+
+    ctrl = mocks["enrollment_controller"]
+    progress = EnrollmentProgress(
+        session_id="esess-live",
+        enrollment_batch_id="batch-live",
+        person_id="p-1",
+        display_name="Live Person",
+        mode=EnrollmentMode.ADD_SAMPLES,
+        state=EnrollmentState.COLLECTING,
+        samples_collected=1,
+        target_samples=30,
+        minimum_samples=5,
+        total_attempts=1,
+        last_rejection_reason=None,
+        last_rejection_details=None,
+        rejection_counts={},
+        is_viable=False,
+        is_complete=False,
+    )
+    ctrl.start_session.return_value = progress
+    ctrl.process_frame.return_value = progress
+
+    started = svc.start_enrollment("p-1", capture_source=None)
+    assert started.session_id == "esess-live"
+
+    stepped = svc.step_enrollment()
+    assert stepped.session_id == "esess-live"
+    ctrl.process_frame.assert_called_once_with(test_frame)
