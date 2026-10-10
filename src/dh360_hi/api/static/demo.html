@@ -315,6 +315,7 @@
     let isPreflightMode = false;
     let currentPersonId = null;
     let currentAuthId = null;
+    let isWorking = false; // Prevent concurrent button clicks
     let enrollmentIntervalId = null;
     let isEnrollmentCommitted = false;
     let isStepInProgress = false;
@@ -679,6 +680,7 @@
             const el = document.getElementById(id);
             if (el) el.textContent = "-";
           });
+          currentAuthId = null;
         }
         return true;
       } catch(err) {
@@ -715,10 +717,13 @@
     }
 
     async function showRegistrationForm() {
+      if (isWorking) return;
+      isWorking = true;
       clearNotice();
       const token = document.getElementById("token-input").value.trim();
       if (!token) {
         showNotice("Please enter an operator Bearer token with required scopes to register.", "error");
+        isWorking = false;
         return;
       }
 
@@ -730,6 +735,7 @@
       if (!okAuth || !okEnroll) {
         showNotice("Failed to cancel existing sessions. Registration is blocked.", "error");
         regBtn.disabled = false;
+        isWorking = false;
         return;
       }
 
@@ -759,9 +765,13 @@
       } catch (err) {
         showNotice(`Network error during preflight: ${err.message}`, "error");
         regBtn.disabled = false;
+      } finally {
+        isWorking = false;
       }
     }
     async function startAuthorization() {
+      if (isWorking) return;
+      isWorking = true;
       clearNotice();
       isPreflightMode = false;
       const token = document.getElementById("token-input").value.trim();
@@ -769,6 +779,7 @@
 
       if (!token) {
         showNotice("Please enter an operator Bearer token with required scopes.", "error");
+        isWorking = false;
         return;
       }
 
@@ -781,6 +792,7 @@
       if (!okAuth || !okEnroll) {
         showNotice("Failed to cancel existing sessions cleanly. Cannot start authorization.", "error");
         startBtn.disabled = false;
+        isWorking = false;
         return;
       }
 
@@ -819,6 +831,7 @@
         appendLog(`network error: ${err.message}`);
       } finally {
         startBtn.disabled = false;
+        isWorking = false;
       }
     }
     async function connectSSE(token) {
@@ -903,12 +916,18 @@
       try {
         const payload = JSON.parse(dataStr);
         if (eventType === "authorization_updated" || payload.event_type === "authorization_updated") {
-          const who = payload.display_name || payload.person_id || "unidentified";
-          appendLog(`authorization ${payload.status} (${who})`);
-          updateSessionUI(payload);
+          if (currentAuthId && payload.authorization_id && payload.authorization_id !== currentAuthId) {
+            appendLog(`ignoring stale SSE event for session ${payload.authorization_id}`);
+            return;
+          }
           if (payload.authorization_id) {
             currentAuthId = payload.authorization_id;
           }
+
+          const who = payload.display_name || payload.person_id || "unidentified";
+          appendLog(`authorization ${payload.status} (${who})`);
+          updateSessionUI(payload);
+
           const st = (payload.status || "").toUpperCase();
           if (isPreflightMode) {
             if (st === "AUTHORIZED") {
