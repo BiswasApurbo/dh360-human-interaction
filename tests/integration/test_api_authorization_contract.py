@@ -106,6 +106,19 @@ class TestAuthorizationApiAuthentication:
             assert resp_get.status_code == 401
             assert resp_get.headers.get("WWW-Authenticate") == "Bearer"
 
+            resp_del = client.delete(_AUTH_CURRENT_PATH)
+            assert resp_del.status_code == 401
+            assert resp_del.headers.get("WWW-Authenticate") == "Bearer"
+
+            # Invalid / mismatch token (e.g. placeholder token) -> 401
+            resp_invalid = client.delete(
+                _AUTH_CURRENT_PATH,
+                headers={"Authorization": "Bearer super-secret-demo-token"},
+            )
+            assert resp_invalid.status_code == 401
+            assert resp_invalid.headers.get("WWW-Authenticate") == "Bearer"
+            assert resp_invalid.json()["code"] == "UNAUTHENTICATED"
+
     def test_wrong_scope_returns_403(self, monkeypatch: pytest.MonkeyPatch) -> None:
         token = _configure_operator(monkeypatch, "interaction:read")
         app = create_app()
@@ -118,6 +131,10 @@ class TestAuthorizationApiAuthentication:
             resp_get = client.get(_AUTH_CURRENT_PATH, headers=headers)
             assert resp_get.status_code == 403
             assert resp_get.json()["code"] == "INSUFFICIENT_SCOPE"
+
+            resp_del = client.delete(_AUTH_CURRENT_PATH, headers=headers)
+            assert resp_del.status_code == 403
+            assert resp_del.json()["code"] == "INSUFFICIENT_SCOPE"
 
     def test_authorization_manage_scope_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         token = _configure_operator(monkeypatch, "authorization:manage")
@@ -324,7 +341,9 @@ class TestCompositionAndLifecycle:
     def test_session_replacement_and_cancellation_lifecycle(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Verify sessions can be cancelled, replaced, and safely handled when no session is active."""
+        """Verify sessions can be cancelled, replaced, and safely handled
+        when no session is active.
+        """
         token = _configure_operator(monkeypatch, "authorization:manage")
         sm = _mk_session_manager()
         ctrl = AuthorizationController(session_manager=sm, timeout_seconds=10.0)

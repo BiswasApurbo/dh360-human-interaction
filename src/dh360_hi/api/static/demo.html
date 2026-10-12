@@ -199,8 +199,14 @@
   <div class="card">
     <h1>Human Interaction Authorization Demo</h1>
 
-    <div class="form-group">
-      <input type="text" id="token-input" placeholder="Operator Bearer Token" spellcheck="false" />
+    <div class="form-group" style="flex-direction: column; align-items: stretch; margin-bottom: 0.75rem;">
+      <label for="token-input" style="font-size: 0.85rem; font-weight: 600; color: var(--text-main); margin-bottom: 0.25rem;">
+        Operator Bearer Token
+      </label>
+      <input type="text" id="token-input" placeholder="Paste DH360_HI_API__OPERATOR_TOKEN from server environment" spellcheck="false" />
+      <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">
+        Required scopes: persons:read, persons:create, persons:update, persons:delete, biometrics:reset, consent:manage, enrollment:manage, interaction:read, authorization:manage
+      </span>
     </div>
 
     <div id="notice-box" class="notice"></div>
@@ -988,6 +994,8 @@
       }, 1000);
     }
 
+    let lastCancellationError = null;
+
     async function cancelActiveSession(token) {
       clearAuthTimers();
       try {
@@ -1007,11 +1015,29 @@
           if (err.detail && (err.detail.includes("No active") || err.detail.includes("not found"))) {
             shouldClear = true;
           } else {
-            appendLog(`failed to cancel session (conflict): ${err.detail}`);
+            appendLog(`failed to cancel session (conflict): ${err.detail || "conflict"}`);
+            lastCancellationError = { status: 409, detail: err.detail };
             return false;
           }
+        } else if (resp.status === 401) {
+          appendLog("failed to cancel session: HTTP 401 (Unauthorized - check Operator Bearer Token)");
+          showNotice("Operator Bearer Token rejected (HTTP 401 Unauthorized). Verify that the token matches the server's DH360_HI_API__OPERATOR_TOKEN.", "error");
+          lastCancellationError = { status: 401, detail: "Unauthorized" };
+          return false;
+        } else if (resp.status === 403) {
+          appendLog("failed to cancel session: HTTP 403 (Forbidden - requires authorization:manage scope)");
+          showNotice("Operator Bearer Token lacks required scope (HTTP 403 Forbidden): authorization:manage.", "error");
+          lastCancellationError = { status: 403, detail: "Forbidden" };
+          return false;
+        } else if (resp.status === 503) {
+          appendLog("failed to cancel session: HTTP 503 (Service Unavailable: runtime not running)");
+          showNotice("Authorization service unavailable (HTTP 503: runtime not running).", "error");
+          lastCancellationError = { status: 503, detail: "Service Unavailable" };
+          return false;
         } else {
           appendLog(`failed to cancel session: HTTP ${resp.status}`);
+          showNotice(`Failed to cancel session: HTTP ${resp.status}`, "error");
+          lastCancellationError = { status: resp.status, detail: `HTTP ${resp.status}` };
           return false;
         }
 
@@ -1038,6 +1064,8 @@
         return true;
       } catch(err) {
         appendLog(`network error cancelling session: ${err.message}`);
+        showNotice(`Network error cancelling session: ${err.message}`, "error");
+        lastCancellationError = { status: 0, detail: err.message };
         return false;
       }
     }
@@ -1067,13 +1095,35 @@
           if (err.detail && (err.detail.includes("No active enrollment session") || err.detail.includes("No active"))) {
             return true;
           } else {
-            appendLog(`failed to cancel enrollment session (conflict): ${err.detail}`);
+            appendLog(`failed to cancel enrollment session (conflict): ${err.detail || "conflict"}`);
+            lastCancellationError = { status: 409, detail: err.detail };
             return false;
           }
+        } else if (resp.status === 401) {
+          appendLog("failed to cancel enrollment session: HTTP 401 (Unauthorized - check Operator Bearer Token)");
+          showNotice("Operator Bearer Token rejected (HTTP 401 Unauthorized). Verify that the token matches the server's DH360_HI_API__OPERATOR_TOKEN.", "error");
+          lastCancellationError = { status: 401, detail: "Unauthorized" };
+          return false;
+        } else if (resp.status === 403) {
+          appendLog("failed to cancel enrollment session: HTTP 403 (Forbidden - requires enrollment:manage scope)");
+          showNotice("Operator Bearer Token lacks required scope (HTTP 403 Forbidden): enrollment:manage.", "error");
+          lastCancellationError = { status: 403, detail: "Forbidden" };
+          return false;
+        } else if (resp.status === 503) {
+          appendLog("failed to cancel enrollment session: HTTP 503 (Service Unavailable: runtime not running)");
+          showNotice("Enrollment service unavailable (HTTP 503: runtime not running).", "error");
+          lastCancellationError = { status: 503, detail: "Service Unavailable" };
+          return false;
+        } else {
+          appendLog(`failed to cancel enrollment session: HTTP ${resp.status}`);
+          showNotice(`Failed to cancel enrollment session: HTTP ${resp.status}`, "error");
+          lastCancellationError = { status: resp.status, detail: `HTTP ${resp.status}` };
+          return false;
         }
-        return false;
       } catch(err) {
         appendLog(`network error cancelling enrollment session: ${err.message}`);
+        showNotice(`Network error cancelling enrollment session: ${err.message}`, "error");
+        lastCancellationError = { status: 0, detail: err.message };
         return false;
       }
     }
@@ -1110,10 +1160,21 @@
       const regBtn = document.getElementById('show-register-btn');
       regBtn.disabled = true;
 
+      lastCancellationError = null;
       const okAuth = await cancelActiveSession(token);
+      if (!okAuth) {
+        if (!lastCancellationError) {
+          showNotice("Failed to cancel existing sessions cleanly. Registration is blocked.", "error");
+        }
+        regBtn.disabled = false;
+        isWorking = false;
+        return;
+      }
       const okEnroll = await cancelActiveEnrollmentSession(token);
-      if (!okAuth || !okEnroll) {
-        showNotice("Failed to cancel existing sessions cleanly. Registration is blocked.", "error");
+      if (!okEnroll) {
+        if (!lastCancellationError) {
+          showNotice("Failed to cancel existing sessions cleanly. Registration is blocked.", "error");
+        }
         regBtn.disabled = false;
         isWorking = false;
         return;
@@ -1229,11 +1290,21 @@
       startBtn.disabled = true;
 
       // Cancel ANY existing sessions safely
+      lastCancellationError = null;
       const okAuth = await cancelActiveSession(token);
+      if (!okAuth) {
+        if (!lastCancellationError) {
+          showNotice("Failed to cancel existing sessions cleanly. Cannot start authorization.", "error");
+        }
+        startBtn.disabled = false;
+        isWorking = false;
+        return;
+      }
       const okEnroll = await cancelActiveEnrollmentSession(token);
-
-      if (!okAuth || !okEnroll) {
-        showNotice("Failed to cancel existing sessions cleanly. Cannot start authorization.", "error");
+      if (!okEnroll) {
+        if (!lastCancellationError) {
+          showNotice("Failed to cancel existing sessions cleanly. Cannot start authorization.", "error");
+        }
         startBtn.disabled = false;
         isWorking = false;
         return;
@@ -1332,6 +1403,9 @@
         if (!resp.ok) {
           setSseIndicator("error", `HTTP ${resp.status}`);
           appendLog(`SSE stream connection failed: HTTP ${resp.status}`);
+          if (resp.status === 401 || resp.status === 403) {
+            showNotice(`SSE event stream unauthorized (HTTP ${resp.status}). Verify operator token.`, "error");
+          }
           isConnecting = false;
           abortController = null;
           return;
@@ -1608,10 +1682,20 @@
         isWorking = false;
         return;
       }
+      lastCancellationError = null;
       const okAuth = await cancelActiveSession(token);
+      if (!okAuth) {
+        if (!lastCancellationError) {
+          showNotice("Failed to cancel existing sessions cleanly.", "error");
+        }
+        isWorking = false;
+        return;
+      }
       const okEnroll = await cancelActiveEnrollmentSession(token);
-      if (!okAuth || !okEnroll) {
-        showNotice("Failed to cancel existing sessions cleanly.", "error");
+      if (!okEnroll) {
+        if (!lastCancellationError) {
+          showNotice("Failed to cancel existing sessions cleanly.", "error");
+        }
         isWorking = false;
         return;
       }
@@ -1687,12 +1771,31 @@
     window.addEventListener("DOMContentLoaded", () => {
       const tokenInput = document.getElementById("token-input");
       if (tokenInput) {
-        tokenInput.addEventListener("input", updateRegisterButtonState);
+        try {
+          const savedToken = sessionStorage.getItem("dh360_operator_token");
+          if (savedToken && !tokenInput.value) {
+            tokenInput.value = savedToken;
+          }
+        } catch (e) {
+          // sessionStorage may fail in private browsing mode
+        }
+        tokenInput.addEventListener("input", () => {
+          try {
+            sessionStorage.setItem("dh360_operator_token", tokenInput.value.trim());
+          } catch (e) {}
+          updateRegisterButtonState();
+        });
         tokenInput.addEventListener("change", () => {
+          try {
+            sessionStorage.setItem("dh360_operator_token", tokenInput.value.trim());
+          } catch (e) {}
           updateRegisterButtonState();
           loadRegisteredPersons();
         });
         tokenInput.addEventListener("blur", () => {
+          try {
+            sessionStorage.setItem("dh360_operator_token", tokenInput.value.trim());
+          } catch (e) {}
           updateRegisterButtonState();
           loadRegisteredPersons();
         });

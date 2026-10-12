@@ -19,7 +19,7 @@ from dh360_hi.backend.models import (
 )
 from dh360_hi.backend.person_service import BasePersonService
 from dh360_hi.vision.aligner import BaseFaceAligner
-from dh360_hi.vision.detector import BaseFaceDetector
+from dh360_hi.vision.detector import BaseFaceDetector, FaceDetection
 from dh360_hi.vision.embedder import (
     BaseFaceEmbedder,
     compute_cosine_similarity,
@@ -545,8 +545,7 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             valid_candidates.sort(key=lambda d: d.area, reverse=True)
             primary = valid_candidates[0]
             competing_candidates = [
-                d for d in valid_candidates[1:]
-                if d.area >= 0.35 * primary.area
+                d for d in valid_candidates[1:] if d.area >= 0.35 * primary.area
             ]
             if len(competing_candidates) > 0:
                 s.last_rejection_reason = SampleRejectionReason.MULTIPLE_FACES

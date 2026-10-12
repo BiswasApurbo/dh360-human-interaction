@@ -19,7 +19,7 @@ from enum import StrEnum
 from dh360_hi.contracts.events import BaseEvent
 from dh360_hi.edge.event_bus import EventBus
 from dh360_hi.edge.session_manager import SessionManager
-from dh360_hi.vision.frame import FrameSource
+from dh360_hi.vision.frame import Frame, FrameSource
 from dh360_hi.vision.two_rate_pipeline import TwoRateFrameResult, TwoRatePerceptionPipeline
 
 logger = logging.getLogger(__name__)

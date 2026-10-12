@@ -223,6 +223,35 @@ def test_api_operator_config_preserves_and_hides_environment_token() -> None:
     assert "operator_token" not in config.to_dict()["api"]
 
 
+def test_api_operator_config_supports_single_and_double_underscore_env_vars() -> None:
+    """Both DH360_HI_API_OPERATOR_TOKEN and DH360_HI_API__OPERATOR_TOKEN are loaded correctly."""
+    token_double = secrets.token_urlsafe(32)
+    with patch.dict(
+        os.environ,
+        {
+            "DH360_HI_API__OPERATOR_TOKEN": token_double,
+            "DH360_HI_API__OPERATOR_SCOPES": "persons:read,authorization:manage",
+        },
+        clear=True,
+    ):
+        cfg_double = load_config()
+    assert cfg_double.api.operator_token == token_double
+    assert cfg_double.api.operator_scopes == ("persons:read", "authorization:manage")
+
+    token_single = secrets.token_urlsafe(32)
+    with patch.dict(
+        os.environ,
+        {
+            "DH360_HI_API_OPERATOR_TOKEN": token_single,
+            "DH360_HI_API_OPERATOR_SCOPES": "persons:read,authorization:manage",
+        },
+        clear=True,
+    ):
+        cfg_single = load_config()
+    assert cfg_single.api.operator_token == token_single
+    assert cfg_single.api.operator_scopes == ("persons:read", "authorization:manage")
+
+
 def test_operator_token_is_rejected_from_toml_and_programmatic_overrides(
     tmp_path: Path,
 ) -> None:

@@ -280,13 +280,17 @@ The numeric index at the end of `/dev/video0` corresponds to `--camera-index 0`.
 ### 5. Configure Operator Authentication Token
 The REST API and Demo UI require an operator Bearer token with appropriate scopes:
 ```bash
+# Generate and export a secure random token (both double and single underscore formats are supported):
 export DH360_HI_API__OPERATOR_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 export DH360_HI_API__OPERATOR_SCOPES="persons:read,persons:create,persons:update,persons:delete,biometrics:reset,consent:manage,enrollment:manage,interaction:read,authorization:manage"
 export DH360_HI_DB_PATH="dh360_hi.db"
 
-# Print token to copy into the browser Demo UI:
+# Display token to copy into the browser Demo UI:
 echo "Generated Operator Token: $DH360_HI_API__OPERATOR_TOKEN"
 ```
+
+> [!NOTE]
+> The exact token generated above must be pasted into the **Operator Bearer Token** field in the Demo UI. If the field is left empty or contains a mismatching placeholder token, API requests (such as cancelling an active session or starting authorization) will fail with HTTP 401 Unauthorized.
 
 ### 6. Start the Unified Server & Interactive Demo UI
 Launch the unified live perception pipeline, authorization controller, and API server:

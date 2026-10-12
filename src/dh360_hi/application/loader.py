@@ -116,6 +116,7 @@ def parse_env_vars(prefix: str = "DH360_HI_") -> dict[str, Any]:
         "target_selector",
         "presence",
         "enrollment",
+        "api",
     }
 
     for key, val in os.environ.items():
@@ -126,7 +127,17 @@ def parse_env_vars(prefix: str = "DH360_HI_") -> dict[str, Any]:
         if not raw_key:
             continue
 
-        parsed_val = val if raw_key == "api__operator_token" else _parse_env_val(val)
+        parsed_val = (
+            val
+            if raw_key
+            in {
+                "api__operator_token",
+                "api_operator_token",
+                "api__operator_scopes",
+                "api_operator_scopes",
+            }
+            else _parse_env_val(val)
+        )
 
         # 1. Double underscore separator (e.g. RUNTIME__TARGET_FPS)
         if "__" in raw_key:

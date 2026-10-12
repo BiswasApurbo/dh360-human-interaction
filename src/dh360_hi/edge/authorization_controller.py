@@ -119,7 +119,8 @@ class AuthorizationController:
                 self._session = self._session.complete(AuthorizationStatus.CANCELLED)
                 session_to_notify = self._session
                 _logger.info(
-                    "AuthorizationController cancelled session %s due to deletion/invalidation of person %s",
+                    "AuthorizationController cancelled session %s due to deletion/"
+                    "invalidation of person %s",
                     session_to_notify.authorization_id,
                     person_id,
                 )
