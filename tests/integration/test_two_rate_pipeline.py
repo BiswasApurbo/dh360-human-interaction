@@ -60,7 +60,7 @@ def test_two_rate_pipeline_end_to_end_recognition_and_target_selection(tmp_path:
         consent_status=ConsentStatus.GRANTED,
     )
 
-    detector = YuNetFaceDetector(model_path=YUNET_PATH)
+    detector = YuNetFaceDetector(model_path=YUNET_PATH, input_size=(512, 512))
     aligner = FaceAligner()
     embedder = SFaceEmbedder(model_path=SFACE_PATH)
     recognizer = FaceRecognizer()

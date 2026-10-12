@@ -29,7 +29,7 @@ def test_full_pipeline_detection_tracking_quality_alignment_embedding() -> None:
     img = cv2.imread(str(FIXTURE_PATH))
     assert img is not None
 
-    detector = YuNetFaceDetector(model_path=YUNET_PATH)
+    detector = YuNetFaceDetector(model_path=YUNET_PATH, input_size=(512, 512))
     tracker = FaceTracker()
     quality_gate = FaceQualityGate()
     aligner = FaceAligner(output_size=(112, 112))

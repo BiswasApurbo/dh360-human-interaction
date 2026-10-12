@@ -100,7 +100,7 @@ The person-profile endpoints require an operator bearer token and explicit scope
 
 ```bash
 export DH360_HI_API__OPERATOR_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
-export DH360_HI_API__OPERATOR_SCOPES="persons:read,persons:create"
+export DH360_HI_API__OPERATOR_SCOPES="persons:read,persons:create,persons:update,persons:delete,biometrics:reset,consent:manage,enrollment:manage,interaction:read,authorization:manage"
 export DH360_HI_DB_PATH="dh360_hi.db"
 uvicorn --factory dh360_hi.api.app:create_app --host 127.0.0.1 --port 8000
 ```
@@ -214,6 +214,99 @@ dh360-hi run --source webcam --target-fps 30.0 --json-events
 > **Performance Disclaimer**:
 > Development benchmark — MacBook M4 Air; not representative of Raspberry Pi performance.
 > The `> 15 FPS` requirement is a future deployment target on Raspberry Pi.
+
+---
+
+## 🍓 Raspberry Pi 5 Deployment & Setup Guide
+
+This guide details setting up and running `dh360-human-interaction` on a fresh **Raspberry Pi 5 (8 GB RAM, 64-bit OS / Debian Bookworm)** from a fresh Git clone.
+
+### 1. Install Linux System Packages
+Install required system libraries for Python virtual environments, OpenCV headless execution, and USB camera tooling:
+```bash
+sudo apt update && sudo apt install -y \
+    python3-venv \
+    python3-pip \
+    libgl1 \
+    libglib2.0-0 \
+    v4l-utils
+```
+> [!NOTE]
+> `libgl1` and `libglib2.0-0` are essential shared libraries for `opencv-python` on Debian Linux. `v4l-utils` provides the `v4l2-ctl` diagnostic utility for USB UVC cameras.
+
+Ensure your user account has access to video devices:
+```bash
+sudo usermod -aG video $USER
+# Apply group membership immediately without logging out:
+newgrp video
+```
+
+### 2. Clone Repository & Setup Virtual Environment
+```bash
+git clone https://github.com/BiswasApurbo/dh360-human-interaction.git
+cd dh360-human-interaction
+
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -e .
+```
+*(Optional: use `pip install -e ".[dev]"` if you plan to run unit tests and linters on the Pi).*
+
+### 3. Acquire Pretrained Vision Models
+The repository includes a reproducible downloader with SHA-256 cryptographic verification:
+```bash
+python scripts/download_models.py
+```
+This fetches:
+- `models/weights/face_detection_yunet_2023mar.onnx` (YuNet Face Detector)
+- `models/weights/face_recognition_sface_2021dec.onnx` (SFace FP32 Recognizer)
+- `models/weights/face_recognition_sface_2021dec_int8.onnx` (SFace INT8 Quantized)
+- `tests/fixtures/sample_face.jpg` (Test Fixture)
+
+### 4. Connect & Identify USB UVC Webcam
+Plug in your USB UVC camera and identify its Video4Linux2 device node:
+```bash
+v4l2-ctl --list-devices
+```
+Example output:
+```text
+USB Camera (usb-xhci-hcd.0-1):
+    /dev/video0
+    /dev/video1
+```
+The numeric index at the end of `/dev/video0` corresponds to `--camera-index 0`.
+
+### 5. Configure Operator Authentication Token
+The REST API and Demo UI require an operator Bearer token with appropriate scopes:
+```bash
+export DH360_HI_API__OPERATOR_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export DH360_HI_API__OPERATOR_SCOPES="persons:read,persons:create,persons:update,persons:delete,biometrics:reset,consent:manage,enrollment:manage,interaction:read,authorization:manage"
+export DH360_HI_DB_PATH="dh360_hi.db"
+
+# Print token to copy into the browser Demo UI:
+echo "Generated Operator Token: $DH360_HI_API__OPERATOR_TOKEN"
+```
+
+### 6. Start the Unified Server & Interactive Demo UI
+Launch the unified live perception pipeline, authorization controller, and API server:
+```bash
+# To allow accessing the Demo UI from another machine on your local network:
+dh360-hi serve --source webcam --camera-index 0 --host 0.0.0.0 --port 8000
+```
+Open a browser and navigate to:
+- Locally on Pi: `http://127.0.0.1:8000/demo`
+- Across LAN: `http://<raspberry-pi-ip>:8000/demo`
+
+Paste your operator token into the **Operator Bearer Token** field in the UI. You can now:
+- Enroll new identities using guided head poses (FRONT, RIGHT, LEFT).
+- Perform live face recognition and authorization.
+- Inspect and delete registered persons.
+
+### 7. Run Verification Checks (Optional)
+```bash
+pytest tests/ -q
+```
 
 ---
 

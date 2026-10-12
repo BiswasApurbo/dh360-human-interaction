@@ -64,7 +64,7 @@ def test_full_person_lifecycle_pipeline(tmp_path: Path) -> None:
     repository = SQLitePersonRepository(db_manager)
     person_service = PersonService(repository)
 
-    detector = YuNetFaceDetector(YUNET_PATH, score_threshold=0.6)
+    detector = YuNetFaceDetector(YUNET_PATH, input_size=(512, 512), score_threshold=0.6)
     quality_gate = FaceQualityGate()
     aligner = FaceAligner()
     embedder = SFaceEmbedder(SFACE_PATH)

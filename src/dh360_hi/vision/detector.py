@@ -132,6 +132,7 @@ class YuNetFaceDetector(BaseFaceDetector):
 
         self._lock = threading.RLock()
         self._input_size = input_size
+        self._current_detector_size = input_size
         self._score_threshold = float(score_threshold)
         self._nms_threshold = float(nms_threshold)
         self._top_k = int(top_k)
@@ -181,15 +182,48 @@ class YuNetFaceDetector(BaseFaceDetector):
             image = image.astype(np.uint8)
 
         height, width = image.shape[:2]
-        frame_size = (width, height)
+        if height <= 0 or width <= 0:
+            return DetectionResult(
+                detections=[],
+                frame_id=current_frame_id,
+                latency_ms=0.0,
+                input_size=self._input_size,
+            )
+
+        # Uniform aspect-ratio-preserving downscale calculation
+        max_w, max_h = self._input_size
+        scale = min(max_w / width, max_h / height, 1.0)
+
+        if scale < 1.0:
+            resized_w = max(1, int(round(width * scale)))
+            resized_h = max(1, int(round(height * scale)))
+            # Keep dimensions even for standard CNN feature-map strides
+            if resized_w > 1 and resized_w % 2 != 0:
+                resized_w -= 1
+            if resized_h > 1 and resized_h % 2 != 0:
+                resized_h -= 1
+
+            det_size = (resized_w, resized_h)
+            det_image = cv2.resize(image, det_size, interpolation=cv2.INTER_LINEAR)
+            scale_x = float(resized_w) / float(width)
+            scale_y = float(resized_h) / float(height)
+        else:
+            det_size = (width, height)
+            det_image = image
+            scale_x = 1.0
+            scale_y = 1.0
+
+        inv_scale_x = 1.0 / scale_x
+        inv_scale_y = 1.0 / scale_y
 
         with self._lock:
-            # Update input size on detector if frame dimensions changed
-            if self._input_size != frame_size:
-                self.input_size = frame_size
+            # Update input size on detector if actual inference dimensions changed
+            if self._current_detector_size != det_size:
+                self._detector.setInputSize(det_size)
+                self._current_detector_size = det_size
 
             start_time = time.perf_counter()
-            _, raw_faces = self._detector.detect(image)
+            _, raw_faces = self._detector.detect(det_image)
             latency_ms = (time.perf_counter() - start_time) * 1000.0
 
             detections: list[FaceDetection] = []
@@ -197,17 +231,32 @@ class YuNetFaceDetector(BaseFaceDetector):
                 for face_row in raw_faces:
                     # Raw row format: [x, y, w, h, re_x, re_y, le_x, le_y, nt_x, nt_y, ...]
                     bbox = (
-                        float(face_row[0]),
-                        float(face_row[1]),
-                        float(face_row[2]),
-                        float(face_row[3]),
+                        float(face_row[0] * inv_scale_x),
+                        float(face_row[1] * inv_scale_y),
+                        float(face_row[2] * inv_scale_x),
+                        float(face_row[3] * inv_scale_y),
                     )
                     landmarks = FaceLandmarks(
-                        right_eye=(float(face_row[4]), float(face_row[5])),
-                        left_eye=(float(face_row[6]), float(face_row[7])),
-                        nose_tip=(float(face_row[8]), float(face_row[9])),
-                        right_mouth_corner=(float(face_row[10]), float(face_row[11])),
-                        left_mouth_corner=(float(face_row[12]), float(face_row[13])),
+                        right_eye=(
+                            float(face_row[4] * inv_scale_x),
+                            float(face_row[5] * inv_scale_y),
+                        ),
+                        left_eye=(
+                            float(face_row[6] * inv_scale_x),
+                            float(face_row[7] * inv_scale_y),
+                        ),
+                        nose_tip=(
+                            float(face_row[8] * inv_scale_x),
+                            float(face_row[9] * inv_scale_y),
+                        ),
+                        right_mouth_corner=(
+                            float(face_row[10] * inv_scale_x),
+                            float(face_row[11] * inv_scale_y),
+                        ),
+                        left_mouth_corner=(
+                            float(face_row[12] * inv_scale_x),
+                            float(face_row[13] * inv_scale_y),
+                        ),
                     )
                     score = float(face_row[14])
                     detections.append(
@@ -222,7 +271,7 @@ class YuNetFaceDetector(BaseFaceDetector):
                 detections=detections,
                 frame_id=current_frame_id,
                 latency_ms=latency_ms,
-                input_size=self._input_size,
+                input_size=det_size,
             )
 
     @property
@@ -235,6 +284,7 @@ class YuNetFaceDetector(BaseFaceDetector):
         with self._lock:
             self._input_size = size
             self._detector.setInputSize(self._input_size)
+            self._current_detector_size = self._input_size
 
     @property
     def confidence_threshold(self) -> float:
