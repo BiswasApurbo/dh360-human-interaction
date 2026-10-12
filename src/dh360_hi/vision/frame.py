@@ -71,6 +71,11 @@ class FrameSource(ABC):
     def fps(self) -> float:
         """Report stream frames-per-second."""
 
+    @property
+    def is_live(self) -> bool:
+        """Whether this source is an ongoing live capture stream (e.g. webcam)."""
+        return False
+
     def __enter__(self) -> FrameSource:
         self.open()
         return self
@@ -232,6 +237,11 @@ class WebcamFrameSource(FrameSource):
     @property
     def fps(self) -> float:
         return self._fps
+
+    @property
+    def is_live(self) -> bool:
+        """Webcam is an ongoing live capture stream."""
+        return True
 
 
 class SyntheticFrameSource(FrameSource):

@@ -19,7 +19,7 @@ from enum import StrEnum
 from dh360_hi.contracts.events import BaseEvent
 from dh360_hi.edge.event_bus import EventBus
 from dh360_hi.edge.session_manager import SessionManager
-from dh360_hi.vision.frame import Frame, FrameSource
+from dh360_hi.vision.frame import Frame, FrameSource, WebcamFrameSource
 from dh360_hi.vision.two_rate_pipeline import TwoRateFrameResult, TwoRatePerceptionPipeline
 
 logger = logging.getLogger(__name__)
@@ -154,6 +154,16 @@ class EdgeInteractionRuntime:
         """Current operational lifecycle state."""
         with self._lock:
             return self._state
+
+    @property
+    def is_running(self) -> bool:
+        """Return True if runtime is actively running and processing frames."""
+        with self._lock:
+            return (
+                self._state == RuntimeState.RUNNING
+                and not self._stop_event.is_set()
+                and (self._thread is None or self._thread.is_alive())
+            )
 
     @property
     def config(self) -> EdgeRuntimeConfig:
@@ -485,6 +495,29 @@ class EdgeInteractionRuntime:
             try:
                 frame = self._frame_source.read()
                 if frame is None:
+                    is_live = (
+                        getattr(self._frame_source, "is_live", False) is True
+                        or isinstance(self._frame_source, WebcamFrameSource)
+                    )
+                    if is_live:
+                        self._handle_frame_error(
+                            RuntimeError("Camera capture source returned None")
+                        )
+                        logger.warning(
+                            "Transient camera read failure (%d/%d consecutive failures)",
+                            self._consecutive_errors,
+                            self._config.max_consecutive_frame_errors,
+                        )
+                        if self.state == RuntimeState.ERROR:
+                            logger.error(
+                                "Exceeded maximum consecutive camera read errors (%d); "
+                                "entering ERROR state",
+                                self._config.max_consecutive_frame_errors,
+                            )
+                            break
+                        self._stop_event.wait(timeout=target_interval)
+                        continue
+
                     logger.info("FrameSource reached end of stream; stopping runtime loop")
                     with self._lock:
                         self._state = RuntimeState.STOPPED
@@ -505,6 +538,11 @@ class EdgeInteractionRuntime:
                 latency_ms = (t_end - t_start) * 1000.0
 
                 with self._lock:
+                    if self._consecutive_errors > 0:
+                        logger.info(
+                            "Recovered from transient camera read failure after %d errors",
+                            self._consecutive_errors,
+                        )
                     self._frames_processed += 1
                     self._total_latency_ms += latency_ms
                     self._consecutive_errors = 0

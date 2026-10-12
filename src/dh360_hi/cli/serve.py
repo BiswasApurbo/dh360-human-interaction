@@ -66,6 +66,8 @@ def handle_serve(args: argparse.Namespace) -> int:
         if "runtime" not in overrides:
             overrides["runtime"] = {}
         overrides["runtime"]["target_fps"] = args.target_fps
+    if getattr(args, "camera_index", None) is not None:
+        overrides["camera_index"] = args.camera_index
     if getattr(args, "detector_model_path", None):
         overrides["detector_model_path"] = args.detector_model_path
     if getattr(args, "embedder_model_path", None):

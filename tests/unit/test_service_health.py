@@ -100,3 +100,32 @@ class TestServiceHealth:
         assert snap.status == SubsystemHealthStatus.UNHEALTHY
         assert snap.subsystems["database"].status == SubsystemHealthStatus.UNHEALTHY
         assert "Disk I/O failure" in (snap.subsystems["database"].message or "")
+
+    def test_evaluate_health_degraded_when_runtime_stopped(self) -> None:
+        """Test health status is degraded when perception runtime is stopped."""
+        service = MagicMock(spec=HumanInteractionService)
+        service.state = RuntimeState.STOPPED
+        service.metrics = RuntimeMetrics()
+        service._db_manager = None
+        service.persistence_worker = None
+        service._recognizer = None
+        service._enrollment_controller = None
+
+        snap = evaluate_service_health(service)
+        assert snap.status == SubsystemHealthStatus.DEGRADED
+        assert snap.subsystems["runtime"].status == SubsystemHealthStatus.DEGRADED
+        assert "stopped" in (snap.subsystems["runtime"].message or "").lower()
+
+    def test_evaluate_health_runtime_disabled_when_none(self) -> None:
+        """Test runtime status is disabled when perception is intentionally disabled."""
+        service = MagicMock(spec=HumanInteractionService)
+        service.runtime = None
+        service.state = None
+        service.metrics = None
+        service._db_manager = None
+        service.persistence_worker = None
+        service._recognizer = None
+        service._enrollment_controller = None
+
+        snap = evaluate_service_health(service)
+        assert snap.subsystems["runtime"].status == SubsystemHealthStatus.DISABLED

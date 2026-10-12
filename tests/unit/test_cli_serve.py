@@ -121,3 +121,38 @@ def test_cli_serve_defaults_to_project_models(tmp_path: Path) -> None:
         assert cfg.detector_model_path == "models/weights/face_detection_yunet_2023mar.onnx"
         assert cfg.embedder_model_path == "models/weights/face_recognition_sface_2021dec.onnx"
         mock_uvicorn_run.assert_called_once()
+
+
+def test_cli_serve_propagates_camera_index(tmp_path: Path) -> None:
+    """Verify serve propagates explicit --camera-index into configuration overrides."""
+    db_file = str(tmp_path / "serve_cam_idx.db")
+
+    with (
+        mock.patch("uvicorn.run"),
+        mock.patch("dh360_hi.cli.serve.create_interaction_service") as mock_create_svc,
+        mock.patch("dh360_hi.cli.serve.create_app") as mock_create_app,
+    ):
+        mock_svc = mock.MagicMock()
+        mock_runtime = mock.MagicMock()
+        mock_sm = mock.MagicMock()
+        mock_runtime.session_manager = mock_sm
+        mock_svc.runtime = mock_runtime
+        mock_create_svc.return_value = mock_svc
+        mock_create_app.return_value = mock.MagicMock()
+
+        exit_code = main(
+            [
+                "serve",
+                "--source",
+                "synthetic",
+                "--camera-index",
+                "1",
+                "--db-path",
+                db_file,
+            ]
+        )
+
+        assert exit_code == 0
+        mock_create_svc.assert_called_once()
+        cfg = mock_create_svc.call_args[1]["config"]
+        assert cfg.camera_index == 1

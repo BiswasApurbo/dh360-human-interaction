@@ -93,10 +93,17 @@ def evaluate_service_health(service: HumanInteractionService) -> ServiceHealthSn
                     message=r_metrics.last_error or "Runtime encountered an error",
                     details={"state": r_state.value, "error": r_metrics.last_error},
                 )
+            elif r_state == RuntimeState.STOPPED:
+                subsystems["runtime"] = SubsystemHealth(
+                    name="runtime",
+                    status=SubsystemHealthStatus.DEGRADED,
+                    message="Perception runtime stopped",
+                    details={"state": r_state.value},
+                )
             else:
                 subsystems["runtime"] = SubsystemHealth(
                     name="runtime",
-                    status=SubsystemHealthStatus.HEALTHY,
+                    status=SubsystemHealthStatus.DEGRADED,
                     message=f"Runtime state: {r_state.value}",
                     details={"state": r_state.value},
                 )

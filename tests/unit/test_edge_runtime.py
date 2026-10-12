@@ -38,14 +38,20 @@ class StubFrameSource(FrameSource):
         frames: list[Frame | None] | None = None,
         infinite: bool = False,
         delay_s: float = 0.0,
+        is_live: bool = False,
     ) -> None:
         self._frames = list(frames or [])
         self._infinite = infinite
         self._delay_s = delay_s
+        self._is_live = is_live
         self._index = 0
         self._is_opened = False
         self.open_called = 0
         self.release_called = 0
+
+    @property
+    def is_live(self) -> bool:
+        return self._is_live
 
     def open(self) -> None:
         self._is_opened = True
@@ -516,3 +522,104 @@ class TestRuntimeDependencyOwnership:
 
         assert not pipeline.start.called
         runtime.stop()
+
+
+# ---------------------------------------------------------------------------
+# is_running Property Tests
+# ---------------------------------------------------------------------------
+
+
+class TestRuntimeIsRunningProperty:
+    def test_is_running_reflects_lifecycle(self) -> None:
+        source = StubFrameSource(infinite=True, delay_s=0.01)
+        pipeline = MagicMock(spec=TwoRatePerceptionPipeline)
+        manager = SessionManager()
+        bus = EventBus()
+
+        runtime = EdgeInteractionRuntime(source, pipeline, manager, bus)
+        assert runtime.is_running is False
+
+        runtime.start(async_thread=True)
+        assert runtime.is_running is True
+
+        runtime.pause()
+        assert runtime.is_running is False
+
+        runtime.resume()
+        assert runtime.is_running is True
+
+        runtime.stop()
+        assert runtime.is_running is False
+
+
+# ---------------------------------------------------------------------------
+# Transient Camera Error Recovery Tests
+# ---------------------------------------------------------------------------
+
+
+class TestRuntimeTransientCameraRecovery:
+    def test_transient_camera_read_failure_recovers_when_live(self) -> None:
+        # Live source returns None (transient glitch), then a valid frame, then another frame
+        f1 = _mk_test_frame(1)
+        f2 = _mk_test_frame(2)
+        source = StubFrameSource(frames=[None, f1, f2], is_live=True)
+        pipeline = MagicMock(spec=TwoRatePerceptionPipeline)
+        pipeline.process_frame.return_value = _mk_frame_result(1)
+        manager = SessionManager()
+        bus = EventBus()
+
+        cfg = EdgeRuntimeConfig(max_consecutive_frame_errors=5, target_fps=100.0)
+        runtime = EdgeInteractionRuntime(source, pipeline, manager, bus, config=cfg)
+        runtime.start(async_thread=True)
+
+        # Wait until both valid frames are processed
+        start = time.monotonic()
+        while runtime.metrics.frames_processed < 2 and time.monotonic() - start < 1.0:
+            time.sleep(0.01)
+
+        assert runtime.metrics.frames_processed >= 2
+        assert runtime.state == RuntimeState.RUNNING
+        runtime.stop()
+        assert runtime.state == RuntimeState.STOPPED
+
+    def test_repeated_transient_camera_failures_enter_error_state(self) -> None:
+        # Live source repeatedly returns None exceeding max_consecutive_frame_errors
+        source = StubFrameSource(frames=[None, None, None, None, None, None], is_live=True)
+        pipeline = MagicMock(spec=TwoRatePerceptionPipeline)
+        manager = SessionManager()
+        bus = EventBus()
+
+        cfg = EdgeRuntimeConfig(max_consecutive_frame_errors=3, target_fps=100.0)
+        runtime = EdgeInteractionRuntime(source, pipeline, manager, bus, config=cfg)
+        runtime.start(async_thread=True)
+
+        start = time.monotonic()
+        while runtime.state != RuntimeState.ERROR and time.monotonic() - start < 1.0:
+            time.sleep(0.01)
+
+        assert runtime.state == RuntimeState.ERROR
+        assert runtime.is_running is False
+        assert "Camera capture source returned None" in (runtime.metrics.last_error or "")
+        runtime.stop()
+        assert runtime.state == RuntimeState.STOPPED
+
+    def test_finite_source_stops_at_eof(self) -> None:
+        # Non-live source returns frames then EOF -> transitions to STOPPED cleanly
+        f1 = _mk_test_frame(1)
+        source = StubFrameSource(frames=[f1, None], is_live=False)
+        pipeline = MagicMock(spec=TwoRatePerceptionPipeline)
+        pipeline.process_frame.return_value = _mk_frame_result(1)
+        manager = SessionManager()
+        bus = EventBus()
+
+        cfg = EdgeRuntimeConfig(target_fps=100.0)
+        runtime = EdgeInteractionRuntime(source, pipeline, manager, bus, config=cfg)
+        runtime.start(async_thread=True)
+
+        start = time.monotonic()
+        while runtime.state == RuntimeState.RUNNING and time.monotonic() - start < 1.0:
+            time.sleep(0.01)
+
+        assert runtime.state == RuntimeState.STOPPED
+        assert runtime.is_running is False
+        assert runtime.metrics.frames_processed == 1
