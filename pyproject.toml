@@ -47,7 +47,7 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-dh360_hi = ["py.typed"]
+dh360_hi = ["py.typed", "api/static/*.html"]
 
 [tool.ruff]
 target-version = "py311"
