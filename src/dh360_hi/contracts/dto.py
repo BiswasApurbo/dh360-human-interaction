@@ -479,6 +479,7 @@ class EnrollmentProgressDTO:
     last_rejection_details: str | None = None
     rejection_counts: dict[str, int] = field(default_factory=dict)
     current_direction: str | None = None
+    last_accepted_direction: str | None = None
     direction_counts: dict[str, int] = field(default_factory=dict)
     direction_targets: dict[str, int] = field(default_factory=dict)
 
@@ -512,6 +513,7 @@ class EnrollmentProgressDTO:
             last_rejection_details=progress.last_rejection_details,
             rejection_counts=dict(progress.rejection_counts),
             current_direction=getattr(progress, "current_direction", None),
+            last_accepted_direction=getattr(progress, "last_accepted_direction", None),
             direction_counts=dict(getattr(progress, "direction_counts", {})),
             direction_targets=dict(getattr(progress, "direction_targets", {})),
         )
@@ -571,6 +573,13 @@ class RuntimeMetricsDTO:
     average_latency_ms: float
     uptime_seconds: float
     last_error: str | None = None
+    capture_fps: float = 0.0
+    capture_resolution: tuple[int, int] = (0, 0)
+    detection_latency_ms: float = 0.0
+    tracking_latency_ms: float = 0.0
+    quality_latency_ms: float = 0.0
+    embedding_latency_ms: float = 0.0
+    matching_latency_ms: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         """Convert DTO to a JSON-serializable dictionary."""
@@ -585,6 +594,13 @@ class RuntimeMetricsDTO:
             average_latency_ms=metrics.average_latency_ms,
             uptime_seconds=metrics.uptime_seconds,
             last_error=metrics.last_error,
+            capture_fps=getattr(metrics, "capture_fps", 0.0),
+            capture_resolution=getattr(metrics, "capture_resolution", (0, 0)),
+            detection_latency_ms=getattr(metrics, "detection_latency_ms", 0.0),
+            tracking_latency_ms=getattr(metrics, "tracking_latency_ms", 0.0),
+            quality_latency_ms=getattr(metrics, "quality_latency_ms", 0.0),
+            embedding_latency_ms=getattr(metrics, "embedding_latency_ms", 0.0),
+            matching_latency_ms=getattr(metrics, "matching_latency_ms", 0.0),
         )
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections import Counter, deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -12,6 +13,8 @@ import numpy as np
 from dh360_hi.vision.quality_gate import FaceQualityTier
 from dh360_hi.vision.recognition import RecognitionOutcome, RecognitionResult
 from dh360_hi.vision.tracker import TrackedFace, compute_iou
+
+logger = logging.getLogger(__name__)
 
 
 class IdentityState(StrEnum):
@@ -50,6 +53,7 @@ class TrackIdentityState:
     confidence_score: float = 0.0
     observation_count: int = 0
     consecutive_conflicts: int = 0
+    created_frame_id: int = 0
     last_seen_frame_id: int = 0
     state_change_frame_id: int = 0
     last_verification_frame_id: int = 0
@@ -100,6 +104,7 @@ class IdentityStateManager:
             track_state = TrackIdentityState(
                 track_id=track_id,
                 state=IdentityState.NEW,
+                created_frame_id=frame_id,
                 last_seen_frame_id=frame_id,
                 state_change_frame_id=frame_id,
                 last_verification_frame_id=frame_id,
@@ -139,6 +144,7 @@ class IdentityStateManager:
             track_state = TrackIdentityState(
                 track_id=track_id,
                 state=IdentityState.NEW,
+                created_frame_id=frame_id,
                 last_seen_frame_id=frame_id,
                 state_change_frame_id=frame_id,
                 last_verification_frame_id=frame_id,
@@ -147,7 +153,16 @@ class IdentityStateManager:
             self._tracks[track_id] = track_state
         else:
             track_state = self._tracks[track_id]
-            track_state.last_seen_frame_id = frame_id
+            if not create_if_missing and frame_id < track_state.created_frame_id:
+                logger.debug(
+                    "Discarding stale worker observation for track=%d "
+                    "(obs_frame=%d < created_frame=%d)",
+                    track_id,
+                    frame_id,
+                    track_state.created_frame_id,
+                )
+                return track_state
+            track_state.last_seen_frame_id = max(track_state.last_seen_frame_id, frame_id)
 
         # If no recognition observation (e.g. frame skipped or quality failed), return current state
         if rec_result is None or rec_result.outcome == RecognitionOutcome.NO_MATCH:
@@ -191,6 +206,18 @@ class IdentityStateManager:
         top_person_id, top_count = person_counter.most_common(1)[0] if person_counter else (None, 0)
         consistency_ratio = float(top_count / n_obs) if n_obs > 0 else 0.0
 
+        min_obs = self._config.min_observations_to_decide
+        recent_tail = obs_window[-min_obs:] if n_obs >= min_obs else []
+        has_consecutive_tail_match = (
+            len(recent_tail) == min_obs
+            and len(person_counter) == 1
+            and top_person_id is not None
+            and all(
+                o.outcome == RecognitionOutcome.IDENTIFIED and o.person_id == top_person_id
+                for o in recent_tail
+            )
+        )
+
         # 3. State Machine Logic with Hysteresis
         if track_state.state == IdentityState.IDENTIFIED:
             # Hysteresis: check if current identity is contested
@@ -218,27 +245,32 @@ class IdentityStateManager:
             IdentityState.UNREGISTERED,
         ):
             # Evaluate for IDENTIFIED
-            if (
-                top_person_id is not None
-                and consistency_ratio >= self._config.identification_consistency_ratio
+            if top_person_id is not None and (
+                consistency_ratio >= self._config.identification_consistency_ratio
+                or has_consecutive_tail_match
             ):
-                top_match_sample = next(o for o in identified_obs if o.person_id == top_person_id)
-                self._transition_to(track_state, IdentityState.IDENTIFIED, frame_id)
+                top_match_sample = next(
+                    o for o in reversed(identified_obs) if o.person_id == top_person_id
+                )
                 track_state.current_person_id = top_person_id
                 track_state.current_display_name = top_match_sample.display_name
                 track_state.confidence_score = top_match_sample.confidence_score
                 track_state.consecutive_conflicts = 0
                 track_state.last_verification_frame_id = frame_id
+                self._transition_to(track_state, IdentityState.IDENTIFIED, frame_id)
 
             # Evaluate for UNREGISTERED
-            elif len(unregistered_obs) / n_obs >= self._config.identification_consistency_ratio:
-                self._transition_to(track_state, IdentityState.UNREGISTERED, frame_id)
+            elif (
+                len(unregistered_obs) / n_obs >= self._config.identification_consistency_ratio
+                and latest_rec.outcome != RecognitionOutcome.IDENTIFIED
+            ):
                 track_state.current_person_id = None
                 track_state.current_display_name = None
                 track_state.confidence_score = float(
                     np.mean([o.confidence_score for o in unregistered_obs])
                 )
                 track_state.consecutive_conflicts = 0
+                self._transition_to(track_state, IdentityState.UNREGISTERED, frame_id)
 
             # Evaluate for UNCERTAIN (conflicting identities or low consistency)
             elif (
@@ -247,20 +279,37 @@ class IdentityStateManager:
                 or (
                     len(identified_obs) > 0
                     and consistency_ratio < self._config.identification_consistency_ratio
+                    and (
+                        track_state.state != IdentityState.COLLECTING
+                        or n_obs >= self._config.evidence_window_size
+                        or latest_rec.outcome != RecognitionOutcome.IDENTIFIED
+                    )
                 )
             ):
-                self._transition_to(track_state, IdentityState.UNCERTAIN, frame_id)
                 track_state.current_person_id = None
                 track_state.current_display_name = None
                 track_state.confidence_score = latest_rec.confidence_score
+                self._transition_to(track_state, IdentityState.UNCERTAIN, frame_id)
 
     def _transition_to(
         self, track_state: TrackIdentityState, new_state: IdentityState, frame_id: int
     ) -> None:
         """Execute a state transition and update frame metadata."""
         if track_state.state != new_state:
+            old_state = track_state.state
             track_state.state = new_state
             track_state.state_change_frame_id = frame_id
+            logger.debug(
+                "Identity state transition: track=%d %s -> %s at frame=%d "
+                "(obs=%d, person=%s, conf=%.4f)",
+                track_state.track_id,
+                old_state.value,
+                new_state.value,
+                frame_id,
+                len(track_state.recent_observations),
+                track_state.current_person_id or "none",
+                track_state.confidence_score,
+            )
 
     def prune_lost_tracks(
         self, current_frame_id: int, active_track_ids: set[int] | None = None
@@ -347,8 +396,10 @@ class IdentityStateManager:
 
         Decision rules:
         - Rejected / Low quality: do not submit (saves worker/CPU budget).
+        - Duplicate frame_id: do not resubmit if already requested for this frame.
         - NEW / COLLECTING / UNCERTAIN: submit on MEDIUM or HIGH to gather evidence.
-        - UNREGISTERED: submit periodically (every ~30 frames) on MEDIUM or HIGH.
+        - UNREGISTERED: submit periodically (every ~6 frames) on MEDIUM or HIGH so newly
+          aligned or newly enrolled users recover quickly without saturating the worker.
         - IDENTIFIED: submit on HIGH or MEDIUM if spatial ambiguity is active or occurred recently,
           or if reverification interval has elapsed.
 
@@ -367,6 +418,12 @@ class IdentityStateManager:
         if track_state is None:
             return True  # New track, needs embedding
 
+        if (
+            track_state.last_embedding_request_frame_id > 0
+            and frame_id <= track_state.last_embedding_request_frame_id
+        ):
+            return False
+
         if track_state.state in (
             IdentityState.NEW,
             IdentityState.COLLECTING,
@@ -375,10 +432,9 @@ class IdentityStateManager:
             return True
 
         if track_state.state == IdentityState.UNREGISTERED:
-            # Periodic check for newly enrolled persons
-            return frame_id - track_state.last_embedding_request_frame_id >= (
-                self._config.reverification_interval_frames // 3
-            )
+            # Periodic check for newly enrolled or newly frontal persons (~6 frames at default 90)
+            retry_interval = max(1, self._config.reverification_interval_frames // 15)
+            return frame_id - track_state.last_embedding_request_frame_id >= retry_interval
 
         if track_state.state == IdentityState.IDENTIFIED:
             # Re-verify if spatial crossing/proximity is active or occurred within last 30 frames
@@ -423,11 +479,35 @@ class IdentityStateManager:
                 track_state.current_display_name = None
                 track_state.confidence_score = 0.0
                 track_state.consecutive_conflicts = 0
+                track_state.created_frame_id = max(track_state.created_frame_id, frame_id)
                 track_state.recent_observations.clear()
                 self._transition_to(track_state, IdentityState.UNREGISTERED, frame_id)
                 invalidated_tracks.append(track_id)
 
         return invalidated_tracks
+
+    def reset_unconfirmed_tracks(self, frame_id: int = 0) -> list[int]:
+        """Reset tracks in UNREGISTERED or UNCERTAIN state back to NEW for fresh evaluation.
+
+        Preserves tracks that are already in IDENTIFIED state so confirmed users remain
+        recognized, while allowing tracks that had poor initial observations (e.g. before an
+        operator started an authorization session) to gather fresh recognition evidence.
+        """
+        reset_ids: list[int] = []
+        for track_id, track_state in self._tracks.items():
+            if track_state.state in (IdentityState.UNREGISTERED, IdentityState.UNCERTAIN):
+                track_state.state = IdentityState.NEW
+                track_state.current_person_id = None
+                track_state.current_display_name = None
+                track_state.confidence_score = 0.0
+                track_state.observation_count = 0
+                track_state.consecutive_conflicts = 0
+                track_state.created_frame_id = max(track_state.last_seen_frame_id, frame_id)
+                track_state.state_change_frame_id = track_state.created_frame_id
+                track_state.last_embedding_request_frame_id = 0
+                track_state.recent_observations.clear()
+                reset_ids.append(track_id)
+        return reset_ids
 
     def reset(self) -> None:
         """Reset all track identity states."""

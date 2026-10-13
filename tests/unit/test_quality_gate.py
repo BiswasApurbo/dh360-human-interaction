@@ -553,3 +553,78 @@ def test_up_down_pose_classification_and_mutual_exclusion() -> None:
         classify_head_direction(lm_down_from_54, baseline_pitch_ratio=baseline_54)
         == HeadDirection.DOWN
     )
+
+
+def test_roll_invariant_yaw_offset_and_mirrored_classification() -> None:
+    """Verify compute_yaw_offset is invariant to head roll and supports mirrored coordinates."""
+    import math
+
+    from dh360_hi.vision.quality_gate import (
+        HeadDirection,
+        classify_head_direction,
+        compute_yaw_offset,
+    )
+
+    def _rotate_point(
+        pt: tuple[float, float], cx: float, cy: float, deg: float
+    ) -> tuple[float, float]:
+        rad = math.radians(deg)
+        c, s = math.cos(rad), math.sin(rad)
+        dx, dy = pt[0] - cx, pt[1] - cy
+        return (cx + dx * c - dy * s, cy + dx * s + dy * c)
+
+    def _rotate_landmarks(lm: FaceLandmarks, deg: float) -> FaceLandmarks:
+        cx, cy = 100.0, 100.0
+        return FaceLandmarks(
+            right_eye=_rotate_point(lm.right_eye, cx, cy, deg),
+            left_eye=_rotate_point(lm.left_eye, cx, cy, deg),
+            nose_tip=_rotate_point(lm.nose_tip, cx, cy, deg),
+            right_mouth_corner=_rotate_point(lm.right_mouth_corner, cx, cy, deg),
+            left_mouth_corner=_rotate_point(lm.left_mouth_corner, cx, cy, deg),
+        )
+
+    # Frontal face rotated by +25 degrees (head tilt)
+    lm_front = _create_synthetic_landmarks(
+        re=(70.0, 70.0),
+        le=(130.0, 70.0),
+        nt=(100.0, 105.0),
+        rm=(75.0, 140.0),
+        lm=(125.0, 140.0),
+    )
+    lm_front_tilted = _rotate_landmarks(lm_front, 25.0)
+    # Without projection onto eye vector, a 25 deg tilt shifts nose x by ~14px and would
+    # falsely classify FRONT as LEFT/RIGHT! With projection, yaw_offset stays 0.0.
+    assert abs(compute_yaw_offset(lm_front_tilted)) < 1e-4
+    assert classify_head_direction(lm_front_tilted, include_vertical=False) == HeadDirection.FRONT
+
+    # Right-turned face (nt_x = 88) rotated by -20 degrees
+    lm_right = _create_synthetic_landmarks(
+        re=(70.0, 70.0),
+        le=(130.0, 70.0),
+        nt=(88.0, 105.0),
+        rm=(75.0, 140.0),
+        lm=(125.0, 140.0),
+    )
+    lm_right_tilted = _rotate_landmarks(lm_right, -20.0)
+    assert abs(compute_yaw_offset(lm_right_tilted) - 0.20) < 1e-4
+    assert classify_head_direction(lm_right_tilted, include_vertical=False) == HeadDirection.RIGHT
+    assert (
+        classify_head_direction(lm_right_tilted, mirrored=True, include_vertical=False)
+        == HeadDirection.LEFT
+    )
+
+    # Left-turned face (nt_x = 112) rotated by +20 degrees
+    lm_left = _create_synthetic_landmarks(
+        re=(70.0, 70.0),
+        le=(130.0, 70.0),
+        nt=(112.0, 105.0),
+        rm=(75.0, 140.0),
+        lm=(125.0, 140.0),
+    )
+    lm_left_tilted = _rotate_landmarks(lm_left, 20.0)
+    assert abs(compute_yaw_offset(lm_left_tilted) - (-0.20)) < 1e-4
+    assert classify_head_direction(lm_left_tilted, include_vertical=False) == HeadDirection.LEFT
+    assert (
+        classify_head_direction(lm_left_tilted, mirrored=True, include_vertical=False)
+        == HeadDirection.RIGHT
+    )

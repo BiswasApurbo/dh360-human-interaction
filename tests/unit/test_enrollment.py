@@ -1205,3 +1205,123 @@ def test_real_turned_face_accepted_during_directional_stages(
     # Must be rejected, must NOT increment RIGHT counter
     assert prog.direction_counts[HeadDirection.RIGHT.value] == 1
     assert prog.last_rejection_reason == SampleRejectionReason.WRONG_DIRECTION
+
+
+def test_stage_boundary_last_accepted_direction_and_mirrored_camera(
+    mock_pipeline: tuple,
+) -> None:
+    """Verify last_accepted_direction accurately records the accepted sample's direction
+    at stage boundaries (sample 10 and 20) while current_direction advances to the next stage,
+    and verify mirrored_camera=True inverts RIGHT/LEFT yaw mapping.
+    """
+    from dh360_hi.contracts.dto import EnrollmentProgressDTO
+    from dh360_hi.vision.detector import FaceLandmarks
+    from dh360_hi.vision.enrollment import EnrollmentConfig, FaceEnrollmentController
+    from dh360_hi.vision.quality_gate import HeadDirection
+
+    detector, quality_gate, aligner, embedder, service, _ = mock_pipeline
+
+    # Test with mirrored_camera=True
+    config_mirrored = EnrollmentConfig(
+        target_samples=30,
+        minimum_samples=5,
+        min_sample_interval_seconds=0.0,
+        mirrored_camera=True,
+    )
+    controller = FaceEnrollmentController(
+        detector=detector,
+        quality_gate=quality_gate,
+        aligner=aligner,
+        embedder=embedder,
+        person_service=service,
+        config=config_mirrored,
+    )
+    person = service.create_person("Mirrored Stage Boundary Person")
+    prog = controller.start_session(person.person_id)
+    assert prog.current_direction == HeadDirection.FRONT.value
+    assert prog.last_accepted_direction is None
+
+    frame = Frame(image=np.zeros((480, 640, 3), dtype=np.uint8), frame_id=1, timestamp=0.0)
+
+    lm_front = FaceLandmarks(
+        right_eye=(70.0, 70.0),
+        left_eye=(130.0, 70.0),
+        nose_tip=(100.0, 105.0),
+        right_mouth_corner=(75.0, 140.0),
+        left_mouth_corner=(125.0, 140.0),
+    )
+    # In mirrored mode, nose shifted right in image (x=112) corresponds to RIGHT head turn
+    lm_mirrored_right = FaceLandmarks(
+        right_eye=(70.0, 70.0),
+        left_eye=(130.0, 70.0),
+        nose_tip=(112.0, 105.0),
+        right_mouth_corner=(75.0, 140.0),
+        left_mouth_corner=(125.0, 140.0),
+    )
+    # In mirrored mode, nose shifted left in image (x=88) corresponds to LEFT head turn
+    lm_mirrored_left = FaceLandmarks(
+        right_eye=(70.0, 70.0),
+        left_eye=(130.0, 70.0),
+        nose_tip=(88.0, 105.0),
+        right_mouth_corner=(75.0, 140.0),
+        left_mouth_corner=(125.0, 140.0),
+    )
+
+    # 1. Collect 10 FRONT samples
+    detector.set_detections(
+        [FaceDetection(bbox=(20.0, 20.0, 100.0, 100.0), confidence=0.95, landmarks=lm_front)]
+    )
+    for i in range(10):
+        vec = np.zeros(128, dtype=np.float32)
+        vec[i] = 1.0
+        embedder.set_vector(vec)
+        prog = controller.process_frame(frame)
+        assert prog.last_accepted_direction == HeadDirection.FRONT.value
+
+    # At sample 10/30: last_accepted_direction is FRONT, current_direction has advanced to RIGHT
+    assert prog.samples_collected == 10
+    assert prog.last_accepted_direction == HeadDirection.FRONT.value
+    assert prog.current_direction == HeadDirection.RIGHT.value
+    dto = EnrollmentProgressDTO.from_progress(prog)
+    assert dto.last_accepted_direction == HeadDirection.FRONT.value
+    assert dto.current_direction == HeadDirection.RIGHT.value
+
+    # 2. Collect 10 RIGHT samples (using mirrored right landmarks)
+    detector.set_detections(
+        [
+            FaceDetection(
+                bbox=(20.0, 20.0, 100.0, 100.0), confidence=0.95, landmarks=lm_mirrored_right
+            )
+        ]
+    )
+    for i in range(10, 20):
+        vec = np.zeros(128, dtype=np.float32)
+        vec[i] = 1.0
+        embedder.set_vector(vec)
+        prog = controller.process_frame(frame)
+        assert prog.last_accepted_direction == HeadDirection.RIGHT.value
+
+    # At sample 20/30: last_accepted_direction is RIGHT, current_direction has advanced to LEFT
+    assert prog.samples_collected == 20
+    assert prog.last_accepted_direction == HeadDirection.RIGHT.value
+    assert prog.current_direction == HeadDirection.LEFT.value
+
+    # 3. Collect 10 LEFT samples (using mirrored left landmarks)
+    detector.set_detections(
+        [
+            FaceDetection(
+                bbox=(20.0, 20.0, 100.0, 100.0), confidence=0.95, landmarks=lm_mirrored_left
+            )
+        ]
+    )
+    for i in range(20, 30):
+        vec = np.zeros(128, dtype=np.float32)
+        vec[i] = 1.0
+        embedder.set_vector(vec)
+        prog = controller.process_frame(frame)
+        assert prog.last_accepted_direction == HeadDirection.LEFT.value
+
+    assert prog.samples_collected == 30
+    assert prog.is_complete is True
+    assert prog.last_accepted_direction == HeadDirection.LEFT.value
+    controller.cancel_session()

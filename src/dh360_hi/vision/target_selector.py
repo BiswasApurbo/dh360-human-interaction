@@ -61,6 +61,7 @@ class TargetSelectionConfig:
     # Margin above current target score required for a rival candidate to seize focus
     hysteresis_switch_margin: float = 0.15
     max_lost_frames_to_release: int = 15
+    max_coast_frames: int = 3
     max_dwell_frames_normalization: float = 150.0  # ~5 seconds at 30 fps for full dwell weight
 
 
@@ -110,8 +111,20 @@ class InteractionTargetSelector(BaseTargetSelector):
         frame_id: int,
     ) -> TargetSelectionResult:
         """Select primary interaction target with deterministic tie-breaking and hysteresis."""
-        # 1. Filter to confirmed active tracks
-        active_tracks = [t for t in tracks if t.state == TrackState.CONFIRMED]
+        # 1. Filter to confirmed active tracks, plus allow the currently engaged primary
+        # target to coast across brief detector dropouts (<= max_coast_frames) so a
+        # single missed detection frame does not falsely trigger NO_FACE or LOST.
+        coast_limit = min(self._config.max_coast_frames, self._config.max_lost_frames_to_release)
+        active_tracks = [
+            t
+            for t in tracks
+            if t.state == TrackState.CONFIRMED
+            or (
+                t.state == TrackState.LOST
+                and 0 < t.misses <= coast_limit
+                and t.track_id == self._current_target_track_id
+            )
+        ]
 
         if not active_tracks or frame_width <= 0 or frame_height <= 0:
             previous_target = self._current_target_track_id
@@ -225,7 +238,12 @@ class InteractionTargetSelector(BaseTargetSelector):
 
         # 5. Update state
         self._current_target_track_id = chosen_target.track_id
-        self._last_target_seen_frame_id = frame_id
+        chosen_track = next(
+            (t for t in active_tracks if t.track_id == chosen_target.track_id),
+            None,
+        )
+        if chosen_track is not None and chosen_track.state == TrackState.CONFIRMED:
+            self._last_target_seen_frame_id = frame_id
         target_changed = chosen_target.track_id != previous_target
 
         return TargetSelectionResult(

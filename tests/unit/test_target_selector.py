@@ -175,3 +175,62 @@ def test_target_release_after_lost_frames() -> None:
     res = selector.select_target([], {}, 640, 480, frame_id=10)
     assert res.primary_target is None
     assert selector.current_target_track_id is None
+
+
+def test_target_coasting_across_brief_detector_dropouts() -> None:
+    """Verify primary target coasts across 1-2 missed frames without dropping to None."""
+    config = TargetSelectionConfig(max_coast_frames=3, max_lost_frames_to_release=5)
+    selector = InteractionTargetSelector(config)
+
+    # Frame 1: Track 1 is engaged as primary target
+    t1 = TrackedFace(
+        track_id=1,
+        bbox=(270.0, 190.0, 100.0, 100.0),
+        confidence=0.95,
+        state=TrackState.CONFIRMED,
+        age=10,
+        misses=0,
+    )
+    res1 = selector.select_target([t1], {}, 640, 480, frame_id=1)
+    assert res1.primary_track_id == 1
+    assert selector.current_target_track_id == 1
+
+    # Frame 2: Detector drops face for 1 frame -> tracker marks LOST with misses=1
+    t1_coast1 = TrackedFace(
+        track_id=1,
+        bbox=(270.0, 190.0, 100.0, 100.0),
+        confidence=0.95,
+        state=TrackState.LOST,
+        age=11,
+        misses=1,
+    )
+    res2 = selector.select_target([t1_coast1], {}, 640, 480, frame_id=2)
+    # Must NOT drop primary_target to None!
+    assert res2.primary_track_id == 1
+    assert res2.has_target is True
+    assert selector.current_target_track_id == 1
+
+    # Frame 3: 2nd missed frame (misses=2 <= max_coast_frames=3)
+    t1_coast2 = TrackedFace(
+        track_id=1,
+        bbox=(270.0, 190.0, 100.0, 100.0),
+        confidence=0.95,
+        state=TrackState.LOST,
+        age=12,
+        misses=2,
+    )
+    res3 = selector.select_target([t1_coast2], {}, 640, 480, frame_id=3)
+    assert res3.primary_track_id == 1
+    assert res3.has_target is True
+
+    # Frame 4: 4th missed frame (misses=4 > max_coast_frames=3) -> coasting expired
+    t1_coast4 = TrackedFace(
+        track_id=1,
+        bbox=(270.0, 190.0, 100.0, 100.0),
+        confidence=0.95,
+        state=TrackState.LOST,
+        age=14,
+        misses=4,
+    )
+    res4 = selector.select_target([t1_coast4], {}, 640, 480, frame_id=4)
+    assert res4.primary_target is None

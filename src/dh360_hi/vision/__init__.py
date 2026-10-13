@@ -89,6 +89,7 @@ from dh360_hi.vision.quality_gate import (
     compute_pose_metrics,
     compute_quality_tier,
     compute_sharpness,
+    compute_yaw_offset,
 )
 from dh360_hi.vision.recognition import (
     BaseFaceRecognizer,
@@ -207,6 +208,7 @@ __all__ = [
     "compute_pose_metrics",
     "compute_quality_tier",
     "compute_sharpness",
+    "compute_yaw_offset",
     "evaluate_pairs",
     "format_evaluation_report",
     "get_canonical_landmarks",

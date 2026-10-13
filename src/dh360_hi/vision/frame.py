@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
+from collections import deque
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,6 +71,11 @@ class FrameSource(ABC):
     @abstractmethod
     def fps(self) -> float:
         """Report stream frames-per-second."""
+
+    @property
+    def capture_fps(self) -> float:
+        """Report measured capture frames-per-second."""
+        return self.fps
 
     @property
     def is_live(self) -> bool:
@@ -170,23 +176,29 @@ class WebcamFrameSource(FrameSource):
     def __init__(
         self,
         camera_index: int = 0,
-        target_width: int | None = None,
-        target_height: int | None = None,
-        target_fps: float | None = None,
+        target_width: int | None = 640,
+        target_height: int | None = 480,
+        target_fps: float | None = 30.0,
+        prefer_mjpeg: bool = True,
     ) -> None:
         self.camera_index = camera_index
         self.target_width = target_width
         self.target_height = target_height
         self.target_fps = target_fps
+        self.prefer_mjpeg = prefer_mjpeg
         self._cap: cv2.VideoCapture | None = None
         self._frame_id = 0
         self._fps = target_fps or 30.0
         self._resolution = (0, 0)
+        self._read_timestamps: deque[float] = deque(maxlen=30)
 
     def open(self) -> None:
         self._cap = cv2.VideoCapture(self.camera_index)
         if not self._cap.isOpened():
             raise RuntimeError(f"Failed to open webcam at index {self.camera_index}")
+
+        if self.prefer_mjpeg:
+            self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc(*"MJPG"))
 
         if self.target_width and self.target_height:
             self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.target_width)
@@ -203,6 +215,7 @@ class WebcamFrameSource(FrameSource):
         if raw_fps > 0:
             self._fps = float(raw_fps)
         self._frame_id = 0
+        self._read_timestamps.clear()
 
     def read(self) -> Frame | None:
         if self._cap is None or not self._cap.isOpened():
@@ -212,10 +225,13 @@ class WebcamFrameSource(FrameSource):
         if not success or image is None:
             return None
 
+        now = time.monotonic()
+        self._read_timestamps.append(now)
+
         frame = Frame(
             image=image,
             frame_id=self._frame_id,
-            timestamp=time.monotonic(),
+            timestamp=now,
             source_info=f"webcam:{self.camera_index}",
         )
         self._frame_id += 1
@@ -225,6 +241,7 @@ class WebcamFrameSource(FrameSource):
         if self._cap is not None:
             self._cap.release()
             self._cap = None
+        self._read_timestamps.clear()
 
     @property
     def is_opened(self) -> bool:
@@ -236,6 +253,15 @@ class WebcamFrameSource(FrameSource):
 
     @property
     def fps(self) -> float:
+        return self._fps
+
+    @property
+    def capture_fps(self) -> float:
+        """Measured rolling capture frame rate from frame read timestamps."""
+        if len(self._read_timestamps) >= 2:
+            span = self._read_timestamps[-1] - self._read_timestamps[0]
+            if span > 0:
+                return float(len(self._read_timestamps) - 1) / span
         return self._fps
 
     @property

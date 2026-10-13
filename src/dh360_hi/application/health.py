@@ -77,7 +77,15 @@ def evaluate_service_health(service: HumanInteractionService) -> ServiceHealthSn
                     name="runtime",
                     status=SubsystemHealthStatus.HEALTHY,
                     message="Perception runtime active",
-                    details={"state": r_state.value, "fps": r_metrics.current_fps},
+                    details={
+                        "state": r_state.value,
+                        "fps": r_metrics.current_fps,
+                        "capture_fps": getattr(r_metrics, "capture_fps", 0.0),
+                        "capture_resolution": list(
+                            getattr(r_metrics, "capture_resolution", (0, 0))
+                        ),
+                        "average_latency_ms": getattr(r_metrics, "average_latency_ms", 0.0),
+                    },
                 )
             elif r_state == RuntimeState.PAUSED:
                 subsystems["runtime"] = SubsystemHealth(

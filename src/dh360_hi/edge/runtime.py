@@ -85,6 +85,13 @@ class RuntimeMetrics:
         average_latency_ms: Mean total processing latency per frame in milliseconds.
         last_error: Error message string from the most recent exception, if any.
         uptime_seconds: Total duration the runtime has been running/active.
+        capture_fps: Rolling measured capture frames-per-second from the frame source.
+        capture_resolution: Underlying capture resolution as (width, height).
+        detection_latency_ms: YuNet detector latency for the most recent frame.
+        tracking_latency_ms: Multi-face tracker latency for the most recent frame.
+        quality_latency_ms: Quality gate evaluation latency for the most recent frame.
+        embedding_latency_ms: SFace embedding inference latency for the most recent frame.
+        matching_latency_ms: Gallery matching latency for the most recent frame.
     """
 
     frames_processed: int = 0
@@ -92,6 +99,13 @@ class RuntimeMetrics:
     average_latency_ms: float = 0.0
     last_error: str | None = None
     uptime_seconds: float = 0.0
+    capture_fps: float = 0.0
+    capture_resolution: tuple[int, int] = (0, 0)
+    detection_latency_ms: float = 0.0
+    tracking_latency_ms: float = 0.0
+    quality_latency_ms: float = 0.0
+    embedding_latency_ms: float = 0.0
+    matching_latency_ms: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +158,13 @@ class EdgeInteractionRuntime:
         self._start_time: float | None = None
         self._frame_timestamps: deque[float] = deque(maxlen=30)
         self._latest_frame: Frame | None = None
+
+        # Stage latency tracking
+        self._last_detection_latency_ms = 0.0
+        self._last_tracking_latency_ms = 0.0
+        self._last_quality_latency_ms = 0.0
+        self._last_embedding_latency_ms = 0.0
+        self._last_matching_latency_ms = 0.0
 
     # ------------------------------------------------------------------
     # Properties
@@ -217,12 +238,24 @@ class EdgeInteractionRuntime:
                 else 0.0
             )
 
+            cap_fps = getattr(
+                self._frame_source, "capture_fps", getattr(self._frame_source, "fps", 0.0)
+            )
+            cap_res = getattr(self._frame_source, "resolution", (0, 0))
+
             return RuntimeMetrics(
                 frames_processed=self._frames_processed,
                 current_fps=current_fps,
                 average_latency_ms=avg_latency,
                 last_error=self._last_error,
                 uptime_seconds=uptime,
+                capture_fps=float(cap_fps) if cap_fps is not None else 0.0,
+                capture_resolution=cap_res,
+                detection_latency_ms=self._last_detection_latency_ms,
+                tracking_latency_ms=self._last_tracking_latency_ms,
+                quality_latency_ms=self._last_quality_latency_ms,
+                embedding_latency_ms=self._last_embedding_latency_ms,
+                matching_latency_ms=self._last_matching_latency_ms,
             )
 
     # ------------------------------------------------------------------
@@ -466,6 +499,21 @@ class EdgeInteractionRuntime:
                 self._total_latency_ms += latency_ms
                 self._consecutive_errors = 0
                 self._frame_timestamps.append(t_end)
+                self._last_detection_latency_ms = float(
+                    getattr(frame_result, "detection_latency_ms", 0.0) or 0.0
+                )
+                self._last_tracking_latency_ms = float(
+                    getattr(frame_result, "tracking_latency_ms", 0.0) or 0.0
+                )
+                self._last_quality_latency_ms = float(
+                    getattr(frame_result, "quality_latency_ms", 0.0) or 0.0
+                )
+                self._last_embedding_latency_ms = float(
+                    getattr(frame_result, "embedding_latency_ms", 0.0) or 0.0
+                )
+                self._last_matching_latency_ms = float(
+                    getattr(frame_result, "matching_latency_ms", 0.0) or 0.0
+                )
 
             return frame_result, events
         finally:
@@ -495,9 +543,8 @@ class EdgeInteractionRuntime:
             try:
                 frame = self._frame_source.read()
                 if frame is None:
-                    is_live = (
-                        getattr(self._frame_source, "is_live", False) is True
-                        or isinstance(self._frame_source, WebcamFrameSource)
+                    is_live = getattr(self._frame_source, "is_live", False) is True or isinstance(
+                        self._frame_source, WebcamFrameSource
                     )
                     if is_live:
                         self._handle_frame_error(
@@ -547,6 +594,21 @@ class EdgeInteractionRuntime:
                     self._total_latency_ms += latency_ms
                     self._consecutive_errors = 0
                     self._frame_timestamps.append(t_end)
+                    self._last_detection_latency_ms = float(
+                        getattr(frame_result, "detection_latency_ms", 0.0) or 0.0
+                    )
+                    self._last_tracking_latency_ms = float(
+                        getattr(frame_result, "tracking_latency_ms", 0.0) or 0.0
+                    )
+                    self._last_quality_latency_ms = float(
+                        getattr(frame_result, "quality_latency_ms", 0.0) or 0.0
+                    )
+                    self._last_embedding_latency_ms = float(
+                        getattr(frame_result, "embedding_latency_ms", 0.0) or 0.0
+                    )
+                    self._last_matching_latency_ms = float(
+                        getattr(frame_result, "matching_latency_ms", 0.0) or 0.0
+                    )
 
             except Exception as exc:
                 self._handle_frame_error(exc)

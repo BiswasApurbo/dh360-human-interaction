@@ -148,49 +148,85 @@ def compute_face_pitch_ratio(landmarks: FaceLandmarks) -> float:
     return float((landmarks.nose_tip[1] - eyes_mid_y) / vert_span)
 
 
+def compute_yaw_offset(
+    landmarks: FaceLandmarks,
+    *,
+    mirrored: bool = False,
+) -> float:
+    """Compute signed roll-corrected horizontal yaw offset of the nose tip.
+
+    Projects the displacement from the eye midpoint to the nose tip onto the
+    unit inter-ocular axis (from ``right_eye`` to ``left_eye``), normalized by
+    the inter-ocular distance (IOD). Projecting onto the inter-ocular vector
+    makes horizontal yaw estimation invariant to in-plane head roll/tilt.
+
+    Sign convention (unmirrored camera frame, ``mirrored=False``):
+    - ``right_eye`` is on image-left (smaller x) and ``left_eye`` is on image-right.
+    - Positive ``yaw_offset`` (> 0): nose shifts toward ``right_eye`` (subject turning
+      their head to their own physical RIGHT).
+    - Negative ``yaw_offset`` (< 0): nose shifts toward ``left_eye`` (subject turning
+      their head to their own physical LEFT).
+
+    When ``mirrored=True`` (horizontally flipped camera stream), the sign is inverted
+    so positive still represents the subject's physical RIGHT.
+    """
+    re_x, re_y = landmarks.right_eye
+    le_x, le_y = landmarks.left_eye
+    nt_x, nt_y = landmarks.nose_tip
+
+    eye_dx = le_x - re_x
+    eye_dy = le_y - re_y
+    iod_sq = float(eye_dx * eye_dx + eye_dy * eye_dy)
+    if iod_sq < 1e-8:
+        return 0.0
+
+    eyes_mid_x = (re_x + le_x) / 2.0
+    eyes_mid_y = (re_y + le_y) / 2.0
+
+    # Project (eyes_mid - nose_tip) onto (left_eye - right_eye) normalized by iod^2.
+    yaw_offset = float(((eyes_mid_x - nt_x) * eye_dx + (eyes_mid_y - nt_y) * eye_dy) / iod_sq)
+    if mirrored:
+        yaw_offset = -yaw_offset
+    return yaw_offset
+
+
 def classify_head_direction(
     landmarks: FaceLandmarks,
     yaw_threshold: float = 0.08,
     pitch_up_threshold: float = 0.06,
     pitch_down_threshold: float = 0.06,
     baseline_pitch_ratio: float = 0.50,
+    *,
+    mirrored: bool = False,
+    include_vertical: bool = True,
 ) -> HeadDirection:
     """Classify 5-point facial landmarks into a discrete head orientation direction.
 
     Geometry:
-    - Eye midpoint and inter-ocular span define scale and horizontal reference.
-    - Yaw is computed from signed horizontal deviation of nose tip from eye midpoint,
-      normalized by inter-ocular distance. Positive deviation indicates subject looking
-      right (towards camera left / right eye side), negative indicates left.
-    - Pitch is computed from the vertical position of the nose tip relative to the
-      eye midpoint and mouth midpoint. In canonical frontal pose, nose is roughly midway (~0.50),
-      or dynamically calibrated to the user's resting frontal baseline.
-      Higher nose position relative to expected height indicates looking UP;
-      lower nose position indicates looking DOWN.
+    - Eye midpoint and inter-ocular vector define scale and roll-corrected horizontal axis.
+    - Yaw is computed via :func:`compute_yaw_offset` by projecting the nose-to-eye-midpoint
+      vector onto the inter-ocular axis, normalized by inter-ocular distance. Positive
+      deviation indicates the subject turning their head RIGHT; negative indicates LEFT.
+    - When ``include_vertical=True`` (default), pitch is also evaluated from the vertical
+      position of the nose tip relative to the eye-to-mouth span against ``baseline_pitch_ratio``.
+      When ``include_vertical=False`` (3-stage horizontal guided enrollment: FRONT/RIGHT/LEFT),
+      classification is restricted to horizontal pose directions (FRONT, RIGHT, LEFT) so
+      natural vertical facial proportions or slight pitch shifts cannot misclassify horizontal
+      stages as UP/DOWN.
     """
-    re_x, re_y = landmarks.right_eye
-    le_x, le_y = landmarks.left_eye
-    nt_x, _ = landmarks.nose_tip
+    yaw_offset = compute_yaw_offset(landmarks, mirrored=mirrored)
+    is_yaw = abs(yaw_offset) >= yaw_threshold
 
-    # Inter-ocular distance (scale normalization)
-    eye_dx = le_x - re_x
-    eye_dy = le_y - re_y
-    iod = max(float(np.hypot(eye_dx, eye_dy)), 1e-4)
-
-    # Eye midpoint & mouth midpoint
-    eyes_mid_x = (re_x + le_x) / 2.0
-
-    # Yaw offset: positive if nose shifts toward right eye (subject's right),
-    # negative if nose shifts toward left eye (subject's left)
-    # (re_x < le_x, so eyes_mid_x - nt_x is positive when nose is closer to right eye)
-    yaw_offset = (eyes_mid_x - nt_x) / iod
+    if not include_vertical:
+        if is_yaw:
+            return HeadDirection.RIGHT if yaw_offset > 0 else HeadDirection.LEFT
+        return HeadDirection.FRONT
 
     # Pitch offset: vertical position of nose within eye-to-mouth span
     current_pitch_ratio = compute_face_pitch_ratio(landmarks)
     pitch_offset = current_pitch_ratio - baseline_pitch_ratio
 
     # Determine dominant deviation
-    is_yaw = abs(yaw_offset) >= yaw_threshold
     is_pitch_up = pitch_offset <= -pitch_up_threshold
     is_pitch_down = pitch_offset >= pitch_down_threshold
 

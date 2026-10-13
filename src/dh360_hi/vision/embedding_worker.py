@@ -52,6 +52,8 @@ class EmbeddingWorkerResult:
     inference_latency_ms: float
     total_latency_ms: float
     error: str | None = None
+    embedding_latency_ms: float = 0.0
+    matching_latency_ms: float = 0.0
 
     @property
     def is_success(self) -> bool:
@@ -289,13 +291,36 @@ class BoundedEmbeddingWorker(BaseEmbeddingWorker):
                 )
 
             # 2. Embedding Extraction
+            t_emb_start = time.monotonic()
             embed_res = self._embedder.embed(align_res.aligned_face)
+            t_emb_end = time.monotonic()
+            emb_latency_ms = (
+                embed_res.latency_ms
+                if embed_res.latency_ms > 0.0
+                else (t_emb_end - t_emb_start) * 1000.0
+            )
 
-            # 3. Gallery Recognition
-            rec_res = self._recognizer.recognize(embed_res.embedding)
+            # 3. Gallery Recognition (pass EmbeddingResult to preserve model metadata)
+            t_match_start = time.monotonic()
+            rec_res = self._recognizer.recognize(embed_res)
+            t_match_end = time.monotonic()
+            match_latency_ms = (t_match_end - t_match_start) * 1000.0
 
             t_infer_end = time.monotonic()
             infer_latency_ms = (t_infer_end - t_infer_start) * 1000.0
+
+            logger.debug(
+                "Worker recognition: track=%d frame=%d outcome=%s top_person=%s "
+                "similarity=%.4f margin=%.4f embed_ms=%.2f match_ms=%.2f",
+                task.track_id,
+                task.frame_id,
+                rec_res.outcome.value,
+                rec_res.person_id or "none",
+                rec_res.top_match.similarity if rec_res.top_match else 0.0,
+                rec_res.similarity_margin,
+                emb_latency_ms,
+                match_latency_ms,
+            )
 
             return EmbeddingWorkerResult(
                 track_id=task.track_id,
@@ -308,6 +333,8 @@ class BoundedEmbeddingWorker(BaseEmbeddingWorker):
                 inference_latency_ms=infer_latency_ms,
                 total_latency_ms=queue_latency_ms + infer_latency_ms,
                 error=None,
+                embedding_latency_ms=emb_latency_ms,
+                matching_latency_ms=match_latency_ms,
             )
 
         except Exception as exc:

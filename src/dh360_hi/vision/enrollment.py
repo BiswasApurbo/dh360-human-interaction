@@ -32,6 +32,7 @@ from dh360_hi.vision.quality_gate import (
     HeadDirection,
     classify_head_direction,
     compute_face_pitch_ratio,
+    compute_yaw_offset,
 )
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,7 @@ class EnrollmentConfig:
     timeout_seconds: float = 120.0
     model_name: str = "SFace"
     model_version: str = "2021dec"
+    mirrored_camera: bool = False
 
     def __post_init__(self) -> None:
         if self.minimum_samples < 1:
@@ -213,6 +215,7 @@ class _ActiveSessionData:
         }
     )
     current_direction: HeadDirection | None = None
+    last_accepted_direction: str | None = None
     baseline_pitch_ratio: float | None = None
     front_pitch_ratios: list[float] = field(default_factory=list)
 
@@ -237,6 +240,7 @@ class EnrollmentProgress:
     is_viable: bool
     is_complete: bool
     current_direction: str | None = None
+    last_accepted_direction: str | None = None
     direction_counts: dict[str, int] = field(default_factory=dict)
     direction_targets: dict[str, int] = field(default_factory=dict)
 
@@ -367,6 +371,7 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             is_viable=is_viable,
             is_complete=s.state == EnrollmentState.COMPLETED,
             current_direction=curr_dir_str,
+            last_accepted_direction=s.last_accepted_direction,
             direction_counts=dict(s.direction_counts),
             direction_targets=dict(self._config.direction_targets),
         )
@@ -515,6 +520,7 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             return self._build_progress(s)
 
         s.attempts += 1
+        s.last_accepted_direction = None
 
         # 3. Detection
         det_result = self._detector.detect(frame)
@@ -587,12 +593,10 @@ class FaceEnrollmentController(BaseFaceEnrollment):
                 self._get_active_stage_direction(s) if self._config.direction_targets else None
             )
             cur_pitch_ratio = compute_face_pitch_ratio(target_detection.landmarks)
-            lm = target_detection.landmarks
-            iod = max(
-                float(np.hypot(lm.left_eye[0] - lm.right_eye[0], lm.left_eye[1] - lm.right_eye[1])),
-                1e-4,
+            y_offset = compute_yaw_offset(
+                target_detection.landmarks,
+                mirrored=self._config.mirrored_camera,
             )
-            y_offset = ((lm.right_eye[0] + lm.left_eye[0]) / 2.0 - lm.nose_tip[0]) / iod
             if s.baseline_pitch_ratio is None:
                 if active_stage == HeadDirection.FRONT and abs(y_offset) < 0.12:
                     baseline_pitch = cur_pitch_ratio
@@ -601,21 +605,31 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             else:
                 baseline_pitch = s.baseline_pitch_ratio
             p_offset = cur_pitch_ratio - baseline_pitch
+            include_vertical = (
+                any(
+                    d in self._config.direction_targets
+                    for d in (HeadDirection.UP.value, HeadDirection.DOWN.value)
+                )
+                if self._config.direction_targets
+                else True
+            )
             detected_direction = classify_head_direction(
                 target_detection.landmarks,
                 baseline_pitch_ratio=baseline_pitch,
+                mirrored=self._config.mirrored_camera,
+                include_vertical=include_vertical,
             )
+            active_dir = self._get_active_stage_direction(s)
             logger.info(
                 "Enrollment pose: detected=%s (active=%s) | "
-                "pitch_ratio=%.4f (baseline=%.4f, offset=%.4f) | yaw_offset=%.4f",
+                "pitch_ratio=%.4f (baseline=%.4f, offset=%.4f) | yaw_offset=%.4f (mirrored=%s)",
                 detected_direction.value,
-                self._get_active_stage_direction(s).value
-                if self._config.direction_targets and self._get_active_stage_direction(s)
-                else "none",
+                active_dir.value if active_dir is not None else "none",
                 cur_pitch_ratio,
                 baseline_pitch,
                 p_offset,
                 y_offset,
+                self._config.mirrored_camera,
             )
 
         dir_key = detected_direction.value
@@ -733,6 +747,7 @@ class FaceEnrollmentController(BaseFaceEnrollment):
         )
         s.samples.append(sample)
         s.direction_counts[dir_key] = current_dir_count + 1
+        s.last_accepted_direction = dir_key
         s.last_sample_time = curr_time
         s.last_rejection_reason = None
         s.last_rejection_details = None

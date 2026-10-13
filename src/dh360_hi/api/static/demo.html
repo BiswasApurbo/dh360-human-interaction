@@ -618,6 +618,10 @@
         if (resp.status === 201) {
           appendLog(`enrollment session started for: ${personId}`);
           isEnrollmentCommitted = false;
+          lastSampleCount = 0;
+          lastLoggedRejection = null;
+          const initData = await resp.json().catch(() => ({}));
+          updateEnrollmentProgressUI(initData);
           pollEnrollmentStep(token, personId);
           return true;
         } else {
@@ -718,13 +722,17 @@
             updateEnrollmentProgressUI(data);
 
             const dir = (data.current_direction || "FRONT").toUpperCase();
+            const acceptedDir = (data.last_accepted_direction || dir).toUpperCase();
             if (data.last_rejection_reason && data.last_rejection_reason !== lastLoggedRejection) {
               lastLoggedRejection = data.last_rejection_reason;
               appendLog(`sample rejected [${dir}]: ${data.last_rejection_details || data.last_rejection_reason}`);
             } else if (!data.last_rejection_reason && (data.samples_collected !== undefined && data.samples_collected > lastSampleCount)) {
               lastSampleCount = data.samples_collected;
               lastLoggedRejection = null;
-              appendLog(`accepted sample ${data.samples_collected}/${data.target_samples || 30} [${dir}]`);
+              appendLog(`accepted sample ${data.samples_collected}/${data.target_samples || 30} [${acceptedDir}]`);
+              if (acceptedDir !== dir) {
+                appendLog(`stage [${acceptedDir}] complete; next stage: [${dir}]`);
+              }
             }
 
             const isFailed = Boolean(data.state && (data.state.toUpperCase() === "FAILED" || data.state.toUpperCase() === "CANCELLED"));
@@ -966,15 +974,20 @@
               if (st === "AUTHORIZED") {
                 clearInterval(authPollIntervalId);
                 authPollIntervalId = null;
+                clearNotice();
                 fetchAuthorizedContext(token, data.authorization_id || currentAuthId);
               } else if (st === "UNKNOWN") {
-                clearInterval(authPollIntervalId);
-                authPollIntervalId = null;
+                if (data.ended_at_iso) {
+                  clearInterval(authPollIntervalId);
+                  authPollIntervalId = null;
+                }
                 clearContextUI();
                 showNotice("Person not registered. Please register.", "error");
               } else if (st === "UNCERTAIN") {
-                clearInterval(authPollIntervalId);
-                authPollIntervalId = null;
+                if (data.ended_at_iso) {
+                  clearInterval(authPollIntervalId);
+                  authPollIntervalId = null;
+                }
                 clearContextUI();
                 showNotice("Identity could not be confirmed.", "error");
               } else if (st === "TIMEOUT") {
@@ -1486,19 +1499,24 @@
                 clearInterval(authPollIntervalId);
                 authPollIntervalId = null;
               }
+              clearNotice();
               const token = document.getElementById("token-input").value.trim();
               fetchAuthorizedContext(token, payload.authorization_id || currentAuthId);
             } else if (st === "UNKNOWN") {
-              if (authPollIntervalId) {
-                clearInterval(authPollIntervalId);
-                authPollIntervalId = null;
+              if (payload.ended_at_iso) {
+                if (authPollIntervalId) {
+                  clearInterval(authPollIntervalId);
+                  authPollIntervalId = null;
+                }
               }
               clearContextUI();
               showNotice("Person not registered. Please register.", "error");
             } else if (st === "UNCERTAIN") {
-              if (authPollIntervalId) {
-                clearInterval(authPollIntervalId);
-                authPollIntervalId = null;
+              if (payload.ended_at_iso) {
+                if (authPollIntervalId) {
+                  clearInterval(authPollIntervalId);
+                  authPollIntervalId = null;
+                }
               }
               clearContextUI();
               showNotice("Identity could not be confirmed.", "error");

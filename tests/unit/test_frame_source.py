@@ -82,14 +82,27 @@ def test_videofile_missing_file_raises_error(tmp_path: pytest.TempPathFactory) -
 
 def test_webcam_frame_source_init() -> None:
     """Verify WebcamFrameSource initialization and configuration values."""
+    # Custom values
     source = WebcamFrameSource(
         camera_index=99,
         target_width=1280,
         target_height=720,
         target_fps=30.0,
+        prefer_mjpeg=False,
     )
     assert source.camera_index == 99
     assert source.target_width == 1280
     assert source.target_height == 720
     assert source.target_fps == 30.0
+    assert source.prefer_mjpeg is False
     assert not source.is_opened
+
+    # Default values: 640x480 MJPEG @ 30.0 FPS
+    default_source = WebcamFrameSource(camera_index=0)
+    assert default_source.camera_index == 0
+    assert default_source.target_width == 640
+    assert default_source.target_height == 480
+    assert default_source.target_fps == 30.0
+    assert default_source.prefer_mjpeg is True
+    assert default_source.capture_fps == 30.0
+    assert default_source.is_live is True

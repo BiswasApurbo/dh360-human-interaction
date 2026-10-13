@@ -207,3 +207,74 @@ def test_multiple_simultaneous_tracks_independent_states() -> None:
 
     assert s2.state == IdentityState.IDENTIFIED
     assert s2.current_person_id == "p002"
+
+
+def test_consecutive_tail_match_recovers_from_initial_unregistered() -> None:
+    """Verify a registered person looking up after 2 UNREGISTERED frames reaches IDENTIFIED
+    once 3 consecutive IDENTIFIED observations arrive, without premature UNCERTAIN.
+    """
+    manager = IdentityStateManager(
+        config=IdentityStateConfig(min_observations_to_decide=3, evidence_window_size=6)
+    )
+    rec_unreg = _create_mock_recognition_result(RecognitionOutcome.UNREGISTERED, None, None, 0.30)
+    rec_apurbo = _create_mock_recognition_result(
+        RecognitionOutcome.IDENTIFIED, "p_apurbo", "Apurbo", 0.55
+    )
+
+    # First 2 frames: user was looking down (UNREGISTERED)
+    manager.update(track_id=1, rec_result=rec_unreg, frame_id=1)
+    manager.update(track_id=1, rec_result=rec_unreg, frame_id=2)
+
+    # Frame 3: user looks at camera (1st IDENTIFIED observation, total=3 in window of 6)
+    # Must remain COLLECTING while window is still filling, NOT jump to UNCERTAIN
+    s3 = manager.update(track_id=1, rec_result=rec_apurbo, frame_id=3)
+    assert s3.state == IdentityState.COLLECTING
+
+    # Frame 4: 2nd consecutive IDENTIFIED observation
+    s4 = manager.update(track_id=1, rec_result=rec_apurbo, frame_id=4)
+    assert s4.state == IdentityState.COLLECTING
+
+    # Frame 5: 3rd consecutive IDENTIFIED observation for the single candidate Apurbo -> IDENTIFIED
+    s5 = manager.update(track_id=1, rec_result=rec_apurbo, frame_id=5)
+    assert s5.state == IdentityState.IDENTIFIED
+    assert s5.current_person_id == "p_apurbo"
+
+
+def test_reset_unconfirmed_tracks_and_stale_observation_filtering() -> None:
+    """Verify reset_unconfirmed_tracks resets UNREGISTERED/UNCERTAIN tracks while preserving
+    IDENTIFIED tracks, and stale observations before created_frame_id are ignored.
+    """
+    manager = IdentityStateManager(config=IdentityStateConfig(min_observations_to_decide=2))
+    rec_unreg = _create_mock_recognition_result(RecognitionOutcome.UNREGISTERED, None, None, 0.25)
+    rec_alice = _create_mock_recognition_result(RecognitionOutcome.IDENTIFIED, "p1", "Alice", 0.60)
+
+    # Track 1 becomes UNREGISTERED
+    manager.update(track_id=1, rec_result=rec_unreg, frame_id=1)
+    s1 = manager.update(track_id=1, rec_result=rec_unreg, frame_id=2)
+    assert s1.state == IdentityState.UNREGISTERED
+
+    # Track 2 becomes IDENTIFIED
+    manager.update(track_id=2, rec_result=rec_alice, frame_id=1)
+    s2 = manager.update(track_id=2, rec_result=rec_alice, frame_id=2)
+    assert s2.state == IdentityState.IDENTIFIED
+
+    # Reset unconfirmed tracks at frame 10
+    reset_ids = manager.reset_unconfirmed_tracks(frame_id=10)
+    assert reset_ids == [1]
+
+    t1 = manager.get_track_state(1)
+    assert t1 is not None
+    assert t1.state == IdentityState.NEW
+    assert t1.created_frame_id == 10
+    assert t1.observation_count == 0
+
+    # Track 2 remains IDENTIFIED
+    t2 = manager.get_track_state(2)
+    assert t2 is not None
+    assert t2.state == IdentityState.IDENTIFIED
+
+    # Stale worker result from frame 5 (< created_frame_id=10) is ignored
+    s1_stale = manager.update(track_id=1, rec_result=rec_unreg, frame_id=5, create_if_missing=False)
+    assert s1_stale is not None
+    assert s1_stale.observation_count == 0
+    assert s1_stale.state == IdentityState.NEW

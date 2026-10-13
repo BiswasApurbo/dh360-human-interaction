@@ -42,6 +42,13 @@ def start_authorization_session(
     Returns HTTP 503 if the authorization controller is unavailable.
     """
     controller = _get_controller(request)
+    service = getattr(request.app.state, "service", None)
+    if service is not None:
+        runtime = getattr(service, "runtime", None)
+        if runtime is not None:
+            pipeline = getattr(runtime, "pipeline", None)
+            if pipeline is not None and hasattr(pipeline, "reset_unconfirmed_tracks"):
+                pipeline.reset_unconfirmed_tracks()
     try:
         session = controller.start()
     except ValueError as exc:
