@@ -115,6 +115,7 @@ class HumanInteractionService:
         self._persistence_worker = persistence_worker
         self._enrollment_controller = enrollment_controller
         self._enrollment_capture: FrameSource | None = None
+        self._latest_enrollment_frame: Frame | None = None
         self._config = config or HumanInteractionConfig()
         self._lock = threading.RLock()
         self._person_mutation_lock = threading.Lock()
@@ -684,6 +685,7 @@ class HumanInteractionService:
                 msg = "No active server-side capture source for this enrollment session"
                 raise ServiceUnavailableError("enrollment_capture", msg)
 
+            self._latest_enrollment_frame = frame
             progress = self._enrollment_controller.process_frame(frame)
             return EnrollmentProgressDTO.from_progress(progress)
 
@@ -794,11 +796,23 @@ class HumanInteractionService:
         """Release and clear any active server-side enrollment capture source."""
         capture = self._enrollment_capture
         self._enrollment_capture = None
+        self._latest_enrollment_frame = None
         if capture is not None:
             try:
                 capture.release()
             except Exception:
                 logger.exception("Error releasing enrollment capture source")
+
+    def get_latest_enrollment_frame(self) -> Frame | None:
+        """Return the latest camera frame captured during an active enrollment session."""
+        with self._lock:
+            if self._enrollment_controller is None or not self._enrollment_controller.is_active:
+                return None
+            if self._latest_enrollment_frame is not None:
+                return self._latest_enrollment_frame
+            if self.runtime is not None and self.runtime.is_running:
+                return self.runtime.latest_frame
+            return None
 
     def get_enrollment_progress(self) -> EnrollmentProgressDTO | None:
         """Retrieve current progress of the active enrollment session, if any."""

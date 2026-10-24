@@ -218,6 +218,8 @@ class _ActiveSessionData:
     last_accepted_direction: str | None = None
     baseline_pitch_ratio: float | None = None
     front_pitch_ratios: list[float] = field(default_factory=list)
+    last_face_detected: bool = False
+    last_face_bbox: tuple[float, float, float, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -243,6 +245,8 @@ class EnrollmentProgress:
     last_accepted_direction: str | None = None
     direction_counts: dict[str, int] = field(default_factory=dict)
     direction_targets: dict[str, int] = field(default_factory=dict)
+    face_detected: bool = False
+    face_bbox: tuple[float, float, float, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -374,6 +378,8 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             last_accepted_direction=s.last_accepted_direction,
             direction_counts=dict(s.direction_counts),
             direction_targets=dict(self._config.direction_targets),
+            face_detected=getattr(s, "last_face_detected", False),
+            face_bbox=getattr(s, "last_face_bbox", None),
         )
 
     def start_session(
@@ -525,6 +531,8 @@ class FaceEnrollmentController(BaseFaceEnrollment):
         # 3. Detection
         det_result = self._detector.detect(frame)
         if len(det_result.detections) == 0:
+            s.last_face_detected = False
+            s.last_face_bbox = None
             s.last_rejection_reason = SampleRejectionReason.NO_FACE
             s.last_rejection_details = "No face detected in camera frame"
             s.rejection_counts[SampleRejectionReason.NO_FACE.value] += 1
@@ -554,6 +562,8 @@ class FaceEnrollmentController(BaseFaceEnrollment):
                 d for d in valid_candidates[1:] if d.area >= 0.35 * primary.area
             ]
             if len(competing_candidates) > 0:
+                s.last_face_detected = True
+                s.last_face_bbox = primary.bbox
                 s.last_rejection_reason = SampleRejectionReason.MULTIPLE_FACES
                 s.last_rejection_details = (
                     f"{len(competing_candidates) + 1} distinct faces detected in frame; "
@@ -562,6 +572,9 @@ class FaceEnrollmentController(BaseFaceEnrollment):
                 s.rejection_counts[SampleRejectionReason.MULTIPLE_FACES.value] += 1
                 return self._build_progress(s)
             target_detection = primary
+
+        s.last_face_detected = True
+        s.last_face_bbox = target_detection.bbox
 
         # 5. Quality Gate Evaluation
         q_result = self._quality_gate.evaluate(frame, target_detection)

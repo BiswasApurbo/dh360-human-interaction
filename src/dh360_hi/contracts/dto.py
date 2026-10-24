@@ -482,6 +482,8 @@ class EnrollmentProgressDTO:
     last_accepted_direction: str | None = None
     direction_counts: dict[str, int] = field(default_factory=dict)
     direction_targets: dict[str, int] = field(default_factory=dict)
+    face_detected: bool = False
+    face_bbox: tuple[float, float, float, float] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert DTO to a JSON-serializable dictionary."""
@@ -516,6 +518,8 @@ class EnrollmentProgressDTO:
             last_accepted_direction=getattr(progress, "last_accepted_direction", None),
             direction_counts=dict(getattr(progress, "direction_counts", {})),
             direction_targets=dict(getattr(progress, "direction_targets", {})),
+            face_detected=getattr(progress, "face_detected", False),
+            face_bbox=getattr(progress, "face_bbox", None),
         )
 
 

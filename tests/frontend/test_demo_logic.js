@@ -108,11 +108,49 @@ const domState = {
         children: [],
         appendChild: function(c) { this.children.push(c); }
     },
-    "notice-box": { style: {}, textContent: "", className: "" }
+    "notice-box": { style: {}, textContent: "", className: "" },
+    "hud-stage-instruction": { textContent: "" },
+    "hud-feedback-text": { textContent: "", style: {} },
+    "stage-card-front": { className: "stage-card" },
+    "stage-card-right": { className: "stage-card" },
+    "stage-card-left": { className: "stage-card" },
+    "stage-count-front": { textContent: "" },
+    "stage-count-right": { textContent: "" },
+    "stage-count-left": { textContent: "" },
+    "stage-bar-front": { style: {} },
+    "stage-bar-right": { style: {} },
+    "stage-bar-left": { style: {} },
+    "hud-total-samples": { textContent: "" },
+    "hud-arrow-right": { style: { display: "none" } },
+    "hud-arrow-left": { style: { display: "none" } },
+    "hud-front-indicator": { style: { display: "inline" } },
+    "hud-wireframe-mesh": { style: {} },
+    "hud-face-guide-group": {
+        attributes: {},
+        setAttribute(k, v) { this.attributes[k] = v; },
+        getAttribute(k) { return this.attributes[k]; }
+    },
+    "hud-target-reticle": {
+        attributes: {},
+        setAttribute(k, v) { this.attributes[k] = v; },
+        getAttribute(k) { return this.attributes[k]; }
+    },
+    "hud-camera-badge": { textContent: "", className: "hud-badge" },
+    "hud-camera-toggle-btn": { textContent: "" },
+    "cancel-enrollment-btn": { disabled: false },
+    "cancel-enrollment-top-btn": { disabled: false },
+    "enrollment-camera-preview": { style: {}, src: "" },
+    "enrollment-local-video": { style: {}, srcObject: null }
 };
 
 global.document = {
-    getElementById: (id) => domState[id] || { style: {}, textContent: "" },
+    getElementById: (id) => domState[id] || {
+        style: {},
+        textContent: "",
+        attributes: {},
+        setAttribute(k, v) { this.attributes[k] = v; },
+        getAttribute(k) { return this.attributes[k]; }
+    },
     querySelectorAll: () => [],
     createElement: (tag) => ({
         tag,
@@ -494,6 +532,120 @@ async function runTests() {
     const unrelatedCancelCall = global.fetchArgs.find(a => a.options && a.options.method === "DELETE" && a.url === "/authorization/sessions/current");
     if (unrelatedCancelCall) throw new Error("confirmAndDeletePerson must NOT cancel session when deleting unrelated person");
     console.log("✓ confirmAndDeletePerson preserves active session when deleting unrelated person");
+
+    // Test HUD Stage 1 (FRONT): verifies stage cards, arrows, and instruction banner
+    updateEnrollmentProgressUI({
+        current_direction: "FRONT",
+        direction_counts: { front: 5, right: 0, left: 0 },
+        direction_targets: { front: 10, right: 10, left: 10 },
+        samples_collected: 5,
+        target_samples: 30,
+        face_detected: true,
+        face_bbox: [200, 150, 100, 100]
+    });
+    if (!domState["hud-stage-instruction"].textContent.includes("STAGE 1/3: LOOK FRONT (5/10)")) {
+        throw new Error("HUD stage banner must show FRONT stage and counts");
+    }
+    if (domState["stage-card-front"].className !== "stage-card active") {
+        throw new Error("Front card must be active");
+    }
+    if (domState["hud-front-indicator"].style.display !== "inline") {
+        throw new Error("Front indicator must be displayed during FRONT stage");
+    }
+    if (domState["hud-arrow-right"].style.display !== "none" || domState["hud-arrow-left"].style.display !== "none") {
+        throw new Error("Directional arrows must be hidden during FRONT stage");
+    }
+    if (domState["hud-face-guide-group"].getAttribute("transform") !== "translate(-70, -20)") {
+        throw new Error("Face guide group must translate to tracked face center");
+    }
+    if (domState["hud-target-reticle"].getAttribute("stroke") !== "#38bdf8") {
+        throw new Error("Target reticle must show locked cyan stroke when face is detected");
+    }
+    console.log("✓ HUD correctly renders FRONT stage, tracking reticle, and card status");
+
+    // Test HUD Stage 2 (RIGHT): verifies right arrows (>>>), active right card, completed front card
+    updateEnrollmentProgressUI({
+        current_direction: "RIGHT",
+        direction_counts: { front: 10, right: 4, left: 0 },
+        direction_targets: { front: 10, right: 10, left: 10 },
+        samples_collected: 14,
+        target_samples: 30,
+        face_detected: true,
+        face_bbox: [320, 220, 100, 100]
+    });
+    if (!domState["hud-stage-instruction"].textContent.includes("STAGE 2/3: TURN HEAD TO YOUR RIGHT >>>")) {
+        throw new Error("HUD stage banner must show RIGHT turn instruction with chevrons");
+    }
+    if (domState["stage-card-front"].className !== "stage-card complete") {
+        throw new Error("Front card must be marked complete in Stage 2");
+    }
+    if (domState["stage-card-right"].className !== "stage-card active") {
+        throw new Error("Right card must be active in Stage 2");
+    }
+    if (domState["hud-arrow-right"].style.display !== "inline") {
+        throw new Error("Right arrow group must be displayed during RIGHT stage");
+    }
+    if (domState["hud-arrow-left"].style.display !== "none") {
+        throw new Error("Left arrow group must be hidden during RIGHT stage");
+    }
+    if (domState["stage-bar-right"].style.width !== "40%") {
+        throw new Error("Right stage progress bar must reflect 4/10 (40%)");
+    }
+    console.log("✓ HUD correctly renders RIGHT stage with rightward guide chevrons and progress");
+
+    // Test HUD Stage 3 (LEFT): verifies left arrows (<<<), completed right card, and no face state
+    updateEnrollmentProgressUI({
+        current_direction: "LEFT",
+        direction_counts: { front: 10, right: 10, left: 7 },
+        direction_targets: { front: 10, right: 10, left: 10 },
+        samples_collected: 27,
+        target_samples: 30,
+        face_detected: false,
+        face_bbox: null,
+        last_rejection_reason: "NO_FACE"
+    });
+    if (!domState["hud-stage-instruction"].textContent.includes("STAGE 3/3: <<< TURN HEAD TO YOUR LEFT")) {
+        throw new Error("HUD stage banner must show LEFT turn instruction with chevrons");
+    }
+    if (domState["stage-card-right"].className !== "stage-card complete") {
+        throw new Error("Right card must be marked complete in Stage 3");
+    }
+    if (domState["stage-card-left"].className !== "stage-card active") {
+        throw new Error("Left card must be active in Stage 3");
+    }
+    if (domState["hud-arrow-left"].style.display !== "inline") {
+        throw new Error("Left arrow group must be displayed during LEFT stage");
+    }
+    if (domState["hud-arrow-right"].style.display !== "none") {
+        throw new Error("Right arrow group must be hidden during LEFT stage");
+    }
+    if (domState["hud-face-guide-group"].getAttribute("transform") !== "translate(0, 0)") {
+        throw new Error("Face guide group must reset to center when no face is detected");
+    }
+    if (domState["hud-target-reticle"].getAttribute("stroke") !== "#f59e0b") {
+        throw new Error("Target reticle must show searching amber stroke when no face is detected");
+    }
+    console.log("✓ HUD correctly renders LEFT stage with leftward guide chevrons and searching reticle");
+
+    // Test handleCancelEnrollment cleanly cancels active session and cleans up UI
+    global.currentPersonId = "p-cancel-test";
+    global.isNewRegistration = true;
+    domState["enrollment-section"].style.display = "block";
+    domState["auth-action-section"].style.display = "none";
+    global.fetchArgs = [];
+    global.fetchResponses = [
+        { status: 200 }, // DELETE /persons/enrollment/sessions/current
+        { status: 204 }, // DELETE /persons/p-cancel-test (rollback newly created person)
+        { status: 200, json: [] } // loadRegisteredPersons
+    ];
+    await handleCancelEnrollment();
+    const sessionCancelReq = global.fetchArgs.find(a => a.url === "/persons/enrollment/sessions/current" && a.options.method === "DELETE");
+    if (!sessionCancelReq) throw new Error("handleCancelEnrollment must send DELETE to /persons/enrollment/sessions/current");
+    const personRollbackReq = global.fetchArgs.find(a => a.url === "/persons/p-cancel-test" && a.options.method === "DELETE");
+    if (!personRollbackReq) throw new Error("handleCancelEnrollment must roll back newly registered person");
+    if (domState["enrollment-section"].style.display !== "none") throw new Error("Enrollment section must be hidden after cancel");
+    if (domState["auth-action-section"].style.display !== "block") throw new Error("Auth action section must be restored after cancel");
+    console.log("✓ handleCancelEnrollment safely cancels session, rolls back new profile, and restores UI");
 
     console.log("All frontend logic tests passed successfully!");
 }

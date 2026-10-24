@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict
 
 from dh360_hi.api.security import (
@@ -107,6 +108,44 @@ def get_enrollment_session(
     if progress is None or progress.person_id != person_id:
         raise EntityNotFoundError("enrollment_session", person_id)
     return progress.to_dict()
+
+
+@router.get("/{person_id}/enrollment/sessions/preview")
+def get_enrollment_preview_frame(
+    person_id: str,
+    request: Request,
+    _operator: OperatorPrincipal = _enrollment_manage,
+) -> Response:
+    """Return the latest server camera frame as a JPEG preview for an active enrollment session."""
+    service = _get_service(request)
+    _require_active_session(service, person_id)
+    frame_getter = getattr(service, "get_latest_enrollment_frame", None)
+    frame = frame_getter() if callable(frame_getter) else None
+    if frame is None or getattr(frame, "image", None) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No preview frame available for active enrollment session",
+        )
+    import cv2
+
+    img = frame.image
+    h, w = img.shape[:2]
+    if w > 640:
+        new_w = 640
+        new_h = int(h * (640 / w))
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to encode preview frame",
+        )
+    return Response(
+        content=encoded.tobytes(),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
 
 
 @router.post("/{person_id}/enrollment/sessions/step")

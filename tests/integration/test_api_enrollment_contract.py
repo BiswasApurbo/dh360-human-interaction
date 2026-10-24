@@ -6,11 +6,13 @@ import secrets
 from types import SimpleNamespace
 from typing import Any
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
 from dh360_hi.api.app import create_app
 from dh360_hi.contracts.dto import EnrollmentProgressDTO, EnrollmentResultDTO
+from dh360_hi.vision.frame import Frame
 
 _PERSON_ID = "11111111-1111-1111-1111-111111111111"
 _MISSING_ID = "99999999-9999-9999-9999-999999999999"
@@ -43,6 +45,9 @@ class _StubService:
 
     def get_enrollment_progress(self) -> EnrollmentProgressDTO | None:
         return self._progress
+
+    def get_latest_enrollment_frame(self) -> Any:
+        return getattr(self, "_frame", None)
 
     def start_enrollment(
         self, person_id: str, mode: str, capture_source: Any = None
@@ -232,3 +237,46 @@ def test_client_cannot_select_capture_source_returns_422(
             headers=headers,
         )
     assert response.status_code == 422
+
+
+def test_preview_endpoint_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The preview endpoint enforces auth, scope, active session, and returns JPEG."""
+    token = _configure_operator(monkeypatch, "enrollment:manage")
+    app = create_app()
+    service = _StubService()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with TestClient(app) as client:
+        client.app.state.service = service
+
+        # 1. Unauthenticated -> 401
+        res = client.get(f"/persons/{_PERSON_ID}/enrollment/sessions/preview")
+        assert res.status_code == 401
+
+        # 2. No active session -> 404
+        res = client.get(
+            f"/persons/{_PERSON_ID}/enrollment/sessions/preview",
+            headers=headers,
+        )
+        assert res.status_code == 404
+
+        # Start session
+        service.start_enrollment(_PERSON_ID, "add_samples")
+
+        # 3. Active session but no frame -> 404
+        res = client.get(
+            f"/persons/{_PERSON_ID}/enrollment/sessions/preview",
+            headers=headers,
+        )
+        assert res.status_code == 404
+
+        # 4. Active session with frame -> 200 image/jpeg
+        dummy_img = np.zeros((240, 320, 3), dtype=np.uint8)
+        service._frame = Frame(image=dummy_img, frame_id=1, timestamp=1.0)
+        res = client.get(
+            f"/persons/{_PERSON_ID}/enrollment/sessions/preview",
+            headers=headers,
+        )
+        assert res.status_code == 200
+        assert res.headers["content-type"] == "image/jpeg"
+        assert len(res.content) > 0

@@ -193,6 +193,214 @@
     .sse-connected { background-color: #22c55e; }
     .sse-connecting { background-color: #eab308; }
     .sse-error { background-color: #ef4444; }
+
+    /* Futuristic Cybernetic HUD Viewport Styles */
+    .hud-viewport {
+      position: relative;
+      width: 100%;
+      max-width: 600px;
+      margin: 0 auto 1rem auto;
+      aspect-ratio: 4 / 3;
+      background: radial-gradient(circle at center, #0f172a 0%, #030712 100%);
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid #1e293b;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6), inset 0 0 30px rgba(14, 165, 233, 0.08);
+    }
+
+    .hud-grid-background {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-image:
+        linear-gradient(rgba(14, 165, 233, 0.06) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(14, 165, 233, 0.06) 1px, transparent 1px);
+      background-size: 24px 24px;
+      pointer-events: none;
+    }
+
+    .hud-badge {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      font-family: ui-monospace, monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.04em;
+      padding: 3px 8px;
+      border-radius: 4px;
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      color: #94a3b8;
+      backdrop-filter: blur(4px);
+      z-index: 10;
+      transition: all 0.2s ease;
+    }
+
+    .hud-badge-active {
+      color: #38bdf8;
+      border-color: #0ea5e9;
+      box-shadow: 0 0 8px rgba(14, 165, 233, 0.3);
+    }
+
+    .hud-badge-local {
+      color: #c084fc;
+      border-color: #9333ea;
+      box-shadow: 0 0 8px rgba(147, 51, 234, 0.3);
+    }
+
+    .hud-toggle-btn {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      font-size: 0.72rem;
+      padding: 3px 8px;
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid #334155;
+      color: #cbd5e1;
+      border-radius: 4px;
+      cursor: pointer;
+      z-index: 10;
+      backdrop-filter: blur(4px);
+    }
+    .hud-toggle-btn:hover {
+      background: #1e293b;
+      border-color: #38bdf8;
+      color: #38bdf8;
+    }
+
+    .hud-bottom-overlay {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 10px 14px;
+      background: linear-gradient(to top, rgba(3, 7, 18, 0.95) 0%, rgba(3, 7, 18, 0.7) 70%, transparent 100%);
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      align-items: center;
+    }
+
+    .hud-stage-banner {
+      font-family: ui-monospace, monospace;
+      font-size: 0.98rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      color: #38bdf8;
+      text-shadow: 0 0 10px rgba(56, 189, 248, 0.5);
+      text-transform: uppercase;
+      text-align: center;
+    }
+
+    .hud-feedback {
+      font-size: 0.8rem;
+      color: #94a3b8;
+      text-align: center;
+      max-width: 95%;
+      transition: color 0.2s ease;
+    }
+
+    /* 3-Stage Pipeline Cards */
+    .stage-pipeline {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .stage-card {
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 6px;
+      padding: 0.5rem 0.4rem;
+      text-align: center;
+      transition: all 0.3s ease;
+    }
+
+    .stage-card.active {
+      border-color: #0ea5e9;
+      background: rgba(14, 165, 233, 0.12);
+      box-shadow: 0 0 10px rgba(14, 165, 233, 0.2);
+    }
+
+    .stage-card.complete {
+      border-color: #10b981;
+      background: rgba(16, 185, 129, 0.08);
+    }
+
+    .stage-card-title {
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      color: #94a3b8;
+      margin-bottom: 0.2rem;
+    }
+
+    .stage-card.active .stage-card-title {
+      color: #38bdf8;
+    }
+
+    .stage-card.complete .stage-card-title {
+      color: #34d399;
+    }
+
+    .stage-card-count {
+      font-family: ui-monospace, monospace;
+      font-size: 0.88rem;
+      font-weight: 700;
+      color: #f1f5f9;
+    }
+
+    .stage-bar-track {
+      height: 4px;
+      background: #1e293b;
+      border-radius: 2px;
+      overflow: hidden;
+      margin-top: 0.3rem;
+    }
+
+    .stage-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: #0ea5e9;
+      transition: width 0.3s ease, background 0.3s ease;
+    }
+
+    .stage-card.complete .stage-bar-fill {
+      background: #10b981;
+    }
+
+    /* SVG Keyframe Animations */
+    @keyframes scanlineMove {
+      0% { transform: translateY(0); }
+      50% { transform: translateY(190px); }
+      100% { transform: translateY(0); }
+    }
+
+    @keyframes arrowBlinkRight {
+      0%, 100% { transform: translateX(0); opacity: 0.35; }
+      50% { transform: translateX(10px); opacity: 1; }
+    }
+
+    @keyframes arrowBlinkLeft {
+      0%, 100% { transform: translateX(0); opacity: 0.35; }
+      50% { transform: translateX(-10px); opacity: 1; }
+    }
+
+    #hud-scanline {
+      animation: scanlineMove 3.5s ease-in-out infinite;
+    }
+
+    .hud-arrow-anim-right {
+      animation: arrowBlinkRight 1.2s ease-in-out infinite;
+    }
+
+    .hud-arrow-anim-left {
+      animation: arrowBlinkLeft 1.2s ease-in-out infinite;
+    }
   </style>
 </head>
 <body>
@@ -242,7 +450,130 @@
     </div>
 
     <div id="enrollment-section" style="display:none; margin-top:1rem;">
-      <h2 style="font-size: 1.15rem; margin-bottom: 0.75rem;">Guided Biometric Enrollment</h2>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 0.75rem;">
+        <h2 style="font-size: 1.15rem; margin:0;">Guided Biometric Enrollment</h2>
+        <button id="cancel-enrollment-top-btn" type="button" onclick="handleCancelEnrollment()" style="background:#dc2626; color:#ffffff; font-size:0.8rem; padding:0.3rem 0.7rem; border-radius:4px; border:none; cursor:pointer;">Cancel Enrollment</button>
+      </div>
+
+      <!-- Modern Futuristic Cybernetic HUD Viewport -->
+      <div id="enrollment-viewport" class="hud-viewport">
+        <div class="hud-grid-background"></div>
+        <img id="enrollment-camera-preview" alt="Backend camera preview" style="position: absolute; top:0; left:0; width:100%; height:100%; object-fit: cover; display:none;" />
+        <video id="enrollment-local-video" autoplay playsinline muted style="position: absolute; top:0; left:0; width:100%; height:100%; object-fit: cover; transform: scaleX(-1); display:none;"></video>
+        
+        <div id="hud-camera-badge" class="hud-badge">○ AWAITING SERVER FRAME...</div>
+        <button id="hud-camera-toggle-btn" type="button" onclick="toggleCameraSource()" class="hud-toggle-btn">Using: Server Camera</button>
+
+        <svg id="enrollment-hud-svg" viewBox="0 0 640 480" style="position: absolute; top:0; left:0; width:100%; height:100%; pointer-events: none;">
+          <defs>
+            <filter id="hudGlow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="2.5" result="coloredBlur"/>
+              <feMerge>
+                <feMergeNode in="coloredBlur"/>
+                <feMergeNode in="SourceGraphic"/>
+              </feMerge>
+            </filter>
+          </defs>
+
+          <!-- Cybernetic Corner Brackets -->
+          <path d="M 24 64 L 24 24 L 64 24" stroke="#00f0ff" stroke-width="2.5" fill="none" opacity="0.85" />
+          <path d="M 576 24 L 616 24 L 616 64" stroke="#00f0ff" stroke-width="2.5" fill="none" opacity="0.85" />
+          <path d="M 24 416 L 24 456 L 64 456" stroke="#00f0ff" stroke-width="2.5" fill="none" opacity="0.85" />
+          <path d="M 576 456 L 616 456 L 616 416" stroke="#00f0ff" stroke-width="2.5" fill="none" opacity="0.85" />
+
+          <!-- Dynamic Scanning Beam -->
+          <line id="hud-scanline" x1="32" y1="240" x2="608" y2="240" stroke="#38bdf8" stroke-width="2" opacity="0.45" stroke-dasharray="8 6" />
+
+          <!-- Robotic / Wireframe Face Guide Group -->
+          <g id="hud-face-guide-group" transform="translate(0, 0)" style="transition: transform 0.25s ease-out;">
+            <!-- Outer Target Reticle -->
+            <circle id="hud-target-reticle" cx="320" cy="220" r="145" fill="none" stroke="#0ea5e9" stroke-width="2" stroke-dasharray="8 6" opacity="0.75" />
+            <circle cx="320" cy="220" r="160" fill="none" stroke="#00f0ff" stroke-width="1" stroke-dasharray="2 12" opacity="0.5" />
+            
+            <!-- Wireframe Head Mesh -->
+            <g id="hud-wireframe-mesh" style="transform-origin: 320px 220px; transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);">
+              <!-- Outer Face Oval -->
+              <ellipse id="hud-face-oval" cx="320" cy="220" rx="100" ry="135" fill="none" stroke="#38bdf8" stroke-width="2" opacity="0.8" />
+              
+              <!-- Forehead / Brow sensors -->
+              <path d="M 260 165 Q 320 175 380 165" fill="none" stroke="#38bdf8" stroke-width="1.8" opacity="0.7"/>
+              <path d="M 270 150 L 370 150" fill="none" stroke="#00f0ff" stroke-width="1" stroke-dasharray="4 4" opacity="0.5"/>
+
+              <!-- Eye Target Reticles -->
+              <g id="hud-eyes">
+                <circle id="hud-left-eye" cx="280" cy="195" r="15" fill="none" stroke="#00f0ff" stroke-width="1.8" opacity="0.9"/>
+                <circle cx="280" cy="195" r="3.5" fill="#00f0ff"/>
+                <line x1="260" y1="195" x2="270" y2="195" stroke="#00f0ff" stroke-width="1.5"/>
+                <line x1="290" y1="195" x2="300" y2="195" stroke="#00f0ff" stroke-width="1.5"/>
+
+                <circle id="hud-right-eye" cx="360" cy="195" r="15" fill="none" stroke="#00f0ff" stroke-width="1.8" opacity="0.9"/>
+                <circle cx="360" cy="195" r="3.5" fill="#00f0ff"/>
+                <line x1="340" y1="195" x2="350" y2="195" stroke="#00f0ff" stroke-width="1.5"/>
+                <line x1="370" y1="195" x2="380" y2="195" stroke="#00f0ff" stroke-width="1.5"/>
+              </g>
+
+              <!-- Nose Bridge & Tip -->
+              <path id="hud-nose" d="M 320 180 L 320 235 L 328 242 L 312 242" fill="none" stroke="#38bdf8" stroke-width="2" opacity="0.85"/>
+
+              <!-- Cheekbone Geometric Contours -->
+              <path d="M 240 220 L 275 255 L 305 285" fill="none" stroke="#0284c7" stroke-width="1.5" stroke-dasharray="3 3" opacity="0.65"/>
+              <path d="M 400 220 L 365 255 L 335 285" fill="none" stroke="#0284c7" stroke-width="1.5" stroke-dasharray="3 3" opacity="0.65"/>
+
+              <!-- Mouth & Chin Reticle -->
+              <path id="hud-mouth" d="M 285 280 Q 320 292 355 280" fill="none" stroke="#38bdf8" stroke-width="2" opacity="0.8"/>
+              <path id="hud-chin" d="M 298 332 L 342 332" stroke="#00f0ff" stroke-width="2.5" opacity="0.9"/>
+            </g>
+
+            <!-- Center FRONT Alignment Reticle -->
+            <g id="hud-front-indicator" style="display:inline;">
+              <path d="M 310 220 L 330 220 M 320 210 L 320 230" stroke="#00f0ff" stroke-width="2" opacity="0.9" filter="url(#hudGlow)"/>
+              <circle cx="320" cy="220" r="8" fill="none" stroke="#00f0ff" stroke-width="1.5" opacity="0.8" />
+            </g>
+
+            <!-- RIGHT Head Turn Directional Guidance Chevrons (>>>) -->
+            <g id="hud-arrow-right" class="hud-arrow-anim-right" style="display:none;">
+              <path d="M 430 200 L 455 220 L 430 240" fill="none" stroke="#38bdf8" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" filter="url(#hudGlow)"/>
+              <path d="M 455 200 L 480 220 L 455 240" fill="none" stroke="#00f0ff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" filter="url(#hudGlow)"/>
+              <path d="M 480 200 L 505 220 L 480 240" fill="none" stroke="#38bdf8" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" filter="url(#hudGlow)"/>
+              <text x="470" y="270" text-anchor="middle" fill="#00f0ff" font-family="ui-monospace, monospace" font-size="14" font-weight="700" letter-spacing="1">TURN RIGHT &gt;&gt;&gt;</text>
+            </g>
+
+            <!-- LEFT Head Turn Directional Guidance Chevrons (<<<) -->
+            <g id="hud-arrow-left" class="hud-arrow-anim-left" style="display:none;">
+              <path d="M 210 200 L 185 220 L 210 240" fill="none" stroke="#38bdf8" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" filter="url(#hudGlow)"/>
+              <path d="M 185 200 L 160 220 L 185 240" fill="none" stroke="#00f0ff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" filter="url(#hudGlow)"/>
+              <path d="M 160 200 L 135 220 L 160 240" fill="none" stroke="#38bdf8" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" filter="url(#hudGlow)"/>
+              <text x="170" y="270" text-anchor="middle" fill="#00f0ff" font-family="ui-monospace, monospace" font-size="14" font-weight="700" letter-spacing="1">&lt;&lt;&lt; TURN LEFT</text>
+            </g>
+          </g>
+        </svg>
+
+        <div id="hud-bottom-overlay" class="hud-bottom-overlay">
+          <div id="hud-stage-instruction" class="hud-stage-banner">STAGE 1/3: LOOK FRONT (0/10)</div>
+          <div id="hud-feedback-text" class="hud-feedback">Initializing camera feed...</div>
+        </div>
+      </div>
+
+      <!-- 3-Stage Pipeline Cards -->
+      <div class="stage-pipeline">
+        <div id="stage-card-front" class="stage-card active">
+          <div class="stage-card-title">STAGE 1: FRONT</div>
+          <div id="stage-count-front" class="stage-card-count">0 / 10</div>
+          <div class="stage-bar-track"><div id="stage-bar-front" class="stage-bar-fill"></div></div>
+        </div>
+        <div id="stage-card-right" class="stage-card">
+          <div class="stage-card-title">STAGE 2: RIGHT</div>
+          <div id="stage-count-right" class="stage-card-count">0 / 10</div>
+          <div class="stage-bar-track"><div id="stage-bar-right" class="stage-bar-fill"></div></div>
+        </div>
+        <div id="stage-card-left" class="stage-card">
+          <div class="stage-card-title">STAGE 3: LEFT</div>
+          <div id="stage-count-left" class="stage-card-count">0 / 10</div>
+          <div class="stage-bar-track"><div id="stage-bar-left" class="stage-bar-fill"></div></div>
+        </div>
+      </div>
+
+      <!-- Preserved Status Panel for Compatibility & Accessibility -->
       <div class="status-panel" id="enrollment-progress">
         <div class="field-row">
           <span class="field-label">Instruction:</span>
@@ -264,6 +595,10 @@
           <span class="field-label">Sample Status:</span>
           <span id="enrollment-feedback" class="field-val" style="color:#4b5563;">Waiting for camera frame...</span>
         </div>
+      </div>
+
+      <div style="margin-top: 0.75rem;">
+        <button id="cancel-enrollment-btn" type="button" onclick="handleCancelEnrollment()" style="width:100%; background:#4b5563; font-size:0.85rem; padding:0.4rem 0.8rem; border-radius:4px; border:none; color:white; cursor:pointer;">Cancel Enrollment</button>
       </div>
     </div>
 
@@ -364,6 +699,10 @@
     let registeredPersonsCount = null;
     let enrolledIdentitiesCount = null;
     let isNewRegistration = false;
+    let cameraSourceMode = "backend";
+    let currentPreviewBlobUrl = null;
+    let isPreviewFetching = false;
+    let localMediaStream = null;
 
     const DIRECTION_INSTRUCTIONS = {
       FRONT: "Look FRONT",
@@ -654,14 +993,174 @@
       return `Sample not accepted: ${reason}`;
     }
 
+    function stopEnrollmentCamera() {
+      if (currentPreviewBlobUrl) {
+        URL.revokeObjectURL(currentPreviewBlobUrl);
+        currentPreviewBlobUrl = null;
+      }
+      if (localMediaStream) {
+        try {
+          localMediaStream.getTracks().forEach(track => track.stop());
+        } catch (_) {}
+        localMediaStream = null;
+      }
+      const imgEl = document.getElementById("enrollment-camera-preview");
+      if (imgEl) {
+        imgEl.src = "";
+        imgEl.style.display = "none";
+      }
+      const videoEl = document.getElementById("enrollment-local-video");
+      if (videoEl) {
+        videoEl.srcObject = null;
+        videoEl.style.display = "none";
+      }
+      cameraSourceMode = "backend";
+      const toggleBtn = document.getElementById("hud-camera-toggle-btn");
+      if (toggleBtn) toggleBtn.textContent = "Using: Server Camera";
+      const badgeEl = document.getElementById("hud-camera-badge");
+      if (badgeEl) {
+        badgeEl.textContent = "○ AWAITING SERVER FRAME...";
+        badgeEl.className = "hud-badge";
+      }
+    }
+
+    async function toggleCameraSource() {
+      const toggleBtn = document.getElementById("hud-camera-toggle-btn");
+      const imgEl = document.getElementById("enrollment-camera-preview");
+      const videoEl = document.getElementById("enrollment-local-video");
+      const badgeEl = document.getElementById("hud-camera-badge");
+
+      if (cameraSourceMode === "backend") {
+        try {
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            showNotice("Browser getUserMedia is not supported in this environment.", "error");
+            return;
+          }
+          const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+          localMediaStream = stream;
+          if (videoEl) {
+            videoEl.srcObject = stream;
+            videoEl.style.display = "block";
+          }
+          if (imgEl) imgEl.style.display = "none";
+          cameraSourceMode = "local";
+          if (toggleBtn) toggleBtn.textContent = "Using: Browser Camera";
+          if (badgeEl) {
+            badgeEl.textContent = "● LOCAL BROWSER MIRROR (Client-Side Only)";
+            badgeEl.className = "hud-badge hud-badge-local";
+          }
+          showNotice("Displaying local browser camera mirror. Note: Backend processes the server capture source.", "info");
+        } catch (err) {
+          showNotice(`Could not access local browser camera: ${err.message}`, "error");
+        }
+      } else {
+        if (localMediaStream) {
+          try {
+            localMediaStream.getTracks().forEach(track => track.stop());
+          } catch (_) {}
+          localMediaStream = null;
+        }
+        if (videoEl) {
+          videoEl.srcObject = null;
+          videoEl.style.display = "none";
+        }
+        cameraSourceMode = "backend";
+        if (toggleBtn) toggleBtn.textContent = "Using: Server Camera";
+        if (badgeEl) {
+          badgeEl.textContent = "● SERVER CAMERA (LIVE)";
+          badgeEl.className = "hud-badge hud-badge-active";
+        }
+      }
+    }
+
+    async function fetchEnrollmentPreview(token, personId) {
+      if (cameraSourceMode !== "backend" || isPreviewFetching) return;
+      isPreviewFetching = true;
+      try {
+        const resp = await fetch(`/persons/${personId}/enrollment/sessions/preview`, {
+          headers: { "Authorization": "Bearer " + token }
+        });
+        if (resp.status === 200) {
+          const blob = await resp.blob();
+          const imgEl = document.getElementById("enrollment-camera-preview");
+          const videoEl = document.getElementById("enrollment-local-video");
+          const badgeEl = document.getElementById("hud-camera-badge");
+          if (imgEl && cameraSourceMode === "backend") {
+            if (currentPreviewBlobUrl) {
+              URL.revokeObjectURL(currentPreviewBlobUrl);
+            }
+            currentPreviewBlobUrl = URL.createObjectURL(blob);
+            imgEl.src = currentPreviewBlobUrl;
+            imgEl.style.display = "block";
+          }
+          if (videoEl && cameraSourceMode === "backend") videoEl.style.display = "none";
+          if (badgeEl && cameraSourceMode === "backend") {
+            badgeEl.textContent = "● SERVER CAMERA (LIVE)";
+            badgeEl.className = "hud-badge hud-badge-active";
+          }
+        } else {
+          const badgeEl = document.getElementById("hud-camera-badge");
+          if (badgeEl && cameraSourceMode === "backend") {
+            badgeEl.textContent = "○ AWAITING SERVER FRAME...";
+            badgeEl.className = "hud-badge";
+          }
+        }
+      } catch (_) {
+      } finally {
+        isPreviewFetching = false;
+      }
+    }
+
+    async function handleCancelEnrollment() {
+      const token = (document.getElementById("token-input")?.value || "").trim();
+      const cancelBtn = document.getElementById("cancel-enrollment-btn");
+      const cancelTopBtn = document.getElementById("cancel-enrollment-top-btn");
+      if (cancelBtn) cancelBtn.disabled = true;
+      if (cancelTopBtn) cancelTopBtn.disabled = true;
+
+      stopEnrollmentCamera();
+      if (enrollmentIntervalId) {
+        clearInterval(enrollmentIntervalId);
+        enrollmentIntervalId = null;
+      }
+      showNotice("Cancelling enrollment session...", "info");
+      await cancelActiveEnrollmentSession(token);
+      const targetId = currentPersonId;
+      if (isNewRegistration && targetId) {
+        appendLog(`rolling back incomplete person profile: ${targetId}`);
+        await fetch(`/persons/${targetId}`, { method: "DELETE", headers: { "Authorization": "Bearer " + token } }).catch(() => {});
+        currentPersonId = null;
+      }
+      isNewRegistration = false;
+      const enrollSec = document.getElementById("enrollment-section");
+      if (enrollSec) enrollSec.style.display = "none";
+      const authSec = document.getElementById("auth-action-section");
+      if (authSec) authSec.style.display = "block";
+
+      const regBtn = document.getElementById("register-btn");
+      if (regBtn) regBtn.disabled = false;
+      const showRegBtn = document.getElementById("show-register-btn");
+      if (showRegBtn) {
+        showRegBtn.disabled = false;
+        showRegBtn.style.display = "inline-block";
+      }
+      if (cancelBtn) cancelBtn.disabled = false;
+      if (cancelTopBtn) cancelTopBtn.disabled = false;
+      await loadRegisteredPersons();
+      showNotice("Enrollment session cancelled.", "info");
+    }
+
     function updateEnrollmentProgressUI(data) {
+      if (!data) return;
       const dir = (data.current_direction || "FRONT").toUpperCase();
       const stageIdx = dir === "FRONT" ? "1/3" : (dir === "RIGHT" ? "2/3" : (dir === "LEFT" ? "3/3" : ""));
       const stagePrompt = dir === "FRONT" ? "Look FRONT" : (dir === "RIGHT" ? "Turn head slightly RIGHT" : (dir === "LEFT" ? "Turn head slightly LEFT" : `Look ${dir}`));
       const instr = stageIdx ? `Stage ${stageIdx}: ${stagePrompt}` : (DIRECTION_INSTRUCTIONS[dir] || `Look ${dir}`);
 
-      document.getElementById("current-direction").textContent = dir;
-      document.getElementById("current-instruction").textContent = instr;
+      const curDirEl = document.getElementById("current-direction");
+      if (curDirEl) curDirEl.textContent = dir;
+      const curInstrEl = document.getElementById("current-instruction");
+      if (curInstrEl) curInstrEl.textContent = instr;
 
       const counts = data.direction_counts || {};
       const targets = data.direction_targets || {};
@@ -672,29 +1171,140 @@
         if (obj[key.toUpperCase()] !== undefined) return obj[key.toUpperCase()];
         return undefined;
       };
-      const parts = ["FRONT", "RIGHT", "LEFT"].map(d => {
-        const c = getVal(counts, d) ?? 0;
-        const t = getVal(targets, d) ?? 10;
-        return `${d} ${c}/${t}`;
-      });
-      document.getElementById("direction-progress").textContent = parts.join(" | ");
+
+      const frontC = getVal(counts, "FRONT") ?? 0;
+      const frontT = getVal(targets, "FRONT") ?? 10;
+      const rightC = getVal(counts, "RIGHT") ?? 0;
+      const rightT = getVal(targets, "RIGHT") ?? 10;
+      const leftC = getVal(counts, "LEFT") ?? 0;
+      const leftT = getVal(targets, "LEFT") ?? 10;
+
+      const parts = [
+        `FRONT ${frontC}/${frontT}`,
+        `RIGHT ${rightC}/${rightT}`,
+        `LEFT ${leftC}/${leftT}`
+      ];
+      const dirProgEl = document.getElementById("direction-progress");
+      if (dirProgEl) dirProgEl.textContent = parts.join(" | ");
 
       const total = data.samples_collected !== undefined ? data.samples_collected : (data.total_samples !== undefined ? data.total_samples : 0);
       const target = data.target_samples !== undefined ? data.target_samples : 30;
-      document.getElementById("total-progress").textContent = `${total}/${target}`;
+      const totalProgEl = document.getElementById("total-progress");
+      if (totalProgEl) totalProgEl.textContent = `${total}/${target}`;
 
-      const feedbackEl = document.getElementById("enrollment-feedback");
-      if (feedbackEl) {
-        if (data.last_rejection_reason) {
-          const msg = formatRejectionFeedback(data.last_rejection_reason, data.last_rejection_details, dir);
-          feedbackEl.textContent = `[Stage: ${dir}] ${msg}`;
-          feedbackEl.style.color = "#dc2626";
-        } else if (total > 0) {
-          feedbackEl.textContent = `[Stage: ${dir}] Sample accepted (${total}/${target})`;
-          feedbackEl.style.color = "#15803d";
+      // Update HUD stage instruction banner
+      const hudStageEl = document.getElementById("hud-stage-instruction");
+      if (hudStageEl) {
+        if (dir === "FRONT") {
+          hudStageEl.textContent = `STAGE 1/3: LOOK FRONT (${frontC}/${frontT})`;
+        } else if (dir === "RIGHT") {
+          hudStageEl.textContent = `STAGE 2/3: TURN HEAD TO YOUR RIGHT >>> (${rightC}/${rightT})`;
+        } else if (dir === "LEFT") {
+          hudStageEl.textContent = `STAGE 3/3: <<< TURN HEAD TO YOUR LEFT (${leftC}/${leftT})`;
         } else {
-          feedbackEl.textContent = `[Stage: ${dir}] Waiting for valid sample...`;
-          feedbackEl.style.color = "#4b5563";
+          hudStageEl.textContent = `${instr} (${total}/${target})`;
+        }
+      }
+
+      // Update feedback in status panel and HUD overlay
+      const feedbackEl = document.getElementById("enrollment-feedback");
+      const hudFeedbackEl = document.getElementById("hud-feedback-text");
+      let feedbackText = "";
+      let feedbackColor = "#94a3b8";
+
+      if (data.last_rejection_reason) {
+        const msg = formatRejectionFeedback(data.last_rejection_reason, data.last_rejection_details, dir);
+        feedbackText = `[Stage: ${dir}] ${msg}`;
+        feedbackColor = "#dc2626";
+      } else if (total > 0) {
+        feedbackText = `[Stage: ${dir}] Sample accepted (${total}/${target})`;
+        feedbackColor = "#15803d";
+      } else {
+        feedbackText = `[Stage: ${dir}] Waiting for valid sample...`;
+        feedbackColor = "#4b5563";
+      }
+
+      if (feedbackEl) {
+        feedbackEl.textContent = feedbackText;
+        feedbackEl.style.color = feedbackColor;
+      }
+      if (hudFeedbackEl) {
+        hudFeedbackEl.textContent = feedbackText;
+        hudFeedbackEl.style.color = feedbackColor === "#15803d" ? "#34d399" : (feedbackColor === "#dc2626" ? "#f87171" : "#94a3b8");
+      }
+
+      // Update 3-stage visual cards
+      const frontCard = document.getElementById("stage-card-front");
+      const rightCard = document.getElementById("stage-card-right");
+      const leftCard = document.getElementById("stage-card-left");
+
+      const frontCountEl = document.getElementById("stage-count-front");
+      const rightCountEl = document.getElementById("stage-count-right");
+      const leftCountEl = document.getElementById("stage-count-left");
+
+      const frontBar = document.getElementById("stage-bar-front");
+      const rightBar = document.getElementById("stage-bar-right");
+      const leftBar = document.getElementById("stage-bar-left");
+
+      if (frontCountEl) frontCountEl.textContent = `${frontC} / ${frontT}`;
+      if (rightCountEl) rightCountEl.textContent = `${rightC} / ${rightT}`;
+      if (leftCountEl) leftCountEl.textContent = `${leftC} / ${leftT}`;
+
+      if (frontBar) frontBar.style.width = `${Math.min(100, (frontC / frontT) * 100)}%`;
+      if (rightBar) rightBar.style.width = `${Math.min(100, (rightC / rightT) * 100)}%`;
+      if (leftBar) leftBar.style.width = `${Math.min(100, (leftC / leftT) * 100)}%`;
+
+      if (frontCard) {
+        frontCard.className = frontC >= frontT ? "stage-card complete" : (dir === "FRONT" ? "stage-card active" : "stage-card");
+      }
+      if (rightCard) {
+        rightCard.className = rightC >= rightT ? "stage-card complete" : (dir === "RIGHT" ? "stage-card active" : "stage-card");
+      }
+      if (leftCard) {
+        leftCard.className = leftC >= leftT ? "stage-card complete" : (dir === "LEFT" ? "stage-card active" : "stage-card");
+      }
+
+      // Wireframe overlay orientation and directional arrows
+      const rightArrow = document.getElementById("hud-arrow-right");
+      const leftArrow = document.getElementById("hud-arrow-left");
+      const frontInd = document.getElementById("hud-front-indicator");
+      const wireframeMesh = document.getElementById("hud-wireframe-mesh");
+
+      if (rightArrow) rightArrow.style.display = dir === "RIGHT" ? "inline" : "none";
+      if (leftArrow) leftArrow.style.display = dir === "LEFT" ? "inline" : "none";
+      if (frontInd) frontInd.style.display = dir === "FRONT" ? "inline" : "none";
+
+      if (wireframeMesh) {
+        if (dir === "RIGHT") {
+          wireframeMesh.style.transform = "rotate(6deg) skewY(3deg) scaleX(0.92)";
+        } else if (dir === "LEFT") {
+          wireframeMesh.style.transform = "rotate(-6deg) skewY(-3deg) scaleX(0.92)";
+        } else {
+          wireframeMesh.style.transform = "none";
+        }
+      }
+
+      // Face tracking reticle translation
+      const guideGroup = document.getElementById("hud-face-guide-group");
+      const targetReticle = document.getElementById("hud-target-reticle");
+      if (data.face_detected && data.face_bbox && Array.isArray(data.face_bbox) && data.face_bbox.length >= 4) {
+        const [bx, by, bw, bh] = data.face_bbox;
+        const cx = bx + bw / 2;
+        const cy = by + bh / 2;
+        const clampedX = Math.max(160, Math.min(480, cx));
+        const clampedY = Math.max(150, Math.min(330, cy));
+        if (guideGroup && typeof guideGroup.setAttribute === "function") {
+          guideGroup.setAttribute("transform", `translate(${clampedX - 320}, ${clampedY - 220})`);
+        }
+        if (targetReticle && typeof targetReticle.setAttribute === "function") {
+          targetReticle.setAttribute("stroke", "#38bdf8");
+        }
+      } else {
+        if (guideGroup && typeof guideGroup.setAttribute === "function") {
+          guideGroup.setAttribute("transform", "translate(0, 0)");
+        }
+        if (targetReticle && typeof targetReticle.setAttribute === "function") {
+          targetReticle.setAttribute("stroke", data.face_detected ? "#38bdf8" : "#f59e0b");
         }
       }
     }
@@ -720,6 +1330,7 @@
           if (resp.status === 200) {
             const data = await resp.json();
             updateEnrollmentProgressUI(data);
+            fetchEnrollmentPreview(token, personId);
 
             const dir = (data.current_direction || "FRONT").toUpperCase();
             const acceptedDir = (data.last_accepted_direction || dir).toUpperCase();
@@ -739,6 +1350,7 @@
             if (isFailed) {
               clearInterval(enrollmentIntervalId);
               enrollmentIntervalId = null;
+              stopEnrollmentCamera();
               const reason = data.last_rejection_details || data.last_rejection_reason || "Enrollment failed or timed out.";
               showNotice(`Enrollment ended (${data.state}): ${reason}`, "error");
               appendLog(`enrollment session ${data.state}: ${reason}`);
@@ -776,6 +1388,7 @@
             if (resp.status === 404 || resp.status === 409 || resp.status === 400) {
               clearInterval(enrollmentIntervalId);
               enrollmentIntervalId = null;
+              stopEnrollmentCamera();
               showNotice(`Enrollment interrupted: ${msg}`, "error");
               const targetId = currentPersonId || personId;
               if (isNewRegistration && targetId) {
@@ -815,6 +1428,7 @@
         });
 
         if (resp.status === 200) {
+          stopEnrollmentCamera();
           const data = await resp.json();
           const persistedCount = data.samples_enrolled !== undefined ? data.samples_enrolled : (data.samples_persisted || 30);
           appendLog(`enrollment committed: ${persistedCount} embeddings saved`);
