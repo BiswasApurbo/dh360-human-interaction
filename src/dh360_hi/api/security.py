@@ -25,6 +25,7 @@ class OperatorScope(StrEnum):
     ENROLLMENT_MANAGE = "enrollment:manage"
     INTERACTION_READ = "interaction:read"
     AUTHORIZATION_MANAGE = "authorization:manage"
+    DIALOGUE_INTERACT = "dialogue:interact"
 
 
 @dataclass(frozen=True)

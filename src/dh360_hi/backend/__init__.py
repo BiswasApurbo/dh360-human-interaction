@@ -13,6 +13,7 @@ from dh360_hi.backend.exceptions import (
     ValidationError,
 )
 from dh360_hi.backend.gallery_loader import load_gallery_from_repository
+from dh360_hi.backend.knowledge_service import KnowledgeService, PublicFact
 from dh360_hi.backend.models import (
     ConsentStatus,
     EmbeddingMetadata,
@@ -52,12 +53,14 @@ __all__ = [
     "EmbeddingRecord",
     "ForeignKeyViolationError",
     "IncompatibleModelError",
+    "KnowledgeService",
     "PersonEngagementStats",
     "PersonNotFoundError",
     "PersonProfile",
     "PersonRecord",
     "PersonService",
     "PersonStatus",
+    "PublicFact",
     "SQLitePersonRepository",
     "SQLiteSessionRepository",
     "SchemaVersionError",

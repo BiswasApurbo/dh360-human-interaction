@@ -6,6 +6,7 @@ from dh360_hi.application.config import (
     get_preset,
 )
 from dh360_hi.application.coordinator import InteractionCoordinator
+from dh360_hi.application.dialogue_coordinator import DialogueCoordinator
 from dh360_hi.application.factory import create_interaction_service
 from dh360_hi.application.health import (
     ServiceHealthSnapshot,
@@ -23,6 +24,7 @@ from dh360_hi.backend.models import (
 
 __all__ = [
     "ConfigurationPreset",
+    "DialogueCoordinator",
     "HumanInteractionConfig",
     "HumanInteractionService",
     "InteractionCoordinator",

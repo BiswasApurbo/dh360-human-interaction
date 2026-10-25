@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from dh360_hi.api.event_hub import InteractionEventHub
 from dh360_hi.api.routers.authorization import router as authorization_router
 from dh360_hi.api.routers.demo import router as demo_router
+from dh360_hi.api.routers.dialogue import router as dialogue_router
 from dh360_hi.api.routers.enrollment import router as enrollment_router
 from dh360_hi.api.routers.events import router as events_router
 from dh360_hi.api.routers.health import router as health_router
@@ -29,6 +30,7 @@ from dh360_hi.contracts.integration import AuthorizationUpdatedIntegrationEvent
 from dh360_hi.edge.authorization_controller import AuthorizationController
 
 if TYPE_CHECKING:
+    from dh360_hi.application.dialogue_coordinator import DialogueCoordinator
     from dh360_hi.application.service import HumanInteractionService
 
 
@@ -92,18 +94,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         # Deterministic shutdown ordering:
-        # 1. Close AuthorizationController so it ceases processing frame results
+        # 1. Close DialogueCoordinator if present
+        dialogue_coord: DialogueCoordinator | None = getattr(
+            app.state, "dialogue_coordinator", None
+        )
+        if dialogue_coord is not None:
+            with suppress(Exception):
+                dialogue_coord.close()
+
+        # 2. Close AuthorizationController so it ceases processing frame results
         ctrl: AuthorizationController | None = getattr(app.state, "authorization_controller", None)
         if ctrl is not None:
             with suppress(Exception):
                 ctrl.close()
 
-        # 2. Detach InteractionEventHub listeners
+        # 3. Detach InteractionEventHub listeners
         event_hub: InteractionEventHub | None = getattr(app.state, "event_hub", None)
         if event_hub is not None:
             event_hub.detach()
 
-        # 3. Stop application service and runtime workers
+        # 4. Stop application service and runtime workers
         svc: HumanInteractionService | None = getattr(app.state, "service", None)
         if svc is not None:
             svc.authorization_controller = None
@@ -114,6 +124,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app(
     service: HumanInteractionService | None = None,
     authorization_controller: AuthorizationController | None = None,
+    dialogue_coordinator: DialogueCoordinator | None = None,
 ) -> FastAPI:
     """Construct the FastAPI application with service and controller wired in."""
     app = FastAPI(title="dh360-human-interaction API", lifespan=lifespan)
@@ -123,6 +134,7 @@ def create_app(
         service = create_interaction_service(config=cfg, enable_perception=False)
     app.state.service = service
     app.state.operator_auth = cfg.api
+    app.state.dialogue_coordinator = dialogue_coordinator
 
     hub = InteractionEventHub()
     hub.attach(service)
@@ -169,6 +181,18 @@ def create_app(
             status = 409
         elif exc.__class__.__name__ in {"EnrollmentAppError"}:
             status = 422
+        elif exc.__class__.__name__ in {"ProviderTimeoutError"}:
+            status = 504
+        elif exc.__class__.__name__ in {
+            "ProviderNetworkError",
+            "LLMProviderError",
+            "STTProviderError",
+            "TTSProviderError",
+            "ProviderError",
+        }:
+            status = 502
+        elif exc.__class__.__name__ in {"HardwareUnavailableError"}:
+            status = 503
         return JSONResponse(status_code=status, content=exc.to_dict())
 
     @app.exception_handler(RequestValidationError)
@@ -211,4 +235,5 @@ def create_app(
     app.include_router(events_router)
     app.include_router(authorization_router)
     app.include_router(demo_router)
+    app.include_router(dialogue_router)
     return app
