@@ -1,6 +1,6 @@
 {
   "projects": {
-    "default": "kbcon-dashboard",
+    "default": "kbcon-dashboard-4b009",
     "my-kbcon": "kbcon-dashboard-4b009"
   },
   "targets": {},
