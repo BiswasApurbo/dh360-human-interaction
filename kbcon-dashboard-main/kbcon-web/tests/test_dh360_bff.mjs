@@ -536,6 +536,42 @@ async function runTests() {
     resetConfigCacheForTesting();
   });
 
+  await test("4.8 Missing operator token maps to HTTP 503 CONFIGURATION_ERROR", async () => {
+    process.env.DH360_OPERATOR_TOKEN = "";
+    resetConfigCacheForTesting();
+
+    const req = new Request("http://localhost:3000/api/dh360/health", {
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    const res = await handleDh360ProxyRequest(req, ["health"]);
+    assert.strictEqual(res.status, 503);
+    const body = await res.json();
+    assert.strictEqual(body.error, "CONFIGURATION_ERROR");
+    assert.strictEqual(body.message.includes("DH360_OPERATOR_TOKEN"), true);
+
+    process.env.DH360_OPERATOR_TOKEN = TEST_OPERATOR_TOKEN;
+    resetConfigCacheForTesting();
+  });
+
+  await test("4.9 Vercel deployment with localhost DH360_API_URL maps to HTTP 503 CONFIGURATION_ERROR", async () => {
+    process.env.VERCEL = "1";
+    process.env.DH360_API_URL = "http://127.0.0.1:8000";
+    resetConfigCacheForTesting();
+
+    const req = new Request("http://localhost:3000/api/dh360/health", {
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    const res = await handleDh360ProxyRequest(req, ["health"]);
+    assert.strictEqual(res.status, 503);
+    const body = await res.json();
+    assert.strictEqual(body.error, "CONFIGURATION_ERROR");
+    assert.strictEqual(body.message.includes("localhost/127.0.0.1"), true);
+
+    delete process.env.VERCEL;
+    process.env.DH360_API_URL = `http://127.0.0.1:${mockPort}`;
+    resetConfigCacheForTesting();
+  });
+
   // ---------------------------------------------------------------------------
   // 5. Streaming and Binary Verification
   // ---------------------------------------------------------------------------

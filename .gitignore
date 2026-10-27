@@ -263,3 +263,4 @@ logs/
 models/weights/
 models/cache/
 models/downloads/
+.vercel

@@ -10,7 +10,7 @@
  */
 
 import { authenticateFirebaseToken } from "./auth.ts";
-import { getDh360Config } from "./config.ts";
+import { ConfigurationError, getDh360Config } from "./config.ts";
 import { checkPermission } from "./permissions.ts";
 
 const MAX_BODY_BYTES = 1024 * 1024; // 1MB limit for JSON bodies
@@ -107,7 +107,22 @@ export async function handleDh360ProxyRequest(
   }
 
   // 5. Construct upstream destination URL safely
-  const config = getDh360Config();
+  let config: ReturnType<typeof getDh360Config>;
+  try {
+    config = getDh360Config();
+  } catch (err: unknown) {
+    return Response.json(
+      {
+        error: "CONFIGURATION_ERROR",
+        message:
+          err instanceof ConfigurationError || err instanceof Error
+            ? err.message
+            : "Invalid DH360 BFF configuration.",
+      },
+      { status: 503 }
+    );
+  }
+
   const incomingUrl = new URL(request.url);
   const upstreamUrl = new URL(subpath, config.apiUrl);
   upstreamUrl.search = incomingUrl.search; // Preserve query parameters safely
