@@ -12,6 +12,19 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
+// Validate presence of critical client environment variables without exposing secret values
+if (typeof window !== "undefined") {
+  const missingKeys: string[] = [];
+  if (!firebaseConfig.apiKey) missingKeys.push("NEXT_PUBLIC_FIREBASE_API_KEY");
+  if (!firebaseConfig.projectId) missingKeys.push("NEXT_PUBLIC_FIREBASE_PROJECT_ID");
+  if (!firebaseConfig.authDomain) missingKeys.push("NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN");
+  if (missingKeys.length > 0) {
+    console.warn(
+      `[Firebase] Missing required client configuration variables: ${missingKeys.join(", ")}. Please verify your environment setup.`
+    );
+  }
+}
+
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);

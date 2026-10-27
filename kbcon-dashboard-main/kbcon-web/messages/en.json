@@ -59,7 +59,14 @@
     "submitting": "Signing in...",
     "invalidEmail": "Enter a valid email",
     "shortPassword": "Password must be at least 6 characters",
-    "failed": "Wrong email or password"
+    "failed": "Wrong email or password",
+    "userNotFound": "No account found with this email.",
+    "userDisabled": "This account has been disabled. Please contact an administrator.",
+    "tooManyRequests": "Too many failed attempts. Please try again later.",
+    "networkError": "Network connection error. Please check your internet connection.",
+    "invalidApiKey": "Invalid Firebase API key configuration. Please verify your environment setup.",
+    "operationNotAllowed": "Email/password authentication is not enabled for this project.",
+    "genericAuthError": "Authentication failed. Please verify your credentials and try again."
   },
   "ForgotPassword": {
     "title": "Reset your password",

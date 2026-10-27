@@ -36,10 +36,19 @@ export function ForgotPasswordForm() {
       await sendPasswordResetEmail(auth, values.email);
       setSent(true);
     } catch (err) {
-      const code = (err as { code?: string }).code;
-      // ইমেইল আছে কি নেই তা ফাঁস না করতে user-not-found হলেও সফল দেখানো হয়
+      const code = (err as { code?: string })?.code;
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[ForgotPassword] Firebase reset error code:", code);
+      }
+      // Do not leak email existence: user-not-found still displays success
       if (code === "auth/user-not-found") {
         setSent(true);
+      } else if (code === "auth/invalid-api-key") {
+        setError(tl("invalidApiKey"));
+      } else if (code === "auth/network-request-failed") {
+        setError(tl("networkError"));
+      } else if (code === "auth/too-many-requests") {
+        setError(tl("tooManyRequests"));
       } else {
         setError(t("failed"));
       }

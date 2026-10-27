@@ -17,6 +17,11 @@ export interface AuthPrincipal {
   role: "superAdmin" | "admin";
 }
 
+export type AuthResult =
+  | { success: true; principal: AuthPrincipal }
+  | { success: false; status: 401; code: "UNAUTHENTICATED"; message: string }
+  | { success: false; status: 403; code: "FORBIDDEN"; message: string };
+
 interface DecodedTokenHeader {
   alg?: string;
   kid?: string;
@@ -91,16 +96,14 @@ function parseBase64UrlJson<T>(base64Url: string): T | null {
 
 /**
  * Check if the current execution environment is permitted to use the Auth Emulator.
- * Guard: Emulator mode is STRICTLY prohibited in production environments.
+ * Guard: Emulator mode is STRICTLY prohibited in production environments, and is
+ * only active when NEXT_PUBLIC_USE_EMULATOR is explicitly set to 'true'.
  */
 function isEmulatorAllowed(): boolean {
   if (process.env.NODE_ENV === "production") {
     return false;
   }
-  return Boolean(
-    process.env.FIREBASE_AUTH_EMULATOR_HOST ||
-      process.env.NEXT_PUBLIC_USE_EMULATOR === "true"
-  );
+  return process.env.NEXT_PUBLIC_USE_EMULATOR === "true";
 }
 
 /**
@@ -110,49 +113,80 @@ function getExpectedProjectId(): string {
   return (
     process.env.FIREBASE_PROJECT_ID ||
     process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
-    "kbcon-dashboard"
+    "kbcon-dashboard-4b009"
   );
 }
 
 /**
- * Validates a Firebase ID Token and returns the authenticated principal.
+ * Validates a Firebase ID Token and returns the authenticated principal or structured failure.
  *
  * Fails closed on any signature mismatch, malformed payload, disabled user,
  * expiration, or unexpected issuer/audience.
+ * Distinguishes unauthenticated (401) from insufficient role / forbidden (403).
  */
 export async function authenticateFirebaseToken(
   authHeader: string | null | undefined
-): Promise<AuthPrincipal | null> {
+): Promise<AuthResult> {
   if (!authHeader || typeof authHeader !== "string") {
-    return null;
+    return {
+      success: false,
+      status: 401,
+      code: "UNAUTHENTICATED",
+      message: "Valid Firebase Bearer token is required.",
+    };
   }
 
   const parts = authHeader.trim().split(" ");
   if (parts.length !== 2 || parts[0].toLowerCase() !== "bearer") {
-    return null;
+    return {
+      success: false,
+      status: 401,
+      code: "UNAUTHENTICATED",
+      message: "Authorization header must be Bearer token.",
+    };
   }
 
   const token = parts[1].trim();
   if (!token) {
-    return null;
+    return {
+      success: false,
+      status: 401,
+      code: "UNAUTHENTICATED",
+      message: "Bearer token must not be empty.",
+    };
   }
 
   const jwtParts = token.split(".");
   if (jwtParts.length !== 3) {
-    return null;
+    return {
+      success: false,
+      status: 401,
+      code: "UNAUTHENTICATED",
+      message: "Malformed JWT token.",
+    };
   }
 
   const header = parseBase64UrlJson<DecodedTokenHeader>(jwtParts[0]);
   const payload = parseBase64UrlJson<DecodedTokenPayload>(jwtParts[1]);
   if (!header || !payload) {
-    return null;
+    return {
+      success: false,
+      status: 401,
+      code: "UNAUTHENTICATED",
+      message: "Invalid token payload encoding.",
+    };
   }
 
   const nowSec = Math.floor(Date.now() / 1000);
 
   // Expiration check (with 10-second clock skew tolerance)
   if (typeof payload.exp !== "number" || payload.exp < nowSec - 10) {
-    return null;
+    return {
+      success: false,
+      status: 401,
+      code: "UNAUTHENTICATED",
+      message: "Token has expired.",
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -173,7 +207,12 @@ export async function authenticateFirebaseToken(
 
       if (!res.ok) {
         // Emulator rejected the token (expired, bad signature, or invalid)
-        return null;
+        return {
+          success: false,
+          status: 401,
+          code: "UNAUTHENTICATED",
+          message: "Emulator token lookup failed.",
+        };
       }
 
       const data = (await res.json()) as {
@@ -187,7 +226,14 @@ export async function authenticateFirebaseToken(
 
       const user = data.users?.[0];
       if (!user || user.disabled) {
-        return null;
+        return {
+          success: false,
+          status: 401,
+          code: "UNAUTHENTICATED",
+          message: user?.disabled
+            ? "User account is disabled."
+            : "User not found.",
+        };
       }
 
       let customClaims: { role?: string } = {};
@@ -195,23 +241,41 @@ export async function authenticateFirebaseToken(
         try {
           customClaims = JSON.parse(user.customAttributes);
         } catch {
-          return null;
+          return {
+            success: false,
+            status: 403,
+            code: "FORBIDDEN",
+            message: "Malformed custom attributes on user account.",
+          };
         }
       }
 
       const effectiveRole = customClaims.role || payload.role;
       if (effectiveRole !== "superAdmin" && effectiveRole !== "admin") {
-        return null;
+        return {
+          success: false,
+          status: 403,
+          code: "FORBIDDEN",
+          message: "Account requires admin or superAdmin role.",
+        };
       }
 
       return {
-        uid: user.localId,
-        email: user.email ?? payload.email ?? null,
-        role: effectiveRole as "superAdmin" | "admin",
+        success: true,
+        principal: {
+          uid: user.localId,
+          email: user.email ?? payload.email ?? null,
+          role: effectiveRole as "superAdmin" | "admin",
+        },
       };
     } catch {
       // Fail closed: If emulator is unreachable or lookup times out, NEVER fall back to unverified decoding!
-      return null;
+      return {
+        success: false,
+        status: 401,
+        code: "UNAUTHENTICATED",
+        message: "Failed to verify token with auth emulator.",
+      };
     }
   }
 
@@ -220,28 +284,53 @@ export async function authenticateFirebaseToken(
   // ---------------------------------------------------------------------------
   // 1. Strict algorithm check: MUST be RS256
   if (header.alg !== "RS256" || !header.kid) {
-    return null;
+    return {
+      success: false,
+      status: 401,
+      code: "UNAUTHENTICATED",
+      message: "Unsupported signing algorithm or missing key id.",
+    };
   }
 
   // 2. Audience and Issuer check against Google Secure Token service
   const projectId = getExpectedProjectId();
   const expectedIss = `https://securetoken.google.com/${projectId}`;
   if (payload.aud !== projectId || payload.iss !== expectedIss) {
-    return null;
+    return {
+      success: false,
+      status: 401,
+      code: "UNAUTHENTICATED",
+      message: "Token issuer or audience does not match project configuration.",
+    };
   }
 
   // 3. Subject check (must be non-empty string <= 128 chars)
   const uid = payload.sub || payload.user_id;
   if (!uid || typeof uid !== "string" || uid.length > 128) {
-    return null;
+    return {
+      success: false,
+      status: 401,
+      code: "UNAUTHENTICATED",
+      message: "Invalid token subject identifier.",
+    };
   }
 
   // 4. Issued at and Auth time checks (cannot be in the far future)
   if (typeof payload.iat === "number" && payload.iat > nowSec + 10) {
-    return null;
+    return {
+      success: false,
+      status: 401,
+      code: "UNAUTHENTICATED",
+      message: "Token issuance time is in the future.",
+    };
   }
   if (typeof payload.auth_time === "number" && payload.auth_time > nowSec + 10) {
-    return null;
+    return {
+      success: false,
+      status: 401,
+      code: "UNAUTHENTICATED",
+      message: "Token authentication time is in the future.",
+    };
   }
 
   // 5. Cryptographic signature check against Google public x509 certs
@@ -250,7 +339,12 @@ export async function authenticateFirebaseToken(
     const cert = certs[header.kid];
     if (!cert) {
       // Unknown Key ID
-      return null;
+      return {
+        success: false,
+        status: 401,
+        code: "UNAUTHENTICATED",
+        message: "Signing key not found in Google public certificate set.",
+      };
     }
 
     const signingInput = Buffer.from(`${jwtParts[0]}.${jwtParts[1]}`);
@@ -264,23 +358,41 @@ export async function authenticateFirebaseToken(
     );
 
     if (!isSignatureValid) {
-      return null;
+      return {
+        success: false,
+        status: 401,
+        code: "UNAUTHENTICATED",
+        message: "Invalid cryptographic token signature.",
+      };
     }
 
     // 6. Extract trusted custom claims only after signature verification
     const role = payload.role;
     if (role !== "superAdmin" && role !== "admin") {
-      return null;
+      return {
+        success: false,
+        status: 403,
+        code: "FORBIDDEN",
+        message: "Account requires admin or superAdmin role.",
+      };
     }
 
     return {
-      uid,
-      email: payload.email || null,
-      role: role as "superAdmin" | "admin",
+      success: true,
+      principal: {
+        uid,
+        email: payload.email || null,
+        role: role as "superAdmin" | "admin",
+      },
     };
   } catch {
     // Fail closed on any network or crypto error
-    return null;
+    return {
+      success: false,
+      status: 401,
+      code: "UNAUTHENTICATED",
+      message: "Error verifying token against Google certificates.",
+    };
   }
 }
 

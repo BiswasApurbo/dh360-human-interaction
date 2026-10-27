@@ -219,6 +219,7 @@ async function startMockServer() {
       process.env.DH360_API_URL = `http://127.0.0.1:${mockPort}`;
       process.env.DH360_OPERATOR_TOKEN = TEST_OPERATOR_TOKEN;
       process.env.FIREBASE_AUTH_EMULATOR_HOST = `127.0.0.1:${mockPort}`;
+      process.env.NEXT_PUBLIC_USE_EMULATOR = "true";
       process.env.NODE_ENV = "development";
       resetConfigCacheForTesting();
       resolve();
@@ -316,15 +317,27 @@ async function runTests() {
     process.env.NODE_ENV = "development";
   });
 
+  await test("1.8 Emulator authentication is disabled when NEXT_PUBLIC_USE_EMULATOR=false", async () => {
+    process.env.NEXT_PUBLIC_USE_EMULATOR = "false";
+    const req = new Request("http://localhost:3000/api/dh360/health", {
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    const res = await handleDh360ProxyRequest(req, ["health"]);
+    assert.strictEqual(res.status, 401); // Rejects emulator lookup when NEXT_PUBLIC_USE_EMULATOR is false
+    process.env.NEXT_PUBLIC_USE_EMULATOR = "true";
+  });
+
   // ---------------------------------------------------------------------------
   // 2. Privilege Boundaries & RBAC
   // ---------------------------------------------------------------------------
-  await test("2.1 Unprivileged role ('viewer') is rejected fail-closed", async () => {
+  await test("2.1 Unprivileged role ('viewer') is rejected fail-closed with HTTP 403", async () => {
     const req = new Request("http://localhost:3000/api/dh360/health", {
       headers: { Authorization: `Bearer ${UNPRIVILEGED_TOKEN}` },
     });
     const res = await handleDh360ProxyRequest(req, ["health"]);
-    assert.strictEqual(res.status, 401);
+    assert.strictEqual(res.status, 403);
+    const body = await res.json();
+    assert.strictEqual(body.error, "FORBIDDEN");
   });
 
   await test("2.2 Admin cannot reset biometrics (Super Admin required) -> HTTP 403", async () => {

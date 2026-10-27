@@ -35,19 +35,23 @@ export async function handleDh360ProxyRequest(
 
   // 2. Authenticate the caller's Firebase identity
   const authHeader = request.headers.get("authorization");
-  const principal = await authenticateFirebaseToken(authHeader);
-  if (!principal) {
+  const authResult = await authenticateFirebaseToken(authHeader);
+  if (!authResult.success) {
     return Response.json(
       {
-        error: "UNAUTHENTICATED",
-        message: "Valid Firebase Bearer token is required.",
+        error: authResult.code,
+        message: authResult.message,
       },
       {
-        status: 401,
-        headers: { "WWW-Authenticate": "Bearer" },
+        status: authResult.status,
+        ...(authResult.status === 401
+          ? { headers: { "WWW-Authenticate": "Bearer" } }
+          : {}),
       }
     );
   }
+
+  const principal = authResult.principal;
 
   // 3. Inspect request body for PATCH / POST
   let requestBodyObj: Record<string, unknown> | null = null;

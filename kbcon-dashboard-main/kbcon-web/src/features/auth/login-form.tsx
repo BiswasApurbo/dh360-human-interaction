@@ -36,8 +36,38 @@ export function LoginForm() {
     try {
       await signInWithEmailAndPassword(auth, values.email, values.password);
       router.replace("/dashboard");
-    } catch {
-      setError(t("failed"));
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code;
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[LoginForm] Firebase sign-in failure code:", code);
+      }
+      switch (code) {
+        case "auth/invalid-credential":
+        case "auth/wrong-password":
+          setError(t("failed"));
+          break;
+        case "auth/user-not-found":
+          setError(t("userNotFound"));
+          break;
+        case "auth/user-disabled":
+          setError(t("userDisabled"));
+          break;
+        case "auth/too-many-requests":
+          setError(t("tooManyRequests"));
+          break;
+        case "auth/network-request-failed":
+          setError(t("networkError"));
+          break;
+        case "auth/invalid-api-key":
+          setError(t("invalidApiKey"));
+          break;
+        case "auth/operation-not-allowed":
+          setError(t("operationNotAllowed"));
+          break;
+        default:
+          setError(t("genericAuthError"));
+          break;
+      }
     }
   }
 
