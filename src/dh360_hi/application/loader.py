@@ -364,6 +364,29 @@ def load_config(
     env_dict.pop("preset", None)
     env_dict.pop("config_file", None)
     env_dict.pop("config_path", None)
+
+    # Fallback support for generic DH360_OPERATOR_TOKEN from Next.js / local dev
+    if "api" not in env_dict:
+        env_dict["api"] = {}
+    if "operator_token" not in env_dict["api"]:
+        fallback_token = (
+            os.environ.get("DH360_OPERATOR_TOKEN")
+            or os.environ.get("DH360_HI_OPERATOR_TOKEN")
+        )
+        if fallback_token:
+            env_dict["api"]["operator_token"] = fallback_token
+
+    # Default operator_scopes to all capabilities if token is set but scopes omitted
+    active_token = env_dict["api"].get("operator_token")
+    if active_token:
+        has_scopes = "operator_scopes" in env_dict["api"] or (
+            isinstance(merged_dict.get("api"), dict)
+            and merged_dict["api"].get("operator_scopes")
+        )
+        if not has_scopes:
+            from dh360_hi.api.security import OperatorScope
+            env_dict["api"]["operator_scopes"] = tuple(s.value for s in OperatorScope)
+
     if env_dict:
         merged_dict = deep_merge(merged_dict, env_dict)
 

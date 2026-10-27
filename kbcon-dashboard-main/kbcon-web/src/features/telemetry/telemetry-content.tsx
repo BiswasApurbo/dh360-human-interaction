@@ -74,7 +74,7 @@ export function TelemetryContent({ locale }: { locale: string }) {
 
   // কাস্টম তারিখ ঠিক না থাকলে ২৪ ঘণ্টার হিসাবে ফিরে যায়
   const { fromIso, toIso, dateError } = useMemo(() => {
-    const end = Date.now();
+    const end = now;
     if (range === "custom") {
       const f = dateFrom ? new Date(dateFrom + "T00:00:00").getTime() : NaN;
       const tt = dateTo ? new Date(dateTo + "T23:59:59").getTime() : NaN;
@@ -105,7 +105,7 @@ export function TelemetryContent({ locale }: { locale: string }) {
       dateError: false,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range, dateFrom, dateTo, selectedId]);
+  }, [range, dateFrom, dateTo, selectedId, now]);
 
   const { points, loading: histLoading } = useTelemetryHistory(
     selectedId,

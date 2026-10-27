@@ -36,7 +36,7 @@ interface AuthorizationDialogContentProps {
 
 function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps) {
   const t = useTranslations("People");
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
 
   const [session, setSession] = useState<AuthorizationSession | null>(null);
   const [loading, setLoading] = useState(false);
@@ -50,8 +50,8 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
       try {
         const token = await user.getIdToken();
         headers["Authorization"] = `Bearer ${token}`;
-      } catch {
-        // Fallback
+      } catch (err) {
+        console.warn("[AuthorizationDialog] Failed to obtain Firebase ID token:", err);
       }
     }
     return headers;
@@ -59,6 +59,7 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
 
   // Poll active authorization session
   const fetchCurrentSession = useCallback(async () => {
+    if (!user || authLoading) return;
     try {
       const headers = await getHeaders();
       const res = await fetch("/api/dh360/authorization/sessions/current", {
@@ -69,26 +70,33 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
         setSession(data);
       } else if (res.status === 404) {
         setSession(null);
+      } else if (res.status === 401 || res.status === 403) {
+        setError(res.status === 403 ? "Admin role required." : "Authentication required.");
       }
     } catch {
       // Offline or network error
     }
-  }, [getHeaders]);
+  }, [user, authLoading, getHeaders]);
 
   useEffect(() => {
+    if (!user || authLoading) return;
     const timeout = setTimeout(() => {
       void fetchCurrentSession();
     }, 0);
     const interval = setInterval(() => {
       void fetchCurrentSession();
-    }, 1000);
+    }, 1500);
     return () => {
       clearTimeout(timeout);
       clearInterval(interval);
     };
-  }, [fetchCurrentSession]);
+  }, [user, authLoading, fetchCurrentSession]);
 
   async function startAuthorization() {
+    if (!user) {
+      setError("Please sign in with an authorized account.");
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -99,7 +107,13 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
       });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail || errData.error || `HTTP ${res.status}`);
+        if (res.status === 503) {
+          throw new Error("DH360 service is currently unreachable (HTTP 503). Ensure backend is running.");
+        }
+        if (res.status === 403) {
+          throw new Error("Forbidden: SuperAdmin or Admin role required.");
+        }
+        throw new Error(errData.detail || errData.message || errData.error || `HTTP ${res.status}`);
       }
       const data: AuthorizationSession = await res.json();
       setSession(data);
@@ -111,6 +125,7 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
   }
 
   async function stopAuthorization() {
+    if (!user) return;
     setLoading(true);
     setError(null);
     try {

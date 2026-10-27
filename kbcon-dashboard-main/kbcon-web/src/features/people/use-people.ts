@@ -9,7 +9,7 @@ import type {
 } from "./types";
 
 export function usePeople() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [people, setPeople] = useState<PersonProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -22,14 +22,20 @@ export function usePeople() {
       try {
         const token = await user.getIdToken();
         headers["Authorization"] = `Bearer ${token}`;
-      } catch {
-        // Fallback for emulator / unauthenticated
+      } catch (err) {
+        console.warn("[usePeople] Failed to obtain Firebase ID token:", err);
       }
     }
     return headers;
   }, [user]);
 
   const loadData = useCallback(async (isRefresh = false) => {
+    if (authLoading) return;
+    if (!user) {
+      setPeople([]);
+      setLoading(false);
+      return;
+    }
     if (isRefresh) {
       setLoading(true);
     }
@@ -39,11 +45,14 @@ export function usePeople() {
       const res = await fetch("/api/dh360/persons", { headers });
 
       if (!res.ok) {
-        if (res.status === 401 || res.status === 403) {
-          throw new Error("Authentication required to view registered people.");
+        if (res.status === 401) {
+          throw new Error("Authentication required. Please check your login session.");
+        }
+        if (res.status === 403) {
+          throw new Error("Access forbidden: SuperAdmin or Admin role required.");
         }
         if (res.status === 503) {
-          throw new Error("DH360 backend is currently unreachable.");
+          throw new Error("DH360 backend service is currently unreachable. Please ensure the local service is running on port 8000.");
         }
         throw new Error(`Failed to load people (status ${res.status})`);
       }
@@ -57,56 +66,22 @@ export function usePeople() {
     } finally {
       setLoading(false);
     }
-  }, [getHeaders]);
+  }, [authLoading, user, getHeaders]);
 
   useEffect(() => {
-    let ignore = false;
-
-    async function execute() {
-      try {
-        const headers: Record<string, string> = {
-          "Content-Type": "application/json",
-        };
-        if (user) {
-          try {
-            const token = await user.getIdToken();
-            headers["Authorization"] = `Bearer ${token}`;
-          } catch {
-            // Unauthenticated fallback
-          }
-        }
-        const res = await fetch("/api/dh360/persons", { headers });
-        if (!ignore) {
-          if (!res.ok) {
-            if (res.status === 401 || res.status === 403) {
-              setError("Authentication required to view registered people.");
-            } else if (res.status === 503) {
-              setError("DH360 backend is currently unreachable.");
-            } else {
-              setError(`Failed to load people (status ${res.status})`);
-            }
-          } else {
-            const data = await res.json();
-            setPeople(Array.isArray(data) ? data : []);
-          }
-          setLoading(false);
-        }
-      } catch (err: unknown) {
-        if (!ignore) {
-          setError(
-            err instanceof Error ? err.message : "An unexpected error occurred"
-          );
-          setLoading(false);
-        }
-      }
+    if (authLoading) return;
+    if (!user) {
+      const id = setTimeout(() => {
+        setPeople([]);
+        setLoading(false);
+      }, 0);
+      return () => clearTimeout(id);
     }
-
-    execute();
-
-    return () => {
-      ignore = true;
-    };
-  }, [user]);
+    const id = setTimeout(() => {
+      void loadData(false);
+    }, 0);
+    return () => clearTimeout(id);
+  }, [authLoading, user, loadData]);
 
   const createPerson = useCallback(
     async (input: CreatePersonInput): Promise<PersonProfile> => {

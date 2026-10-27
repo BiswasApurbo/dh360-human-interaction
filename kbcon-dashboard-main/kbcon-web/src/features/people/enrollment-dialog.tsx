@@ -46,7 +46,7 @@ function EnrollmentDialogContent({
   onSuccess,
 }: EnrollmentDialogContentProps) {
   const t = useTranslations("People");
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
 
   const [sessionActive, setSessionActive] = useState(false);
   const [progress, setProgress] = useState<EnrollmentProgress | null>(null);
@@ -76,6 +76,7 @@ function EnrollmentDialogContent({
 
   // Fetch current camera preview frame
   const fetchPreviewFrame = useCallback(async () => {
+    if (!user || authLoading) return;
     try {
       const headers = await getHeaders();
       const res = await fetch(
@@ -94,11 +95,11 @@ function EnrollmentDialogContent({
     } catch {
       // Stream frame unavailable or initializing
     }
-  }, [person.person_id, getHeaders]);
+  }, [user, authLoading, person.person_id, getHeaders]);
 
   // Polling loop for preview frames while session is active
   useEffect(() => {
-    if (!sessionActive) return;
+    if (!sessionActive || !user || authLoading) return;
     const timeout = setTimeout(() => {
       void fetchPreviewFrame();
     }, 0);
@@ -109,7 +110,7 @@ function EnrollmentDialogContent({
       clearTimeout(timeout);
       clearInterval(interval);
     };
-  }, [sessionActive, fetchPreviewFrame]);
+  }, [sessionActive, user, authLoading, fetchPreviewFrame]);
 
   // Cleanup object URLs on unmount
   useEffect(() => {

@@ -13,9 +13,11 @@ export function useRole() {
   useEffect(() => {
     if (loading) return;
     if (!user) {
-      setRole(null);
-      setRoleLoading(false);
-      return;
+      const id = setTimeout(() => {
+        setRole(null);
+        setRoleLoading(false);
+      }, 0);
+      return () => clearTimeout(id);
     }
     user
       .getIdTokenResult()

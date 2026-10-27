@@ -27,7 +27,7 @@ export function getDh360Config(): Dh360Config {
     return cachedConfig;
   }
 
-  const rawUrl = process.env.DH360_API_URL || "http://127.0.0.1:8001";
+  const rawUrl = process.env.DH360_API_URL || "http://127.0.0.1:8000";
   let apiUrl: string;
   try {
     const parsed = new URL(rawUrl);

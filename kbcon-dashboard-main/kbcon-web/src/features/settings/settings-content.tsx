@@ -45,7 +45,10 @@ export function SettingsContent() {
   const [resetMsg, setResetMsg] = useState<Msg>(null);
 
   useEffect(() => {
-    if (user) setName(user.displayName ?? "");
+    if (user) {
+      const id = setTimeout(() => setName(user.displayName ?? ""), 0);
+      return () => clearTimeout(id);
+    }
   }, [user]);
 
   async function saveName() {
