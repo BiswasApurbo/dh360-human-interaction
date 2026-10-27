@@ -193,6 +193,21 @@ export async function handleDh360ProxyRequest(
       });
     }
 
+    // Handle upstream operator credential rejection (502 Bad Gateway)
+    // Distinguishes an upstream token mismatch from a caller identity failure
+    if (upstreamResponse.status === 401 || upstreamResponse.status === 403) {
+      const errText = await upstreamResponse.text().catch(() => "");
+      return Response.json(
+        {
+          error: "UPSTREAM_AUTH_ERROR",
+          message: "DH360 backend rejected operator credentials. Please check DH360_OPERATOR_TOKEN configuration.",
+          upstreamStatus: upstreamResponse.status,
+          upstreamDetail: errText ? JSON.parse(errText).detail || errText : undefined,
+        },
+        { status: 502 }
+      );
+    }
+
     // Handle null-body HTTP statuses (204 No Content, 205 Reset Content, 304 Not Modified)
     if (upstreamResponse.status === 204 || upstreamResponse.status === 205 || upstreamResponse.status === 304) {
       return new Response(null, {
@@ -225,11 +240,18 @@ export async function handleDh360ProxyRequest(
       );
     }
 
+    const errCause = (err as { cause?: { code?: string } })?.cause?.code;
+    const isConnRefused = errCause === "ECONNREFUSED";
+
     // Upstream connection error / service unreachable
     return Response.json(
       {
         error: "UPSTREAM_UNAVAILABLE",
-        message: "DH360 Human Interaction service is currently unreachable.",
+        message: isConnRefused
+          ? `Could not connect to DH360 backend at ${config.apiUrl}. Please verify the backend service is running on port 8000.`
+          : "DH360 Human Interaction service is currently unreachable.",
+        endpoint: config.apiUrl,
+        code: isConnRefused ? "ECONNREFUSED" : undefined,
       },
       { status: 503 }
     );

@@ -371,8 +371,29 @@ def load_config(
     if "operator_token" not in env_dict["api"]:
         fallback_token = (
             os.environ.get("DH360_OPERATOR_TOKEN")
+            or os.environ.get("DH360_HI_API__OPERATOR_TOKEN")
             or os.environ.get("DH360_HI_OPERATOR_TOKEN")
         )
+        if not fallback_token:
+            from pathlib import Path
+            candidate_paths = [
+                Path("kbcon-dashboard-main/kbcon-web/.env.local"),
+                Path("kbcon-web/.env.local"),
+                Path(".env.local"),
+                Path(".env"),
+            ]
+            for cp in candidate_paths:
+                if cp.is_file():
+                    try:
+                        for raw_line in cp.read_text(encoding="utf-8").splitlines():
+                            line = raw_line.strip()
+                            if line.startswith("DH360_OPERATOR_TOKEN="):
+                                fallback_token = line.split("=", 1)[1].strip().strip("\"'")
+                                break
+                        if fallback_token:
+                            break
+                    except Exception:
+                        pass
         if fallback_token:
             env_dict["api"]["operator_token"] = fallback_token
 

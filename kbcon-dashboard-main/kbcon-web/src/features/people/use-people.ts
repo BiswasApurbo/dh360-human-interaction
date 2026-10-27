@@ -45,16 +45,20 @@ export function usePeople() {
       const res = await fetch("/api/dh360/persons", { headers });
 
       if (!res.ok) {
+        const errData = await res.json().catch(() => null);
         if (res.status === 401) {
           throw new Error("Authentication required. Please check your login session.");
         }
         if (res.status === 403) {
           throw new Error("Access forbidden: SuperAdmin or Admin role required.");
         }
-        if (res.status === 503) {
-          throw new Error("DH360 backend service is currently unreachable. Please ensure the local service is running on port 8000.");
+        if (res.status === 502) {
+          throw new Error(errData?.message || "Gateway error: Backend rejected operator token.");
         }
-        throw new Error(`Failed to load people (status ${res.status})`);
+        if (res.status === 503) {
+          throw new Error(errData?.message || errData?.detail || "DH360 backend service is currently unreachable (HTTP 503). Ensure backend is running on port 8000.");
+        }
+        throw new Error(errData?.detail || errData?.message || `Failed to load people (status ${res.status})`);
       }
 
       const data = await res.json();

@@ -177,6 +177,12 @@ async function startMockServer() {
 
         // Mock DH360 FastAPI Endpoints
         lastDh360Request = recorded;
+        if (req.headers["authorization"] !== `Bearer ${TEST_OPERATOR_TOKEN}`) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ detail: "Invalid operator credentials" }));
+          return;
+        }
+
         if (req.url === "/health") {
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ status: "healthy", mode: "local-test" }));
@@ -511,6 +517,23 @@ async function runTests() {
     assert.strictEqual(lastDh360Request.url, "/sessions?person_id=alice&limit=10");
     assert.strictEqual(lastDh360Request.headers["accept"], "application/json");
     assert.strictEqual(lastDh360Request.headers["last-event-id"], "evt-888");
+  });
+
+  await test("4.7 Upstream operator credential rejection maps to HTTP 502 Bad Gateway", async () => {
+    process.env.DH360_OPERATOR_TOKEN = "invalid-operator-token";
+    resetConfigCacheForTesting();
+
+    const req = new Request("http://localhost:3000/api/dh360/health", {
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    const res = await handleDh360ProxyRequest(req, ["health"]);
+    assert.strictEqual(res.status, 502);
+    const body = await res.json();
+    assert.strictEqual(body.error, "UPSTREAM_AUTH_ERROR");
+    assert.strictEqual(body.upstreamStatus, 401);
+
+    process.env.DH360_OPERATOR_TOKEN = TEST_OPERATOR_TOKEN;
+    resetConfigCacheForTesting();
   });
 
   // ---------------------------------------------------------------------------
