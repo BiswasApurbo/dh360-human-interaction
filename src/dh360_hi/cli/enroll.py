@@ -7,7 +7,7 @@ import contextlib
 from typing import Any
 
 from dh360_hi.application.factory import create_interaction_service
-from dh360_hi.application.loader import load_config
+from dh360_hi.application.loader import load_config, resolve_cli_db_path
 from dh360_hi.cli.formatting import format_json, format_key_value
 from dh360_hi.contracts.errors import EnrollmentAppError
 from dh360_hi.vision.frame import (
@@ -47,7 +47,7 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     parser.add_argument("--video-loop", action="store_true", help="Loop video stream continuously")
     parser.add_argument("--preset", help="Configuration preset (development, testing, production)")
     parser.add_argument("--config-file", help="Path to TOML configuration file")
-    parser.add_argument("--db-path", help="Override SQLite database path")
+    parser.add_argument("--db-path", help="Override SQLite database path (default: dh360_hi.db)")
     parser.add_argument(
         "--json", action="store_true", help="Output final enrollment result as JSON"
     )
@@ -75,8 +75,9 @@ def handle_enroll(args: argparse.Namespace) -> int:
     mode = args.mode
 
     overrides: dict[str, Any] = {}
-    if getattr(args, "db_path", None):
-        overrides["db_path"] = args.db_path
+    cli_db = resolve_cli_db_path(args)
+    if cli_db is not None:
+        overrides["db_path"] = cli_db
 
     config = load_config(
         preset=getattr(args, "preset", None),

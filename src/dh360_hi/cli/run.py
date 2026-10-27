@@ -11,7 +11,7 @@ import time
 from typing import Any
 
 from dh360_hi.application.factory import create_interaction_service
-from dh360_hi.application.loader import load_config
+from dh360_hi.application.loader import load_config, resolve_cli_db_path
 from dh360_hi.cli.formatting import format_json, format_key_value
 from dh360_hi.contracts.errors import ValidationAppError
 from dh360_hi.contracts.integration import BaseIntegrationEvent
@@ -46,7 +46,7 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     parser.add_argument("--video-loop", action="store_true", help="Loop video stream continuously")
     parser.add_argument("--preset", help="Configuration preset (development, testing, production)")
     parser.add_argument("--config-file", help="Path to TOML configuration file")
-    parser.add_argument("--db-path", help="Override SQLite database path")
+    parser.add_argument("--db-path", help="Override SQLite database path (default: dh360_hi.db)")
     parser.add_argument("--target-fps", type=float, help="Override target frame rate ceiling")
     parser.add_argument(
         "--duration", type=float, help="Run for a fixed duration in seconds then exit cleanly"
@@ -76,8 +76,9 @@ def _build_frame_source(args: argparse.Namespace) -> FrameSource:
 def handle_run(args: argparse.Namespace) -> int:
     """Execute continuous runtime loop with graceful signal handling."""
     overrides: dict[str, Any] = {}
-    if getattr(args, "db_path", None):
-        overrides["db_path"] = args.db_path
+    cli_db = resolve_cli_db_path(args)
+    if cli_db is not None:
+        overrides["db_path"] = cli_db
     if getattr(args, "target_fps", None):
         if "runtime" not in overrides:
             overrides["runtime"] = {}

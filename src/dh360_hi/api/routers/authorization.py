@@ -77,6 +77,14 @@ def get_current_authorization_session(
     return session.to_dict() if session is not None else None
 
 
+@router.post(
+    "/authorization/sessions/current/cancel",
+    status_code=status.HTTP_200_OK,
+)
+@router.post(
+    "/authorization/logout",
+    status_code=status.HTTP_200_OK,
+)
 @router.delete(
     "/authorization/sessions/current",
     status_code=status.HTTP_200_OK,
@@ -85,7 +93,7 @@ def cancel_current_authorization_session(
     request: Request,
     _operator: OperatorPrincipal = _authorization_manage,
 ) -> dict[str, Any]:
-    """Cancel the currently active authorization session.
+    """Cancel or log out of the currently active authorization session.
 
     Returns HTTP 200 with the cancelled AuthorizationSession snapshot.
     Returns HTTP 409 if no session is active.
@@ -99,6 +107,12 @@ def cancel_current_authorization_session(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
+
+    # Explicitly revoke dialogue coordinator authorization and purge private context
+    coord = getattr(request.app.state, "dialogue_coordinator", None)
+    if coord is not None and hasattr(coord, "revoke_authorization"):
+        coord.revoke_authorization()
+
     return session.to_dict()
 
 

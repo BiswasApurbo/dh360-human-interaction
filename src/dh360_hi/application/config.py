@@ -26,6 +26,9 @@ class ConfigurationPreset(StrEnum):
     PRODUCTION = "production"
 
 
+DEFAULT_DB_PATH: str = "dh360_hi.db"
+
+
 @dataclass(frozen=True)
 class ApiConfig:
     """API operator authentication settings.

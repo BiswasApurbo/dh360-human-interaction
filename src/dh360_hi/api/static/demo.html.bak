@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Human Interaction Authorization Demo</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --card-bg: #ffffff;
+      --text: #1f2937;
+      --text-muted: #6b7280;
+      --border: #e5e7eb;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --danger: #dc2626;
+      --badge-active: #dbeafe;
+      --badge-active-txt: #1e40af;
+      --badge-auth: #dcfce7;
+      --badge-auth-txt: #15803d;
+      --badge-alert: #fee2e2;
+      --badge-alert-txt: #991b1b;
+      --badge-gray: #f3f4f6;
+      --badge-gray-txt: #374151;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.5;
+      padding: 2rem 1rem;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      min-height: 100vh;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      max-width: 640px;
+      width: 100%;
+      padding: 2rem;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    }
+    h1 {
+      font-size: 1.35rem;
+      font-weight: 600;
+      margin-bottom: 1.25rem;
+      color: #111827;
+      text-align: center;
+    }
+    .form-group {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1.5rem;
+    }
+    input[type="text"] {
+      flex: 1;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.9rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: monospace;
+      outline: none;
+    }
+    input[type="text"]:focus {
+      border-color: var(--primary);
+    }
+    button {
+      padding: 0.5rem 1rem;
+      font-size: 0.9rem;
+      font-weight: 500;
+      background-color: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button:hover {
+      background-color: var(--primary-hover);
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .status-panel {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+      background-color: #fafafa;
+    }
+    .field-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 0.35rem 0;
+      border-bottom: 1px solid #f0f0f0;
+      font-size: 0.9rem;
+    }
+    .field-row:last-child {
+      border-bottom: none;
+    }
+    .field-label {
+      font-weight: 500;
+      color: var(--text-muted);
+      width: 140px;
+      flex-shrink: 0;
+    }
+    .field-val {
+      font-family: monospace;
+      word-break: break-all;
+      text-align: right;
+    }
+    .badge {
+      display: inline-block;
+      padding: 0.2rem 0.6rem;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      font-family: monospace;
+    }
+    .badge-none { background: var(--badge-gray); color: var(--badge-gray-txt); }
+    .badge-active { background: var(--badge-active); color: var(--badge-active-txt); }
+    .badge-authorized { background: var(--badge-auth); color: var(--badge-auth-txt); }
+    .badge-unknown,
+    .badge-uncertain,
+    .badge-no_face,
+    .badge-lost,
+    .badge-timeout,
+    .badge-expired,
+    .badge-aborted {
+      background: var(--badge-alert);
+      color: var(--badge-alert-txt);
+    }
+    .notice {
+      padding: 0.5rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      margin-bottom: 1rem;
+      display: none;
+    }
+    .notice-error {
+      background-color: #fef2f2;
+      color: #991b1b;
+      border: 1px solid #fecaca;
+    }
+    .notice-info {
+      background-color: #eff6ff;
+      color: #1e40af;
+      border: 1px solid #bfdbfe;
+    }
+    .log-container {
+      margin-top: 1rem;
+    }
+    .log-header {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 0.5rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .log-box {
+      background: #1e293b;
+      color: #e2e8f0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.8rem;
+      padding: 0.75rem;
+      border-radius: 6px;
+      height: 180px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .sse-indicator {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 6px;
+      background-color: #9ca3af;
+    }
+    .sse-connected { background-color: #22c55e; }
+    .sse-connecting { background-color: #eab308; }
+    .sse-error { background-color: #ef4444; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Human Interaction Authorization Demo</h1>
+
+    <div class="form-group">
+      <input type="text" id="token-input" placeholder="Operator Bearer Token" spellcheck="false" />
+    </div>
+
+    <div id="notice-box" class="notice"></div>
+
+    <div id="registration-section">
+      <h2 style="font-size: 1.15rem; margin-bottom: 0.75rem;">Register Person</h2>
+      <div class="form-group"><input type="text" id="display-name" placeholder="Display Name *" /></div>
+      <div class="form-group"><input type="text" id="preferred-name" placeholder="Preferred Name" /></div>
+      <div class="form-group"><input type="text" id="role" placeholder="Role" /></div>
+      <div class="form-group"><input type="text" id="department" placeholder="Department" /></div>
+      <div class="form-group"><input type="text" id="office-room" placeholder="Office Room" /></div>
+      <div class="form-group"><input type="text" id="working-hours" placeholder="Working Hours" /></div>
+      <div class="form-group"><input type="text" id="profile-description" placeholder="Profile Description" /></div>
+      <div class="form-group" style="flex-direction: column; align-items: stretch;">
+        <table id="qa-table" style="width:100%; border-collapse:collapse; margin-bottom:0.5rem;">
+          <thead>
+            <tr>
+              <th style="text-align:left; font-size:0.8rem; color:var(--text-muted); padding:0.25rem;">Question</th>
+              <th style="text-align:left; font-size:0.8rem; color:var(--text-muted); padding:0.25rem;">Answer</th>
+              <th style="width:70px;"></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <div>
+          <button type="button" onclick="addQARow()" style="background:#4b5563; font-size:0.8rem; padding:0.3rem 0.6rem;">+ Add Q&amp;A</button>
+        </div>
+      </div>
+      <button id="register-btn" onclick="handleRegister()" style="width:100%;">Register &amp; Start Enrollment</button>
+    </div>
+
+    <div id="enrollment-section" style="display:none; margin-top:1rem;">
+      <h2 style="font-size: 1.15rem; margin-bottom: 0.75rem;">Guided Biometric Enrollment</h2>
+      <div class="status-panel" id="enrollment-progress">
+        <div class="field-row">
+          <span class="field-label">Instruction:</span>
+          <span id="current-instruction" class="field-val" style="font-weight:700; color:var(--primary); font-size:1rem;">Look FRONT</span>
+        </div>
+        <div class="field-row">
+          <span class="field-label">Current Direction:</span>
+          <span id="current-direction" class="field-val">FRONT</span>
+        </div>
+        <div class="field-row">
+          <span class="field-label">Direction Progress:</span>
+          <span id="direction-progress" class="field-val">-</span>
+        </div>
+        <div class="field-row">
+          <span class="field-label">Total Accepted:</span>
+          <span id="total-progress" class="field-val">0/30</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="auth-action-section" style="display:none; margin-top:1rem; margin-bottom:1.5rem;">
+      <button id="start-btn" onclick="startAuthorization()" style="width:100%;">Start Authorization</button>
+    </div>
+
+    <div class="status-panel">
+      <div class="field-row">
+        <span class="field-label">Status:</span>
+        <span id="auth-status" class="badge badge-none">IDLE</span>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Person:</span>
+        <span id="auth-person" class="field-val">-</span>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Authorization ID:</span>
+        <span id="auth-id" class="field-val">-</span>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Started:</span>
+        <span id="auth-started" class="field-val">-</span>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Updated:</span>
+        <span id="auth-updated" class="field-val">-</span>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Ended:</span>
+        <span id="auth-ended" class="field-val">-</span>
+      </div>
+      <div class="field-row">
+        <span class="field-label">SSE Stream:</span>
+        <span class="field-val" style="display: flex; align-items: center;">
+          <span id="sse-dot" class="sse-indicator"></span>
+          <span id="sse-status" style="font-family: inherit;">Disconnected</span>
+        </span>
+      </div>
+    </div>
+
+    <div id="context-panel" class="status-panel" style="display:none; border-color:#86efac; background:#f0fdf4;">
+      <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem; color:#15803d;">Authorized Person Context</h3>
+      <div class="field-row"><span class="field-label">Name:</span><span id="ctx-name" class="field-val">-</span></div>
+      <div class="field-row"><span class="field-label">Role:</span><span id="ctx-role" class="field-val">-</span></div>
+      <div class="field-row"><span class="field-label">Department:</span><span id="ctx-department" class="field-val">-</span></div>
+      <div class="field-row"><span class="field-label">Office Room:</span><span id="ctx-room" class="field-val">-</span></div>
+      <div class="field-row"><span class="field-label">Working Hours:</span><span id="ctx-hours" class="field-val">-</span></div>
+      <div class="field-row" style="flex-direction:column; align-items:flex-start;"><span class="field-label" style="width:100%; margin-bottom:0.25rem;">Profile Description:</span><span id="ctx-desc" style="font-family:inherit; font-size:0.85rem; color:#374151; white-space:pre-wrap;">-</span></div>
+      <div class="field-row" style="flex-direction:column; align-items:flex-start; border-bottom:none;"><span class="field-label" style="width:100%; margin-bottom:0.25rem;">Q&amp;A Pairs:</span><div id="ctx-qa" style="font-family:inherit; font-size:0.85rem; color:#374151; width:100%; margin-top:0.25rem;">None</div></div>
+    </div>
+
+    <div class="log-container">
+      <div class="log-header">Event Log</div>
+      <div id="log-box" class="log-box"></div>
+    </div>
+  </div>
+
+  <script>
+    let abortController = null;
+    let isConnecting = false;
+    let currentPersonId = null;
+    let currentAuthId = null;
+    let enrollmentIntervalId = null;
+    let isEnrollmentCommitted = false;
+    let isStepInProgress = false;
+
+    const DIRECTION_INSTRUCTIONS = {
+      FRONT: "Look FRONT",
+      RIGHT: "Turn RIGHT",
+      LEFT: "Turn LEFT"
+    };
+
+    function getNowTime() {
+      const d = new Date();
+      return d.toTimeString().split(' ')[0];
+    }
+
+    function appendLog(msg) {
+      const box = document.getElementById("log-box");
+      const line = `[${getNowTime()}] ${msg}\n`;
+      box.textContent += line;
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function showNotice(msg, type = "error") {
+      const n = document.getElementById("notice-box");
+      n.textContent = msg;
+      n.className = "notice notice-" + type;
+      n.style.display = "block";
+    }
+
+    function clearNotice() {
+      const n = document.getElementById("notice-box");
+      n.style.display = "none";
+    }
+
+    function escapeHtml(str) {
+      if (!str) return "";
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function updateSessionUI(session) {
+      if (!session) return;
+
+      const st = (session.status || "IDLE").toUpperCase();
+      const statusEl = document.getElementById("auth-status");
+      statusEl.textContent = st;
+      statusEl.className = "badge badge-" + st.toLowerCase();
+
+      const pName = session.display_name || session.person_id || "-";
+      document.getElementById("auth-person").textContent = pName;
+      document.getElementById("auth-id").textContent = session.authorization_id || "-";
+      document.getElementById("auth-started").textContent = session.started_at || session.created_at || "-";
+      document.getElementById("auth-updated").textContent = session.updated_at || "-";
+      document.getElementById("auth-ended").textContent = session.ended_at || "-";
+    }
+
+    function setSseIndicator(state, text) {
+      const dot = document.getElementById("sse-dot");
+      const statusTxt = document.getElementById("sse-status");
+      dot.className = "sse-indicator sse-" + state;
+      statusTxt.textContent = text;
+    }
+
+    function addQARow() {
+      const tbody = document.querySelector("#qa-table tbody");
+      const row = document.createElement("tr");
+      row.innerHTML = `
+        <td style="padding: 2px 4px;"><input type="text" class="qa-q" placeholder="Question" style="width:100%; font-size:0.8rem; padding:0.3rem 0.5rem;" /></td>
+        <td style="padding: 2px 4px;"><input type="text" class="qa-a" placeholder="Answer" style="width:100%; font-size:0.8rem; padding:0.3rem 0.5rem;" /></td>
+        <td style="padding: 2px 4px; text-align:center;"><button type="button" onclick="removeQARow(this)" style="background:#dc2626; font-size:0.75rem; padding:0.25rem 0.5rem;">Remove</button></td>
+      `;
+      tbody.appendChild(row);
+    }
+
+    function removeQARow(btn) {
+      const tr = btn.closest("tr");
+      if (tr) tr.remove();
+    }
+
+    async function handleRegister() {
+      clearNotice();
+      const token = document.getElementById("token-input").value.trim();
+      if (!token) {
+        showNotice("Please enter an operator Bearer token first.", "error");
+        return;
+      }
+
+      const displayName = document.getElementById("display-name").value.trim();
+      if (!displayName) {
+        showNotice("Display Name is required.", "error");
+        return;
+      }
+
+      const preferredName = document.getElementById("preferred-name").value.trim();
+      const role = document.getElementById("role").value.trim();
+      const department = document.getElementById("department").value.trim();
+      const officeRoom = document.getElementById("office-room").value.trim();
+      const workingHours = document.getElementById("working-hours").value.trim();
+      const profileDescription = document.getElementById("profile-description").value.trim();
+
+      const qaPairs = [];
+      const rows = document.querySelectorAll("#qa-table tbody tr");
+      for (const row of rows) {
+        const qEl = row.querySelector(".qa-q");
+        const aEl = row.querySelector(".qa-a");
+        if (qEl && aEl) {
+          const q = qEl.value.trim();
+          const a = aEl.value.trim();
+          if (q && a) {
+            qaPairs.push({ question: q, answer: a });
+          }
+        }
+      }
+
+      const payload = {
+        display_name: displayName,
+        preferred_name: preferredName || null,
+        role: role || null,
+        department: department || null,
+        office_room: officeRoom || null,
+        working_hours: workingHours || null,
+        profile_description: profileDescription || null,
+        qa_pairs: qaPairs.length > 0 ? qaPairs : null
+      };
+
+      const registerBtn = document.getElementById("register-btn");
+      registerBtn.disabled = true;
+
+      try {
+        const resp = await fetch("/persons", {
+          method: "POST",
+          headers: {
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload)
+        });
+
+        if (resp.status === 201) {
+          const data = await resp.json();
+          currentPersonId = data.person_id;
+          appendLog(`person created: ${currentPersonId} (${data.display_name})`);
+          document.getElementById("registration-section").style.display = "none";
+          document.getElementById("enrollment-section").style.display = "block";
+          showNotice(`Person registered (${data.display_name}). Starting guided biometric enrollment...`, "info");
+          await startEnrollment(token, currentPersonId);
+        } else {
+          const err = await resp.json().catch(() => ({}));
+          const msg = err.detail || err.message || `HTTP ${resp.status}`;
+          showNotice(`Person registration failed: ${msg}`, "error");
+          appendLog(`person registration failed: HTTP ${resp.status}`);
+          registerBtn.disabled = false;
+        }
+      } catch (err) {
+        showNotice(`Network error during registration: ${err.message}`, "error");
+        appendLog(`network error during registration: ${err.message}`);
+        registerBtn.disabled = false;
+      }
+    }
+
+    async function startEnrollment(token, personId) {
+      try {
+        const consentResp = await fetch(`/persons/${personId}`, {
+          method: "PATCH",
+          headers: {
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ consent_status: "granted" })
+        });
+
+        if (!consentResp.ok) {
+          const cErr = await consentResp.json().catch(() => ({}));
+          const cMsg = cErr.detail || cErr.message || `HTTP ${consentResp.status}`;
+          showNotice(`Failed to set biometric consent: ${cMsg}`, "error");
+          appendLog(`consent update failed: HTTP ${consentResp.status}`);
+          return;
+        }
+
+        const resp = await fetch(`/persons/${personId}/enrollment/sessions`, {
+          method: "POST",
+          headers: {
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ mode: "add_samples" })
+        });
+
+        if (resp.status === 201) {
+          appendLog(`enrollment session started for: ${personId}`);
+          isEnrollmentCommitted = false;
+          pollEnrollmentStep(token, personId);
+        } else {
+          const err = await resp.json().catch(() => ({}));
+          const msg = err.detail || err.message || `HTTP ${resp.status}`;
+          showNotice(`Enrollment session start failed: ${msg}`, "error");
+          appendLog(`enrollment session start failed: HTTP ${resp.status}`);
+        }
+      } catch (err) {
+        showNotice(`Network error starting enrollment: ${err.message}`, "error");
+        appendLog(`network error starting enrollment: ${err.message}`);
+      }
+    }
+
+    function updateEnrollmentProgressUI(data) {
+      const dir = (data.current_direction || "FRONT").toUpperCase();
+      const instr = DIRECTION_INSTRUCTIONS[dir] || `Look ${dir}`;
+      document.getElementById("current-direction").textContent = dir;
+      document.getElementById("current-instruction").textContent = instr;
+
+      const counts = data.direction_counts || {};
+      const targets = data.direction_targets || {};
+      const getVal = (obj, key) => {
+        if (!obj) return undefined;
+        if (obj[key] !== undefined) return obj[key];
+        if (obj[key.toLowerCase()] !== undefined) return obj[key.toLowerCase()];
+        if (obj[key.toUpperCase()] !== undefined) return obj[key.toUpperCase()];
+        return undefined;
+      };
+      const parts = ["FRONT", "RIGHT", "LEFT"].map(d => {
+        const c = getVal(counts, d) ?? 0;
+        const t = getVal(targets, d) ?? 10;
+        return `${d} ${c}/${t}`;
+      });
+      document.getElementById("direction-progress").textContent = parts.join(" | ");
+
+      const total = data.samples_collected !== undefined ? data.samples_collected : (data.total_samples !== undefined ? data.total_samples : 0);
+      const target = data.target_samples !== undefined ? data.target_samples : 30;
+      document.getElementById("total-progress").textContent = `${total}/${target}`;
+    }
+
+    function pollEnrollmentStep(token, personId) {
+      if (enrollmentIntervalId) {
+        clearInterval(enrollmentIntervalId);
+      }
+
+      enrollmentIntervalId = setInterval(async () => {
+        if (isEnrollmentCommitted || isStepInProgress) return;
+        isStepInProgress = true;
+
+        try {
+          const resp = await fetch(`/persons/${personId}/enrollment/sessions/step`, {
+            method: "POST",
+            headers: {
+              "Authorization": "Bearer " + token,
+              "Content-Type": "application/json"
+            }
+          });
+
+          if (resp.status === 200) {
+            const data = await resp.json();
+            updateEnrollmentProgressUI(data);
+
+            const isComplete = Boolean(data.is_complete || (data.state && data.state.toUpperCase() === "COMPLETED"));
+            if (isComplete && !isEnrollmentCommitted) {
+              isEnrollmentCommitted = true;
+              clearInterval(enrollmentIntervalId);
+              enrollmentIntervalId = null;
+              await commitEnrollment(token, personId);
+            }
+          } else {
+            const err = await resp.json().catch(() => ({}));
+            appendLog(`enrollment step error: HTTP ${resp.status} (${err.detail || err.message || ""})`);
+          }
+        } catch (err) {
+          appendLog(`enrollment step network error: ${err.message}`);
+        } finally {
+          isStepInProgress = false;
+        }
+      }, 500);
+    }
+
+    async function commitEnrollment(token, personId) {
+      try {
+        const resp = await fetch(`/persons/${personId}/enrollment/sessions/commit`, {
+          method: "POST",
+          headers: {
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json"
+          }
+        });
+
+        if (resp.status === 200) {
+          const data = await resp.json();
+          const persistedCount = data.samples_enrolled !== undefined ? data.samples_enrolled : (data.samples_persisted || 30);
+          appendLog(`enrollment committed: ${persistedCount} embeddings saved`);
+          showNotice(`Registration complete. ${persistedCount} embeddings saved.`, "info");
+          document.getElementById("current-instruction").textContent = "Enrollment Complete";
+          document.getElementById("current-instruction").style.color = "#15803d";
+          document.getElementById("total-progress").textContent = `${persistedCount}/30`;
+          document.getElementById("auth-action-section").style.display = "block";
+        } else {
+          const err = await resp.json().catch(() => ({}));
+          const msg = err.detail || err.message || `HTTP ${resp.status}`;
+          showNotice(`Enrollment commit failed: ${msg}`, "error");
+          appendLog(`enrollment commit failed: HTTP ${resp.status}`);
+        }
+      } catch (err) {
+        showNotice(`Network error committing enrollment: ${err.message}`, "error");
+        appendLog(`network error committing enrollment: ${err.message}`);
+      }
+    }
+
+    async function startAuthorization() {
+      clearNotice();
+      const token = document.getElementById("token-input").value.trim();
+      const startBtn = document.getElementById("start-btn");
+
+      if (!token) {
+        showNotice("Please enter an operator Bearer token with required scopes.", "error");
+        return;
+      }
+
+      if (currentPersonId && !isEnrollmentCommitted) {
+        showNotice("Enrollment must be completed and committed before starting authorization.", "error");
+        return;
+      }
+
+      startBtn.disabled = true;
+
+      try {
+        const resp = await fetch("/authorization/sessions", {
+          method: "POST",
+          headers: {
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json"
+          }
+        });
+
+        if (resp.status === 201) {
+          const data = await resp.json();
+          currentAuthId = data.authorization_id;
+          appendLog(`authorization session started: ${data.authorization_id}`);
+          updateSessionUI(data);
+          connectSSE(token);
+        } else if (resp.status === 409) {
+          const err = await resp.json().catch(() => ({}));
+          showNotice(`Active session in progress (${err.detail || 'Conflict'})`, "info");
+          appendLog("authorization 409 active session already exists");
+          connectSSE(token);
+        } else if (resp.status === 401 || resp.status === 403) {
+          const err = await resp.json().catch(() => ({}));
+          showNotice(`Authentication failed (${resp.status}): ${err.message || err.detail || 'Unauthorized'}`, "error");
+          appendLog(`authorization request failed: HTTP ${resp.status}`);
+        } else if (resp.status === 503) {
+          showNotice("Authorization service unavailable (runtime not running)", "error");
+          appendLog("authorization request failed: HTTP 503 service unavailable");
+        } else {
+          showNotice(`Unexpected error: HTTP ${resp.status}`, "error");
+          appendLog(`authorization request failed: HTTP ${resp.status}`);
+        }
+      } catch (err) {
+        showNotice(`Network error: ${err.message}`, "error");
+        appendLog(`network error: ${err.message}`);
+      } finally {
+        startBtn.disabled = false;
+      }
+    }
+
+    async function connectSSE(token) {
+      if (isConnecting || abortController) {
+        return;
+      }
+
+      isConnecting = true;
+      setSseIndicator("connecting", "Connecting...");
+      appendLog("connecting to /interaction/events SSE stream...");
+
+      abortController = new AbortController();
+
+      try {
+        const resp = await fetch("/interaction/events", {
+          headers: {
+            "Authorization": "Bearer " + token
+          },
+          signal: abortController.signal
+        });
+
+        if (!resp.ok) {
+          setSseIndicator("error", `HTTP ${resp.status}`);
+          appendLog(`SSE stream connection failed: HTTP ${resp.status}`);
+          isConnecting = false;
+          abortController = null;
+          return;
+        }
+
+        setSseIndicator("connected", "Connected");
+        appendLog("SSE stream connected.");
+        isConnecting = false;
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop();
+
+          for (const block of parts) {
+            handleSseBlock(block);
+          }
+        }
+      } catch (err) {
+        if (err.name !== "AbortError") {
+          setSseIndicator("error", "Disconnected");
+          appendLog(`SSE stream error: ${err.message}`);
+        }
+      } finally {
+        isConnecting = false;
+        abortController = null;
+        setSseIndicator("error", "Disconnected");
+      }
+    }
+
+    function handleSseBlock(raw) {
+      if (!raw.trim()) return;
+
+      let eventType = "message";
+      let dataStr = "";
+
+      const lines = raw.split("\n");
+      for (const line of lines) {
+        if (line.startsWith("event:")) {
+          eventType = line.slice(6).trim();
+        } else if (line.startsWith("data:")) {
+          dataStr = line.slice(5).trim();
+        }
+      }
+
+      if (!dataStr) return;
+
+      try {
+        const payload = JSON.parse(dataStr);
+        if (eventType === "authorization_updated" || payload.event_type === "authorization_updated") {
+          const who = payload.display_name || payload.person_id || "unidentified";
+          appendLog(`authorization ${payload.status} (${who})`);
+          updateSessionUI(payload);
+          if (payload.authorization_id) {
+            currentAuthId = payload.authorization_id;
+          }
+          const st = (payload.status || "").toUpperCase();
+          if (st === "AUTHORIZED") {
+            const token = document.getElementById("token-input").value.trim();
+            fetchAuthorizedContext(token, payload.authorization_id || currentAuthId);
+          } else {
+            clearContextUI();
+          }
+        } else if (eventType === "context") {
+          appendLog("received context snapshot from edge runtime");
+        } else {
+          appendLog(`event: ${eventType}`);
+        }
+      } catch (e) {
+        // Non-JSON SSE frame
+      }
+    }
+
+    async function fetchAuthorizedContext(token, authorizationId) {
+      if (!token || !authorizationId) return;
+
+      try {
+        const resp = await fetch(`/authorization/sessions/${authorizationId}/context`, {
+          headers: {
+            "Authorization": "Bearer " + token
+          }
+        });
+
+        if (resp.status === 200) {
+          const data = await resp.json();
+          appendLog(`retrieved authorized context for: ${data.display_name || data.person_id}`);
+          displayContextUI(data);
+        } else {
+          appendLog(`authorized context retrieval HTTP ${resp.status}`);
+          clearContextUI();
+        }
+      } catch (err) {
+        appendLog(`error fetching authorized context: ${err.message}`);
+        clearContextUI();
+      }
+    }
+
+    function clearContextUI() {
+      const panel = document.getElementById("context-panel");
+      if (panel) {
+        panel.style.display = "none";
+      }
+    }
+
+    function displayContextUI(ctx) {
+      const panel = document.getElementById("context-panel");
+      if (!panel) return;
+      panel.style.display = "block";
+
+      const nameEl = document.getElementById("ctx-name");
+      nameEl.textContent = ctx.preferred_name
+        ? `${ctx.display_name} (${ctx.preferred_name})`
+        : (ctx.display_name || "-");
+
+      document.getElementById("ctx-role").textContent = ctx.role || "-";
+      document.getElementById("ctx-department").textContent = ctx.department || "-";
+      document.getElementById("ctx-room").textContent = ctx.office_room || "-";
+      document.getElementById("ctx-hours").textContent = ctx.working_hours || "-";
+      document.getElementById("ctx-desc").textContent = ctx.profile_description || "-";
+
+      const qaContainer = document.getElementById("ctx-qa");
+      qaContainer.innerHTML = "";
+      if (Array.isArray(ctx.qa_pairs) && ctx.qa_pairs.length > 0) {
+        for (const pair of ctx.qa_pairs) {
+          const d = document.createElement("div");
+          d.style.marginBottom = "0.4rem";
+          d.style.padding = "0.25rem 0.5rem";
+          d.style.background = "#ffffff";
+          d.style.borderRadius = "4px";
+          d.style.border = "1px solid #dcfce7";
+          d.innerHTML = `<div><strong>Q:</strong> ${escapeHtml(pair.question)}</div><div><strong>A:</strong> ${escapeHtml(pair.answer)}</div>`;
+          qaContainer.appendChild(d);
+        }
+      } else {
+        qaContainer.textContent = "None";
+      }
+    }
+  </script>
+</body>
+</html>

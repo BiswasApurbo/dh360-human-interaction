@@ -7,7 +7,7 @@ from typing import Any
 
 from dh360_hi.application.factory import create_interaction_service
 from dh360_hi.application.health import SubsystemHealthStatus
-from dh360_hi.application.loader import load_config
+from dh360_hi.application.loader import load_config, resolve_cli_db_path
 from dh360_hi.cli.formatting import format_json, format_key_value, format_table
 
 
@@ -23,7 +23,7 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     )
     parser.add_argument("--preset", help="Configuration preset (development, testing, production)")
     parser.add_argument("--config-file", help="Path to TOML configuration file")
-    parser.add_argument("--db-path", help="Override SQLite database path")
+    parser.add_argument("--db-path", help="Override SQLite database path (default: dh360_hi.db)")
     parser.add_argument(
         "--json", action="store_true", help="Output in machine-readable JSON format"
     )
@@ -32,8 +32,9 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
 def handle_health(args: argparse.Namespace) -> int:
     """Evaluate and display service health snapshot."""
     overrides: dict[str, Any] = {}
-    if getattr(args, "db_path", None):
-        overrides["db_path"] = args.db_path
+    cli_db = resolve_cli_db_path(args)
+    if cli_db is not None:
+        overrides["db_path"] = cli_db
 
     config = load_config(
         preset=getattr(args, "preset", None),

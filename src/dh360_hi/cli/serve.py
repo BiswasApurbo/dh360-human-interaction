@@ -4,14 +4,23 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from typing import Any
 
 from dh360_hi.api.app import create_app
+from dh360_hi.application.dialogue_coordinator import DialogueCoordinator
 from dh360_hi.application.factory import create_interaction_service
-from dh360_hi.application.loader import load_config
+from dh360_hi.application.loader import load_config, resolve_cli_db_path
+from dh360_hi.backend.knowledge_service import KnowledgeService
 from dh360_hi.cli.run import _build_frame_source
+from dh360_hi.contracts.dialogue import MockLLMProvider
 from dh360_hi.contracts.errors import ValidationAppError
 from dh360_hi.edge.authorization_controller import AuthorizationController
+from dh360_hi.integrations.eliva import (
+    ElivaGeminiAdapter,
+    ElivaGoogleTTSAdapter,
+    ElivaSonioxAdapter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +56,29 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     parser.add_argument("--video-loop", action="store_true", help="Loop video stream continuously")
     parser.add_argument("--preset", help="Configuration preset (development, testing, production)")
     parser.add_argument("--config-file", help="Path to TOML configuration file")
-    parser.add_argument("--db-path", help="Override SQLite database path")
+    parser.add_argument("--db-path", help="Override SQLite database path (default: dh360_hi.db)")
     parser.add_argument("--target-fps", type=float, help="Override target frame rate ceiling")
     parser.add_argument("--detector-model-path", help="Path to YuNet ONNX face detection model")
     parser.add_argument("--embedder-model-path", help="Path to SFace ONNX face embedding model")
+    parser.add_argument(
+        "--dialogue-mode",
+        choices=["auto", "mock", "live", "disabled"],
+        default="auto",
+        help="Dialogue mode: auto (live/mock fallback), mock, live, or disabled (default: auto)",
+    )
+    parser.add_argument(
+        "--mock-dialogue",
+        action="store_true",
+        help="Run dialogue in offline mock mode (alias for --dialogue-mode mock)",
+    )
+    parser.add_argument(
+        "--continuous-presence",
+        action="store_true",
+        help=(
+            "Require continuous face presence to maintain authorization "
+            "(default: persistent until logout)"
+        ),
+    )
 
 
 def handle_serve(args: argparse.Namespace) -> int:
@@ -60,8 +88,9 @@ def handle_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
     overrides: dict[str, Any] = {}
-    if getattr(args, "db_path", None):
-        overrides["db_path"] = args.db_path
+    cli_db = resolve_cli_db_path(args)
+    if cli_db is not None:
+        overrides["db_path"] = cli_db
     if getattr(args, "target_fps", None):
         if "runtime" not in overrides:
             overrides["runtime"] = {}
@@ -109,9 +138,57 @@ def handle_serve(args: argparse.Namespace) -> int:
     auth_ctrl = AuthorizationController(
         session_manager=service.runtime.session_manager,
         timeout_seconds=timeout_sec,
+        require_continuous_presence=getattr(args, "continuous_presence", False),
     )
 
-    app = create_app(service=service, authorization_controller=auth_ctrl)
+    # Dialogue subsystem composition
+    raw_mode = (
+        "mock" if getattr(args, "mock_dialogue", False) else getattr(args, "dialogue_mode", "auto")
+    )
+    dialogue_coord: DialogueCoordinator | None = None
+    effective_mode = raw_mode
+
+    if raw_mode != "disabled":
+        knowledge_svc = KnowledgeService(person_service=service.person_service)
+        has_gemini_key = bool(os.getenv("GEMINI_API_KEY", "").strip())
+
+        if raw_mode == "mock" or (raw_mode == "auto" and not has_gemini_key):
+            llm_provider = MockLLMProvider()
+            stt_provider = None
+            tts_provider = None
+            effective_mode = "mock"
+        else:
+            # Live Eliva adapters (lazy SDK imports; no hardware accessed on init)
+            try:
+                from dh360_hi.integrations.eliva import gemini, gtts, soniox
+
+                gemini_key = getattr(gemini, "GEMINI_API_KEY", "") or None
+                soniox_key = getattr(soniox, "SONIOX_API_KEY", "") or None
+                gtts_json = getattr(gtts, "SERVICE_ACCOUNT_JSON", "") or None
+            except Exception:
+                gemini_key = None
+                soniox_key = None
+                gtts_json = None
+
+            llm_provider = ElivaGeminiAdapter(api_key=gemini_key)
+            stt_provider = ElivaSonioxAdapter(api_key=soniox_key)
+            tts_provider = ElivaGoogleTTSAdapter(credentials_json=gtts_json)
+            effective_mode = "live"
+
+        dialogue_coord = DialogueCoordinator(
+            event_bus=service.event_bus,
+            knowledge_service=knowledge_svc,
+            authorization_controller=auth_ctrl,
+            llm_provider=llm_provider,
+            stt_provider=stt_provider,
+            tts_provider=tts_provider,
+        )
+
+    app = create_app(
+        service=service,
+        authorization_controller=auth_ctrl,
+        dialogue_coordinator=dialogue_coord,
+    )
 
     host = getattr(args, "host", "127.0.0.1")
     port = getattr(args, "port", 8000)
@@ -122,11 +199,17 @@ def handle_serve(args: argparse.Namespace) -> int:
         print(f"  Frame Source : {args.source}")
         print(f"  Target FPS   : {config.runtime.target_fps}")
         print(f"  DB Path      : {config.db_path}")
+        if dialogue_coord is not None:
+            print(f"  Dialogue     : {effective_mode.upper()} (endpoint: /dialogue/turn)")
+        else:
+            print("  Dialogue     : DISABLED")
         print("Starting unified API & perception server...")
 
         uvicorn.run(app, host=host, port=port, log_level="warning")
         return 0
     finally:
-        # Graceful shutdown of service and controller
+        # Graceful shutdown of service, dialogue coordinator, and controller
+        if dialogue_coord is not None:
+            dialogue_coord.close()
         auth_ctrl.close()
         service.stop(timeout=3.0)

@@ -6,7 +6,7 @@ import argparse
 from typing import Any
 
 from dh360_hi.application.factory import create_interaction_service
-from dh360_hi.application.loader import load_config
+from dh360_hi.application.loader import load_config, resolve_cli_db_path
 from dh360_hi.backend.models import SessionQueryFilter
 from dh360_hi.cli.formatting import format_json, format_key_value, format_table
 from dh360_hi.contracts.errors import EntityNotFoundError
@@ -24,7 +24,7 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     def add_common_args(p: argparse.ArgumentParser) -> None:
         p.add_argument("--preset", help="Configuration preset (development, testing, production)")
         p.add_argument("--config-file", help="Path to TOML configuration file")
-        p.add_argument("--db-path", help="Override SQLite database path")
+        p.add_argument("--db-path", help="Override SQLite database path (default: dh360_hi.db)")
 
     def add_filter_args(p: argparse.ArgumentParser) -> None:
         p.add_argument("--person-id", help="Filter by person UUID identifier")
@@ -125,8 +125,9 @@ def handle_session(args: argparse.Namespace) -> int:
     action = args.session_action
 
     overrides: dict[str, Any] = {}
-    if getattr(args, "db_path", None):
-        overrides["db_path"] = args.db_path
+    cli_db = resolve_cli_db_path(args)
+    if cli_db is not None:
+        overrides["db_path"] = cli_db
 
     config = load_config(
         preset=getattr(args, "preset", None),

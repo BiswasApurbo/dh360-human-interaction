@@ -238,6 +238,11 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+.credentials/
+*.service_account.json
+*service-account*.json
+*service_account*.json
+firebase-adminsdk*.json
 
 # Runtime Data, Captures, & Logs
 data/

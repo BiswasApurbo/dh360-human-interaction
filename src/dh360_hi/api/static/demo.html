@@ -401,6 +401,96 @@
     .hud-arrow-anim-left {
       animation: arrowBlinkLeft 1.2s ease-in-out infinite;
     }
+
+    /* Conversational Assistant (Chat) Panel Styling */
+    .chat-msg {
+      display: flex;
+      flex-direction: column;
+      max-width: 85%;
+      border-radius: 8px;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.85rem;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .chat-msg-user {
+      align-self: flex-end;
+      background-color: #2563eb;
+      color: #ffffff;
+      border-bottom-right-radius: 2px;
+    }
+    .chat-msg-model {
+      align-self: flex-start;
+      background-color: #f1f5f9;
+      color: #0f172a;
+      border: 1px solid #e2e8f0;
+      border-bottom-left-radius: 2px;
+    }
+    .chat-msg-header {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.7rem;
+      margin-bottom: 0.25rem;
+      opacity: 0.85;
+    }
+    .chat-msg-user .chat-msg-header {
+      justify-content: flex-end;
+      color: #dbeafe;
+    }
+    .chat-msg-model .chat-msg-header {
+      justify-content: flex-start;
+      color: #64748b;
+    }
+    .chat-mock-badge {
+      display: inline-block;
+      font-size: 0.65rem;
+      font-weight: 700;
+      padding: 1px 4px;
+      border-radius: 3px;
+      background-color: #fef08a;
+      color: #854d0e;
+      border: 1px solid #facc15;
+      letter-spacing: 0.5px;
+    }
+    .chat-msg-body {
+      white-space: pre-wrap;
+    }
+    .chat-loading {
+      align-self: flex-start;
+      padding: 0.4rem 0.7rem;
+      background: #f1f5f9;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      color: #64748b;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-style: italic;
+    }
+    .chat-access-banner.authorized {
+      background: #f0fdf4 !important;
+      border-color: #86efac !important;
+    }
+    .chat-access-banner.authorized #chat-access-text {
+      color: #166534 !important;
+    }
+    .chat-access-banner.general {
+      background: #f9fafb !important;
+      border-color: #e5e7eb !important;
+    }
+    .chat-access-banner.general #chat-access-text {
+      color: #4b5563 !important;
+    }
+    @keyframes micPulse {
+      0% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.7); }
+      70% { box-shadow: 0 0 0 8px rgba(220, 38, 38, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
+    }
+    .mic-active {
+      background-color: #dc2626 !important;
+      animation: micPulse 1.5s infinite;
+    }
   </style>
 </head>
 <body>
@@ -413,7 +503,7 @@
       </label>
       <input type="text" id="token-input" placeholder="Paste DH360_HI_API__OPERATOR_TOKEN from server environment" spellcheck="false" />
       <span style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">
-        Required scopes: persons:read, persons:create, persons:update, persons:delete, biometrics:reset, consent:manage, enrollment:manage, interaction:read, authorization:manage
+        Required scopes: persons:read, persons:create, persons:update, persons:delete, biometrics:reset, consent:manage, enrollment:manage, interaction:read, authorization:manage, dialogue:interact
       </span>
     </div>
 
@@ -652,6 +742,65 @@
       <div class="field-row" style="flex-direction:column; align-items:flex-start; border-bottom:none;"><span class="field-label" style="width:100%; margin-bottom:0.25rem;">Q&amp;A Pairs:</span><div id="ctx-qa" style="font-family:inherit; font-size:0.85rem; color:#374151; width:100%; margin-top:0.25rem;">None</div></div>
     </div>
 
+    <!-- Conversational Assistant (Eliva Dialogue) Panel -->
+    <div id="chat-section" class="status-panel" style="margin-top: 1rem; background-color: #ffffff; padding: 1.25rem;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+        <h3 style="font-size: 1rem; font-weight: 600; margin: 0; color: #111827; display: flex; align-items: center; gap: 0.5rem;">
+          <span>Conversational Assistant (Eliva)</span>
+        </h3>
+        <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap: wrap;">
+          <select id="chat-language" style="font-size: 0.8rem; padding: 0.25rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: white; color: var(--text);">
+            <option value="bn" selected>Bangla (বাংলা)</option>
+            <option value="en">English (English)</option>
+          </select>
+          <label style="font-size: 0.75rem; color: #4b5563; display: flex; align-items: center; gap: 0.25rem; cursor: pointer; user-select: none;">
+            <input type="checkbox" id="chat-tts-toggle" checked /> Voice Output
+          </label>
+          <button id="chat-clear-btn" type="button" onclick="clearChatHistory()" style="background: #6b7280; font-size: 0.75rem; padding: 0.25rem 0.55rem; border-radius: 4px;">Clear</button>
+        </div>
+      </div>
+
+      <!-- Access Mode Indicator -->
+      <div id="chat-access-banner" class="chat-access-banner general" style="margin-bottom: 0.75rem; padding: 0.5rem 0.75rem; border-radius: 6px; font-size: 0.8rem; display: flex; align-items: center; justify-content: space-between; border: 1px solid #e5e7eb; background: #f9fafb;">
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+          <span id="chat-access-icon">🔒</span>
+          <span id="chat-access-text" style="font-weight: 600; color: #4b5563;">General mode — confidential answers locked</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+          <span id="chat-access-subtext" style="font-size: 0.75rem; color: #6b7280;">Public knowledge only</span>
+          <button id="chat-logout-btn" type="button" onclick="handleLogout()" style="display: none; background: #dc2626; color: #ffffff; border: none; border-radius: 4px; padding: 0.25rem 0.65rem; font-size: 0.75rem; font-weight: 600; cursor: pointer;">End Authorized Session</button>
+        </div>
+      </div>
+
+      <!-- Chat History Box -->
+      <div id="chat-history" class="chat-history" style="border: 1px solid var(--border); border-radius: 6px; height: 260px; max-height: 260px; overflow-y: auto; padding: 0.75rem; background: #f8fafc; margin-bottom: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem;">
+        <div class="chat-system-notice" style="font-size: 0.75rem; color: #64748b; text-align: center; padding: 0.25rem 0;">
+          Welcome! Ask general questions in General mode, or authorize face identity to ask personal questions.
+        </div>
+      </div>
+
+      <!-- Chat Input Controls -->
+      <div style="display: flex; gap: 0.5rem; align-items: center;">
+        <button id="chat-mic-btn" type="button" onclick="toggleVoiceInput()" style="font-size: 0.85rem; padding: 0.5rem 0.85rem; background: #2563eb; color: white; border-radius: 6px; border: none; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; font-weight: 500;" title="Click to speak your question">
+          <span id="chat-mic-icon">🎙️</span> <span id="chat-mic-label">Speak</span>
+        </button>
+        <button id="chat-stop-btn" type="button" onclick="stopSpeechAndListening()" style="display: none; font-size: 0.85rem; padding: 0.5rem 0.85rem; background: #dc2626; color: white; border-radius: 6px; border: none; cursor: pointer; font-weight: 500;" title="Stop audio playback or listening">
+          <span>⏹ Stop</span>
+        </button>
+        <input type="text" id="chat-input" placeholder="Type or click Speak (e.g. 'তুমি কে?' or 'Who is Eliva?')..." style="flex: 1; padding: 0.5rem 0.75rem; font-size: 0.85rem; font-family: inherit; border: 1px solid var(--border); border-radius: 6px;" onkeydown="handleChatKeyDown(event)" />
+        <button id="chat-send-btn" type="button" onclick="sendChatMessage()" style="font-size: 0.85rem; padding: 0.5rem 1rem;">Send</button>
+      </div>
+
+      <!-- Voice Status Indicator -->
+      <div id="chat-voice-status" style="margin-top: 0.5rem; font-size: 0.8rem; color: #4b5563; display: flex; align-items: center; gap: 0.5rem;">
+        <span id="chat-voice-dot" style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#10b981;"></span>
+        <span id="chat-voice-text">Ready</span>
+      </div>
+
+      <!-- Chat Error Box -->
+      <div id="chat-error-box" style="display: none; margin-top: 0.5rem; padding: 0.4rem 0.6rem; border-radius: 4px; font-size: 0.8rem; background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5;"></div>
+    </div>
+
     <div id="people-section" class="status-panel" style="margin-top:1rem;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
         <h3 style="font-size: 1rem; font-weight:600; margin:0; color:#111827;">Registered People</h3>
@@ -758,6 +907,12 @@
       document.getElementById("auth-started").textContent = session.started_at || session.created_at || "-";
       document.getElementById("auth-updated").textContent = session.updated_at || "-";
       document.getElementById("auth-ended").textContent = session.ended_at || "-";
+
+      if (st === "AUTHORIZED") {
+        updateChatAccessState(true, session.display_name || session.person_id);
+      } else {
+        updateChatAccessState(false);
+      }
     }
 
     function setSseIndicator(state, text) {
@@ -2184,12 +2339,14 @@
       if (panel) {
         panel.style.display = "none";
       }
+      updateChatAccessState(false);
     }
 
     function displayContextUI(ctx) {
       const panel = document.getElementById("context-panel");
       if (!panel) return;
       panel.style.display = "block";
+      updateChatAccessState(true, ctx.display_name || ctx.person_id);
 
       const nameEl = document.getElementById("ctx-name");
       nameEl.textContent = ctx.preferred_name
@@ -2404,30 +2561,36 @@
       const tokenInput = document.getElementById("token-input");
       if (tokenInput) {
         try {
-          const savedToken = sessionStorage.getItem("dh360_operator_token");
+          const savedToken = localStorage.getItem("dh360_operator_token") || sessionStorage.getItem("dh360_operator_token");
           if (savedToken && !tokenInput.value) {
             tokenInput.value = savedToken;
           }
         } catch (e) {
-          // sessionStorage may fail in private browsing mode
+          // Storage access may fail in private browsing mode
         }
-        tokenInput.addEventListener("input", () => {
+        const persistToken = () => {
+          const val = tokenInput.value.trim();
           try {
-            sessionStorage.setItem("dh360_operator_token", tokenInput.value.trim());
+            if (val) {
+              localStorage.setItem("dh360_operator_token", val);
+              sessionStorage.setItem("dh360_operator_token", val);
+            } else {
+              localStorage.removeItem("dh360_operator_token");
+              sessionStorage.removeItem("dh360_operator_token");
+            }
           } catch (e) {}
+        };
+        tokenInput.addEventListener("input", () => {
+          persistToken();
           updateRegisterButtonState();
         });
         tokenInput.addEventListener("change", () => {
-          try {
-            sessionStorage.setItem("dh360_operator_token", tokenInput.value.trim());
-          } catch (e) {}
+          persistToken();
           updateRegisterButtonState();
           loadRegisteredPersons();
         });
         tokenInput.addEventListener("blur", () => {
-          try {
-            sessionStorage.setItem("dh360_operator_token", tokenInput.value.trim());
-          } catch (e) {}
+          persistToken();
           updateRegisterButtonState();
           loadRegisteredPersons();
         });
@@ -2442,7 +2605,514 @@
 
       updateRegisterButtonState();
       loadRegisteredPersons();
+      updateChatAccessState(false);
     });
+
+    // =========================================================================
+    // Conversational Assistant (Chat) Logic
+    // =========================================================================
+    let isChatInFlight = false;
+    let chatAuthorizedState = false;
+    let isVoiceInFlight = false;
+    let voiceAbortController = null;
+
+    function setChatVoiceState(state, text) {
+      const dot = document.getElementById("chat-voice-dot");
+      const textEl = document.getElementById("chat-voice-text");
+      const micBtn = document.getElementById("chat-mic-btn");
+      const micLabel = document.getElementById("chat-mic-label");
+      const stopBtn = document.getElementById("chat-stop-btn");
+
+      if (textEl) textEl.textContent = text || state;
+
+      if (dot) {
+        if (state === "listening") {
+          dot.style.background = "#ef4444";
+        } else if (state === "transcribing" || state === "thinking") {
+          dot.style.background = "#3b82f6";
+        } else if (state === "speaking") {
+          dot.style.background = "#f59e0b";
+        } else if (state === "error") {
+          dot.style.background = "#dc2626";
+        } else {
+          dot.style.background = "#10b981";
+        }
+      }
+
+      if (micBtn && micLabel) {
+        if (state === "listening" || state === "transcribing") {
+          micBtn.className = "mic-active";
+          micLabel.textContent = "Listening...";
+        } else {
+          micBtn.className = "";
+          micLabel.textContent = "Speak";
+        }
+      }
+
+      if (stopBtn) {
+        if (state === "listening" || state === "transcribing" || state === "thinking" || state === "speaking") {
+          stopBtn.style.display = "inline-flex";
+        } else {
+          stopBtn.style.display = "none";
+        }
+      }
+    }
+
+    async function stopSpeechAndListening() {
+      if (voiceAbortController) {
+        try {
+          voiceAbortController.abort();
+        } catch (_) {}
+        voiceAbortController = null;
+      }
+
+      isVoiceInFlight = false;
+      setChatVoiceState("ready", "Ready");
+
+      const tokenInput = document.getElementById("token-input");
+      const token = (tokenInput?.value || "").trim();
+      if (token) {
+        try {
+          await fetch("/dialogue/interrupt", {
+            method: "POST",
+            headers: {
+              "Authorization": "Bearer " + token
+            }
+          });
+        } catch (_) {}
+      }
+
+      const micBtn = document.getElementById("chat-mic-btn");
+      if (micBtn) micBtn.disabled = false;
+      const sendBtn = document.getElementById("chat-send-btn");
+      if (sendBtn) sendBtn.disabled = false;
+      const input = document.getElementById("chat-input");
+      if (input) input.disabled = false;
+    }
+
+    async function toggleVoiceInput() {
+      if (isVoiceInFlight) {
+        await stopSpeechAndListening();
+        return;
+      }
+      if (isChatInFlight) return;
+
+      const tokenInput = document.getElementById("token-input");
+      const langSelect = document.getElementById("chat-language");
+      const ttsToggle = document.getElementById("chat-tts-toggle");
+      const micBtn = document.getElementById("chat-mic-btn");
+      const sendBtn = document.getElementById("chat-send-btn");
+      const input = document.getElementById("chat-input");
+
+      const token = (tokenInput?.value || "").trim();
+      if (!token) {
+        showChatError("Operator Bearer token is required for voice interaction. Please enter your token in the field above.");
+        return;
+      }
+
+      hideChatError();
+
+      // Check browser microphone permission if supported
+      if (typeof navigator !== "undefined" && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          stream.getTracks().forEach(t => t.stop());
+        } catch (permErr) {
+          const isDenied = permErr.name === "NotAllowedError" || permErr.name === "PermissionDeniedError";
+          if (isDenied) {
+            showChatError("Microphone access was denied. Please allow microphone permissions in your browser or macOS System Settings.");
+            setChatVoiceState("error", "Microphone access denied");
+            return;
+          }
+        }
+      }
+
+      isVoiceInFlight = true;
+      if (micBtn) micBtn.disabled = false;
+      if (sendBtn) sendBtn.disabled = true;
+      if (input) input.disabled = true;
+
+      setChatVoiceState("listening", "Listening... Please speak into your microphone now");
+      const loadingEl = appendChatLoading();
+      if (loadingEl) loadingEl.textContent = "Listening for speech...";
+
+      const language = langSelect ? langSelect.value : "bn";
+      const speakResponse = ttsToggle ? ttsToggle.checked : true;
+
+      voiceAbortController = new AbortController();
+
+      try {
+        const resp = await fetch("/dialogue/turn/voice", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + token
+          },
+          body: JSON.stringify({
+            language: language,
+            speak_response: speakResponse
+          }),
+          signal: voiceAbortController.signal
+        });
+
+        removeChatLoading(loadingEl);
+
+        if (resp.status === 200) {
+          const data = await resp.json();
+          const userText = data.user_text || "";
+          if (userText) {
+            appendChatMessage("user", userText, false);
+          }
+
+          const replyText = data.text || "";
+          const isMock = replyText.startsWith("[MOCK]") || (data.metadata && data.metadata.source === "mock_llm") || (data.metadata && data.metadata.mock === true);
+          appendChatMessage("model", replyText, isMock, data.metadata);
+
+          if (data.metadata && data.metadata.error) {
+            if (data.metadata.error === "EMPTY_UTTERANCE") {
+              showChatError("No speech detected. Please speak clearly into the microphone and try again.");
+              setChatVoiceState("error", "No speech detected");
+            } else {
+              showChatError(`Voice notice: ${data.metadata.error}`);
+              setChatVoiceState("error", data.metadata.error);
+            }
+          } else {
+            if (speakResponse) {
+              setChatVoiceState("speaking", "Eliva is speaking answer aloud...");
+              setTimeout(() => {
+                if (!isVoiceInFlight) setChatVoiceState("ready", "Ready");
+              }, 4000);
+            } else {
+              setChatVoiceState("ready", "Ready");
+            }
+          }
+        } else {
+          let errMsg = `HTTP ${resp.status}`;
+          try {
+            const errData = await resp.json();
+            if (resp.status === 401) {
+              errMsg = "Authentication failed (401). Invalid Bearer token.";
+            } else if (resp.status === 403) {
+              errMsg = "Insufficient scope (403). Token must include 'dialogue:interact'.";
+            } else if (resp.status === 502) {
+              errMsg = "Bad Gateway (502): AI/Voice Provider error or credentials missing.";
+            } else if (resp.status === 503) {
+              errMsg = "Service Unavailable (503): Dialogue coordinator is not running.";
+            } else if (resp.status === 504) {
+              errMsg = "Gateway Timeout (504): Provider request timed out.";
+            } else {
+              errMsg = errData.message || errData.error || errData.detail || errMsg;
+            }
+          } catch (_) {}
+          showChatError(errMsg);
+          setChatVoiceState("error", errMsg);
+          appendChatMessage("model", `⚠️ ${errMsg}`, false, { error: true });
+        }
+      } catch (err) {
+        removeChatLoading(loadingEl);
+        if (err.name === "AbortError") {
+          setChatVoiceState("ready", "Voice canceled");
+        } else {
+          const netErr = `Network error: ${err.message}`;
+          showChatError(netErr);
+          setChatVoiceState("error", netErr);
+          appendChatMessage("model", `⚠️ ${netErr}`, false, { error: true });
+        }
+      } finally {
+        isVoiceInFlight = false;
+        voiceAbortController = null;
+        if (sendBtn) sendBtn.disabled = false;
+        if (input) input.disabled = false;
+        const stopBtn = document.getElementById("chat-stop-btn");
+        if (stopBtn) stopBtn.style.display = "none";
+        const micLabel = document.getElementById("chat-mic-label");
+        if (micLabel) micLabel.textContent = "Speak";
+        const micButton = document.getElementById("chat-mic-btn");
+        if (micButton) micButton.className = "";
+      }
+    }
+
+    function updateChatAccessState(isAuthorized, displayName = null) {
+      const wasAuthorized = chatAuthorizedState;
+      chatAuthorizedState = isAuthorized;
+      const banner = document.getElementById("chat-access-banner");
+      const icon = document.getElementById("chat-access-icon");
+      const text = document.getElementById("chat-access-text");
+      const subtext = document.getElementById("chat-access-subtext");
+      const input = document.getElementById("chat-input");
+      const logoutBtn = document.getElementById("chat-logout-btn");
+
+      if (!banner || !icon || !text || !subtext) return;
+
+      if (isAuthorized) {
+        banner.className = "chat-access-banner authorized";
+        icon.textContent = "🔓";
+        const nameStr = displayName ? ` (${displayName})` : "";
+        text.textContent = `Authorized mode — personal questions permitted${nameStr}`;
+        subtext.textContent = "Personal context active";
+        if (logoutBtn) logoutBtn.style.display = "inline-block";
+        if (input && !input.value) {
+          input.placeholder = "Ask about your office, hours, role, or personal Q&A...";
+        }
+        if (!wasAuthorized) {
+          appendChatSystemNotice(`Authorized mode active for ${displayName || "identified person"}. Personal questions are now permitted.`);
+        }
+      } else {
+        banner.className = "chat-access-banner general";
+        icon.textContent = "🔒";
+        text.textContent = "General mode — confidential answers locked";
+        subtext.textContent = "Public knowledge only";
+        if (logoutBtn) logoutBtn.style.display = "none";
+        if (input && !input.value) {
+          input.placeholder = "Ask general questions (e.g. 'তুমি কে?' or 'Who is Eliva?')...";
+        }
+        if (wasAuthorized) {
+          appendChatSystemNotice("Authorization ended or identity changed — switched to General mode (confidential answers locked).");
+        }
+      }
+    }
+
+    async function handleLogout() {
+      const token = (document.getElementById("token-input")?.value || "").trim();
+      const logoutBtn = document.getElementById("chat-logout-btn");
+      if (logoutBtn) logoutBtn.disabled = true;
+
+      try {
+        if (token) {
+          appendLog("revoking authorization via DELETE /authorization/sessions/current...");
+          await fetch("/authorization/sessions/current", {
+            method: "DELETE",
+            headers: {
+              "Authorization": "Bearer " + token
+            }
+          });
+        }
+      } catch (err) {
+        appendLog(`error revoking authorization: ${err.message}`);
+      } finally {
+        currentAuthId = null;
+        clearContextUI();
+        updateChatAccessState(false);
+        clearChatHistory();
+        appendChatSystemNotice("Logged out. Switched to General mode (confidential answers locked).");
+        showNotice("Authorized session ended. Switched to General mode.", "info");
+        appendLog("authorized session terminated by operator");
+        if (logoutBtn) logoutBtn.disabled = false;
+      }
+    }
+
+    function appendChatSystemNotice(text) {
+      const history = document.getElementById("chat-history");
+      if (!history || typeof history.appendChild !== "function") return;
+      const div = document.createElement("div");
+      div.className = "chat-system-notice";
+      div.style.fontSize = "0.75rem";
+      div.style.color = "#64748b";
+      div.style.textAlign = "center";
+      div.style.padding = "0.25rem 0";
+      div.style.borderTop = "1px dashed #cbd5e1";
+      div.style.borderBottom = "1px dashed #cbd5e1";
+      div.style.margin = "0.25rem 0";
+      div.textContent = text;
+      history.appendChild(div);
+      history.scrollTop = history.scrollHeight;
+    }
+
+    function appendChatMessage(role, text, isMock = false, metadata = null) {
+      const history = document.getElementById("chat-history");
+      if (!history || typeof history.appendChild !== "function") return;
+
+      const msgDiv = document.createElement("div");
+      msgDiv.className = `chat-msg chat-msg-${role}`;
+
+      const headerDiv = document.createElement("div");
+      headerDiv.className = "chat-msg-header";
+
+      const senderSpan = document.createElement("span");
+      senderSpan.style.fontWeight = "600";
+      senderSpan.textContent = role === "user" ? "You" : "Eliva";
+      headerDiv.appendChild(senderSpan);
+
+      if (isMock) {
+        const mockBadge = document.createElement("span");
+        mockBadge.className = "chat-mock-badge";
+        mockBadge.textContent = "MOCK";
+        mockBadge.title = "Offline mock response";
+        headerDiv.appendChild(mockBadge);
+      }
+
+      const timeSpan = document.createElement("span");
+      timeSpan.style.fontSize = "0.65rem";
+      timeSpan.style.opacity = "0.75";
+      timeSpan.textContent = new Date().toLocaleTimeString();
+      headerDiv.appendChild(timeSpan);
+
+      const bodyDiv = document.createElement("div");
+      bodyDiv.className = "chat-msg-body";
+      // Pure safe text rendering (NEVER innerHTML)
+      bodyDiv.textContent = text;
+
+      msgDiv.appendChild(headerDiv);
+      msgDiv.appendChild(bodyDiv);
+      history.appendChild(msgDiv);
+      history.scrollTop = history.scrollHeight;
+    }
+
+    function appendChatLoading() {
+      const history = document.getElementById("chat-history");
+      if (!history || typeof history.appendChild !== "function") return null;
+      const loadDiv = document.createElement("div");
+      loadDiv.className = "chat-loading";
+      loadDiv.id = "chat-loading-indicator";
+      loadDiv.textContent = "Eliva is thinking...";
+      history.appendChild(loadDiv);
+      history.scrollTop = history.scrollHeight;
+      return loadDiv;
+    }
+
+    function removeChatLoading(el) {
+      if (el && el.parentNode) {
+        el.parentNode.removeChild(el);
+      } else {
+        const fallback = document.getElementById("chat-loading-indicator");
+        if (fallback) fallback.remove();
+      }
+    }
+
+    function showChatError(msg) {
+      const errBox = document.getElementById("chat-error-box");
+      if (!errBox) return;
+      errBox.textContent = msg;
+      errBox.style.display = "block";
+    }
+
+    function hideChatError() {
+      const errBox = document.getElementById("chat-error-box");
+      if (!errBox) return;
+      errBox.textContent = "";
+      errBox.style.display = "none";
+    }
+
+    function clearChatHistory() {
+      const history = document.getElementById("chat-history");
+      if (!history) return;
+      history.innerHTML = "";
+      appendChatSystemNotice("Conversation history cleared. Ready for new questions.");
+      hideChatError();
+    }
+
+    function handleChatKeyDown(event) {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        sendChatMessage();
+      }
+    }
+
+    async function sendChatMessage() {
+      if (isChatInFlight) return;
+
+      const input = document.getElementById("chat-input");
+      const sendBtn = document.getElementById("chat-send-btn");
+      const langSelect = document.getElementById("chat-language");
+      const tokenInput = document.getElementById("token-input");
+
+      if (!input || !sendBtn) return;
+      const text = input.value.trim();
+      if (!text) return;
+
+      const token = (tokenInput?.value || "").trim();
+      if (!token) {
+        showChatError("Operator Bearer token is required to chat. Please enter your token in the field above.");
+        return;
+      }
+
+      hideChatError();
+      isChatInFlight = true;
+      sendBtn.disabled = true;
+      input.disabled = true;
+
+      // Render user message safely
+      appendChatMessage("user", text, false);
+      input.value = "";
+
+      // Loading indicator
+      const loadingEl = appendChatLoading();
+      const language = langSelect ? langSelect.value : "bn";
+      const ttsToggle = document.getElementById("chat-tts-toggle");
+      const speakResponse = ttsToggle ? ttsToggle.checked : true;
+
+      setChatVoiceState("thinking", "Eliva is thinking...");
+
+      try {
+        const resp = await fetch("/dialogue/turn", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + token
+          },
+          body: JSON.stringify({
+            text: text,
+            language: language,
+            speak_response: speakResponse
+          })
+        });
+
+        removeChatLoading(loadingEl);
+
+        if (resp.status === 200) {
+          const data = await resp.json();
+          const replyText = data.text || "";
+          const isMock = replyText.startsWith("[MOCK]") || (data.metadata && data.metadata.source === "mock_llm") || (data.metadata && data.metadata.mock === true);
+          appendChatMessage("model", replyText, isMock, data.metadata);
+
+          if (data.metadata && data.metadata.error) {
+            showChatError(`Provider notice: ${data.metadata.error} (Fallback message returned)`);
+            setChatVoiceState("ready", "Ready");
+          } else {
+            if (speakResponse) {
+              setChatVoiceState("speaking", "Eliva is speaking answer aloud...");
+              setTimeout(() => {
+                setChatVoiceState("ready", "Ready");
+              }, 4000);
+            } else {
+              setChatVoiceState("ready", "Ready");
+            }
+          }
+        } else {
+          let errMsg = `HTTP ${resp.status}`;
+          try {
+            const errData = await resp.json();
+            if (resp.status === 401) {
+              errMsg = "Authentication failed (401). Invalid Bearer token.";
+            } else if (resp.status === 403) {
+              errMsg = "Insufficient scope (403). Token must include 'dialogue:interact'.";
+            } else if (resp.status === 422) {
+              errMsg = "Validation error (422): Input must be between 1 and 2000 non-empty characters.";
+            } else if (resp.status === 502) {
+              errMsg = "Bad Gateway (502): AI Provider error or network failure.";
+            } else if (resp.status === 503) {
+              errMsg = "Service Unavailable (503): Dialogue coordinator is not running.";
+            } else if (resp.status === 504) {
+              errMsg = "Gateway Timeout (504): Provider request timed out.";
+            } else {
+              errMsg = errData.message || errData.error || errData.detail || errMsg;
+            }
+          } catch (_) {}
+          showChatError(errMsg);
+          appendChatMessage("model", `⚠️ ${errMsg}`, false, { error: true });
+        }
+      } catch (err) {
+        removeChatLoading(loadingEl);
+        const netErr = `Network error: ${err.message}`;
+        showChatError(netErr);
+        appendChatMessage("model", `⚠️ ${netErr}`, false, { error: true });
+      } finally {
+        isChatInFlight = false;
+        sendBtn.disabled = false;
+        input.disabled = false;
+        input.focus();
+      }
+    }
   </script>
 </body>
 </html>

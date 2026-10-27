@@ -49,6 +49,7 @@ from dh360_hi.contracts.dialogue import (
     VALID_LANGUAGES,
     DialogueSessionState,
     DialogueTurn,
+    MockLLMProvider,
     SupportedLanguage,
     get_fallback_message,
 )
@@ -304,6 +305,25 @@ class DialogueCoordinator:
             with contextlib.suppress(Exception):
                 self._tts_provider.interrupt()
 
+    def interrupt(self) -> None:
+        """Abort active speech synthesis playback and microphone listening immediately."""
+        if self._tts_provider is not None:
+            with contextlib.suppress(Exception):
+                self._tts_provider.interrupt()
+        if self._stt_provider is not None:
+            with contextlib.suppress(Exception):
+                if hasattr(self._stt_provider, "interrupt"):
+                    self._stt_provider.interrupt()
+                self._stt_provider.release()
+
+    def revoke_authorization(self) -> None:
+        """Explicitly revoke authorization, clear private history, and abort audio."""
+        with self._state_lock:
+            if self._session_state is not None:
+                self._session_state.reset(person_id=None, display_name=None, is_authorized=False)
+                logger.info("DialogueCoordinator: authorization revoked; private history purged")
+        self.interrupt()
+
     # ------------------------------------------------------------------
     # Turn Execution Pipeline
     # ------------------------------------------------------------------
@@ -411,18 +431,39 @@ class DialogueCoordinator:
                     else None
                 )
 
-                # Verify if authorization snapshot is active, authorized, and matches current person
-                is_valid_auth = (
+                # Verify if authorization snapshot is active and authorized
+                if (
                     auth_snapshot is not None
                     and auth_snapshot.is_active
                     and auth_snapshot.is_authorized
                     and auth_snapshot.person_id is not None
-                    and originating_person_id is not None
-                    and auth_snapshot.person_id == originating_person_id
-                )
+                ):
+                    if originating_person_id is None:
+                        # Direct/transient dialogue session adopts the newly authorized individual
+                        self._session_state.person_id = auth_snapshot.person_id
+                        self._session_state.display_name = auth_snapshot.display_name
+                        self._session_state.is_authorized = True
+                        originating_person_id = auth_snapshot.person_id
+                        is_valid_auth = True
+                    elif originating_person_id == auth_snapshot.person_id:
+                        self._session_state.is_authorized = True
+                        is_valid_auth = True
+                    else:
+                        # Identity mismatch: session belongs to originating_person_id,
+                        # but controller authorized auth_snapshot.person_id.
+                        # Reject authorization to prevent cross-person leakage!
+                        logger.warning(
+                            "DialogueCoordinator: authorization person mismatch "
+                            "(session: %s, controller: %s); rejecting authorization",
+                            originating_person_id,
+                            auth_snapshot.person_id,
+                        )
+                        self._session_state.is_authorized = False
+                        is_valid_auth = False
+                else:
+                    self._session_state.is_authorized = False
+                    is_valid_auth = False
 
-                # Update session authorization status immediately
-                self._session_state.is_authorized = is_valid_auth
                 was_privileged = is_valid_auth
 
                 if is_valid_auth:
@@ -458,12 +499,22 @@ class DialogueCoordinator:
                 error_code = "LLM_UNAVAILABLE"
             else:
                 try:
-                    response_text = self._llm_provider.generate_response(
-                        prompt=prompt_text,
-                        filtered_context=knowledge_context,
-                        language=target_lang,
-                        session_history=history_snapshot,
-                    )
+                    try:
+                        response_text = self._llm_provider.generate_response(
+                            prompt=prompt_text,
+                            filtered_context=knowledge_context,
+                            language=target_lang,
+                            session_history=history_snapshot,
+                        )
+                    except TypeError as type_err:
+                        if "session_history" in str(type_err):
+                            response_text = self._llm_provider.generate_response(
+                                prompt=prompt_text,
+                                filtered_context=knowledge_context,
+                                language=target_lang,
+                            )
+                        else:
+                            raise
                 except (ProviderNetworkError, ProviderTimeoutError) as exc:
                     response_text = get_fallback_message("network_error", target_lang)
                     error_code = exc.code
@@ -543,6 +594,12 @@ class DialogueCoordinator:
 
             # 6. Playback audio via TTSProvider (outside state lock)
             metadata: dict[str, Any] = {}
+            if prompt_text:
+                metadata["user_text"] = prompt_text
+            if user_text is None:
+                metadata["is_voice"] = True
+            if isinstance(self._llm_provider, MockLLMProvider):
+                metadata["mock"] = True
             if error_code is not None:
                 metadata["error"] = error_code
 

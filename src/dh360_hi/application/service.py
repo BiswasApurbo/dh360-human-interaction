@@ -200,6 +200,11 @@ class HumanInteractionService:
         return self._coordinator
 
     @property
+    def event_bus(self) -> EventBus:
+        """In-process event bus instance."""
+        return self._event_bus
+
+    @property
     def person_service(self) -> BasePersonService:
         """Composed person service instance."""
         return self._person_service

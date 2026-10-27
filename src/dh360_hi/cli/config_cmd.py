@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
-from dh360_hi.application.loader import load_config
+from dh360_hi.application.loader import load_config, resolve_cli_db_path
 from dh360_hi.cli.formatting import format_json, format_key_value
 
 
@@ -22,7 +22,7 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     show_p = config_sub.add_parser("show", help="Display active configuration settings")
     show_p.add_argument("--preset", help="Configuration preset (development, testing, production)")
     show_p.add_argument("--config-file", help="Path to TOML configuration file")
-    show_p.add_argument("--db-path", help="Override SQLite database path")
+    show_p.add_argument("--db-path", help="Override SQLite database path (default: dh360_hi.db)")
     show_p.add_argument(
         "--json", action="store_true", help="Output in machine-readable JSON format"
     )
@@ -31,7 +31,7 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     val_p = config_sub.add_parser("validate", help="Validate a configuration file or preset")
     val_p.add_argument("--preset", help="Configuration preset to validate")
     val_p.add_argument("--config-file", help="Path to TOML configuration file to validate")
-    val_p.add_argument("--db-path", help="Override SQLite database path")
+    val_p.add_argument("--db-path", help="Override SQLite database path (default: dh360_hi.db)")
 
     # 3. config presets
     config_sub.add_parser("presets", help="List available built-in configuration presets")
@@ -56,8 +56,9 @@ def handle_config(args: argparse.Namespace) -> int:
         return 0
 
     overrides: dict[str, Any] = {}
-    if getattr(args, "db_path", None):
-        overrides["db_path"] = args.db_path
+    cli_db = resolve_cli_db_path(args)
+    if cli_db is not None:
+        overrides["db_path"] = cli_db
 
     if action == "validate":
         config = load_config(

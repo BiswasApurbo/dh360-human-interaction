@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from dh360_hi.application.config import (
+    DEFAULT_DB_PATH,
     ConfigurationPreset,
     HumanInteractionConfig,
     get_preset,
@@ -393,3 +394,30 @@ def _reject_operator_token_source(config_data: dict[str, Any], source: str) -> N
             message=f"api.operator_token must be configured through the environment, not {source}",
             field="api.operator_token",
         )
+
+
+def resolve_cli_db_path(
+    args: Any | None = None,
+    default_db_path: str = DEFAULT_DB_PATH,
+) -> str | None:
+    """Resolve database path for CLI execution with strict precedence:
+
+    1. Explicit CLI --db-path (if provided)
+    2. DH360_HI_DB_PATH environment variable (defer to environment loader)
+    3. Explicit CLI --preset or DH360_HI_PRESET (defer to preset loader)
+    4. Explicit CLI --config-file or DH360_HI_CONFIG_FILE (defer to config file loader)
+    5. Fallback to default_db_path ("dh360_hi.db")
+    """
+    if args is not None and getattr(args, "db_path", None):
+        return str(args.db_path)
+    if os.environ.get("DH360_HI_DB_PATH"):
+        return None
+    if (args is not None and getattr(args, "preset", None)) or os.environ.get("DH360_HI_PRESET"):
+        return None
+    if (
+        (args is not None and getattr(args, "config_file", None))
+        or os.environ.get("DH360_HI_CONFIG_FILE")
+        or os.environ.get("DH360_HI_CONFIG_PATH")
+    ):
+        return None
+    return default_db_path

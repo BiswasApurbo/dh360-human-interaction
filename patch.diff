@@ -1,0 +1,30 @@
+--- src/dh360_hi/api/static/demo.html
++++ src/dh360_hi/api/static/demo.html
+@@ -211,7 +211,7 @@
+       </div>
+     </div>
+ 
+-    <div class="form-group" style="flex-direction: column; align-items: stretch;">
++    <div id="register-section" style="display:none; margin-top:1rem; margin-bottom:1.5rem; padding-top:1rem; border-top:1px solid #d1d5db;">
++      <h2 style="font-size: 1.15rem; margin-bottom: 0.75rem;">Register Person</h2>
+       <div class="form-group">
+         <label class="field-label" for="display-name" style="width: 120px;">Display Name *</label>
+         <input type="text" id="display-name" class="field-val" placeholder="e.g. Apurbo" style="flex:1;" />
+@@ -231,7 +231,7 @@
+       </div>
+       <button id="register-btn" onclick="handleRegister()" style="width:100%;">Register &amp; Start Enrollment</button>
+     </div>
+ 
+     <div id="enrollment-section" style="display:none; margin-top:1rem;">
+       <h2 style="font-size: 1.15rem; margin-bottom: 0.75rem;">Guided Biometric Enrollment</h2>
+@@ -256,7 +256,7 @@
+       </div>
+     </div>
+ 
+-    <div id="auth-action-section" style="display:none; margin-top:1rem; margin-bottom:1.5rem;">
++    <div id="auth-action-section" style="margin-top:1rem; margin-bottom:1.5rem;">
+       <button id="start-btn" onclick="startAuthorization()" style="width:100%;">Start Authorization</button>
++      <button id="show-register-btn" onclick="document.getElementById('register-section').style.display='block'; this.style.display='none';" style="width:100%; margin-top:0.5rem; background:#4b5563;">Register New Person</button>
+     </div>
+ 
+     <div class="status-panel">

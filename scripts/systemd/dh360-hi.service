@@ -1,0 +1,26 @@
+[Unit]
+Description=DH360 Human Interaction Edge Daemon
+After=network.target v4l2.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/dh360-human-interaction
+EnvironmentFile=/home/pi/dh360-human-interaction/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/pi/dh360-human-interaction/.venv/bin/dh360-hi serve --config-file /home/pi/dh360-human-interaction/config/default.toml
+Restart=always
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStopSec=10s
+
+# Hardening / Sandboxing
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/pi/dh360-human-interaction
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

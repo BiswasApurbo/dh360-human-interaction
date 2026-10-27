@@ -330,3 +330,32 @@ class TTSProvider(Protocol):
     def is_playing(self) -> bool:
         """Return True if audio playback is currently in progress."""
         ...
+
+
+class MockLLMProvider:
+    """Explicit offline mock LLM provider for development and testing.
+
+    Always formats responses with an explicit `[MOCK]` prefix so that callers
+    and frontend interfaces can never mistake mock output for live AI generation.
+    """
+
+    def generate_response(
+        self,
+        prompt: str,
+        filtered_context: str,
+        language: SupportedLanguage,
+        session_history: list[DialogueTurn] | None = None,
+    ) -> str:
+        _ = session_history
+        prompt_clean = prompt.strip()
+        prefix = "[MOCK]"
+        if language == "en":
+            if filtered_context:
+                first_fact = filtered_context.splitlines()[0]
+                return f"{prefix} Knowledge: {first_fact} | Response: {prompt_clean}"
+            return f"{prefix} Response to: {prompt_clean}"
+        else:
+            if filtered_context:
+                first_fact = filtered_context.splitlines()[0]
+                return f"{prefix} তথ্য: {first_fact} | উত্তর: {prompt_clean}"
+            return f"{prefix} উত্তর: {prompt_clean}"

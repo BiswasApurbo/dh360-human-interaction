@@ -66,13 +66,21 @@ CORE IDENTITY & OVERVIEW
     - NEVER give your identity response if the user asks about another person.
 
 KNOWLEDGE SOURCE HIERARCHY
-    1. Primary Knowledge: Use the provided context for questions about Robotech Valley,
-       company background, product specs, team, and internal history.
-    2. Event Knowledge: Use the Bangladesh Innovation Fair 2026 details provided in this context.
-    3. Real-Time Web Knowledge: Use search for weather, external news, and general world facts.
-    4. Missing Information: If information is not found in the provided facts,
-       event details, or web search, state politely in one simple sentence that you do
-       not have that information yet.
+    1. Primary Company Knowledge: Use the provided context from knowledge.csv for
+       questions about Robotech Valley, company background, product specs, team,
+       and internal history.
+    2. Authorized Personal Context: Use the provided context for questions about the
+       currently authorized individual (e.g. role, department, office room, bio, personal Q&A).
+       If an authorized individual asks for a specific personal detail that is not recorded in their
+       provided context, politely state that this information is not recorded or available.
+    3. Event Knowledge: Use the Bangladesh Innovation Fair 2026 details provided in this context.
+    4. General Questions & World Knowledge: For general questions about science, geography,
+       history, mathematics, everyday topics, and general world facts, answer directly and helpfully
+       using your own intelligence and capabilities. Never refuse general questions.
+    5. Company-Specific Uncertainty: If asked a specific factual question about Robotech Valley,
+       its internal products, or company team members that is NOT found in the provided facts,
+       state politely in one simple sentence that you do not have that company information verified
+       yet, instead of inventing facts. Never use this disclaimer for general world questions.
 
 LANGUAGE & VOICE CONTROL
     - Your default and primary language is Bangla (written in Bangla script).
@@ -148,7 +156,7 @@ class ElivaGeminiAdapter(LLMProvider):
             generator_fn: Optional injected generation callable for testing.
         """
         self._api_key = api_key
-        self.model_name = model_name
+        self.model_name = os.getenv("GEMINI_MODEL", model_name)
         self.system_instruction = system_instruction
         self._client = client
         self._generator_fn = generator_fn
@@ -186,12 +194,15 @@ class ElivaGeminiAdapter(LLMProvider):
         # 1. Injected generator callable (testing / custom runner)
         if self._generator_fn is not None:
             try:
-                return self._generator_fn(
-                    prompt=prompt,
-                    filtered_context=filtered_context,
-                    language=language,
-                    session_history=session_history,
-                )
+                try:
+                    return self._generator_fn(
+                        prompt=prompt,
+                        filtered_context=filtered_context,
+                        language=language,
+                        session_history=session_history,
+                    )
+                except TypeError:
+                    return self._generator_fn(prompt, filtered_context, language)
             except (LLMProviderError, ProviderTimeoutError, ProviderNetworkError):
                 raise
             except TimeoutError as exc:
@@ -399,6 +410,20 @@ class ElivaSonioxAdapter(STTProvider):
             except Exception as exc:
                 logger.warning("ElivaSonioxAdapter: release_stt failed: %s", type(exc).__name__)
 
+    def interrupt(self) -> None:
+        """Interrupt active listening or speech recognition immediately."""
+        with self._lock:
+            self._is_held = True
+
+        if self._stt_module is not None:
+            try:
+                if hasattr(self._stt_module, "_stop_event"):
+                    self._stt_module._stop_event.set()
+                if hasattr(self._stt_module, "_dispatch_event"):
+                    self._stt_module._dispatch_event.set()
+            except Exception as exc:
+                logger.debug("ElivaSonioxAdapter: interrupt error: %s", exc)
+
     @property
     def is_held(self) -> bool:
         """Return True if speech processing is currently held/muted."""
@@ -495,10 +520,12 @@ class ElivaSonioxAdapter(STTProvider):
                 else:
                     soniox.release_stt()
 
-            # Configure language hint
+            # Configure language hint and active API key
+            soniox.SONIOX_API_KEY = api_key
             soniox.LANGUAGE_HINTS = [language_hint]
             transcription = soniox.listen_once(live_callback=on_partial_text)
-            return (transcription or "").strip()
+            clean_transcription = (transcription or "").replace("<end>", "").strip()
+            return clean_transcription
         except (
             STTProviderError,
             HardwareUnavailableError,
@@ -553,8 +580,8 @@ class ElivaGoogleTTSAdapter(TTSProvider):
         """Initialize ElivaGoogleTTSAdapter without opening audio hardware streams."""
         self._credentials_file = credentials_file
         self._credentials_json = credentials_json
-        self.voice_bn = voice_bn
-        self.voice_en = voice_en
+        self.voice_bn = os.getenv("GOOGLE_TTS_VOICE_BN", voice_bn)
+        self.voice_en = os.getenv("GOOGLE_TTS_VOICE_EN", voice_en)
         self._speak_fn = speak_fn
         self._interrupt_fn = interrupt_fn
         self._is_playing_fn = is_playing_fn
@@ -755,10 +782,18 @@ class ElivaGoogleTTSAdapter(TTSProvider):
         """Perform TTS synthesis and stream to sound device."""
         import sounddevice as sd  # type: ignore[import-untyped]
 
+        api_voice = voice_name
+        api_lang = language_code
+        if api_lang.lower().startswith("bn"):
+            if "bn-bd" in api_voice.lower():
+                api_voice = "bn-IN-Standard-A"
+            if api_lang.lower() == "bn-bd":
+                api_lang = "bn-IN"
+
         synthesis_input = tts_mod.SynthesisInput(text=text)
         voice = tts_mod.VoiceSelectionParams(
-            language_code=language_code,
-            name=voice_name,
+            language_code=api_lang,
+            name=api_voice,
         )
         audio_config = tts_mod.AudioConfig(
             audio_encoding=tts_mod.AudioEncoding.LINEAR16,

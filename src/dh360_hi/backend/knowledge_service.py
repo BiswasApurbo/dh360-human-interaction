@@ -51,6 +51,7 @@ STOP_WORDS: frozenset[str] = frozenset(
         "an",
         "the",
         "is",
+        "am",
         "are",
         "was",
         "were",
@@ -266,7 +267,7 @@ PROFILE_FIELD_KEYWORDS: dict[str, tuple[str, ...]] = {
 }
 
 SELF_REFERENTIAL_TOKENS: frozenset[str] = frozenset(
-    {"i", "me", "my", "myself", "আমি", "আমার", "আমায়", "আমাকে"}
+    {"i", "me", "my", "myself", "am", "আমি", "আমার", "আমায়", "আমাকে", "নিজেকে"}
 )
 
 IDENTITY_QUESTION_TOKENS: frozenset[str] = frozenset(
@@ -308,7 +309,7 @@ _PUNCTUATION_CHARS = string.punctuation + "।?¿!.,;:—–/\\()[]{}<>\"'`~@#$%
 
 
 def _tokenize(text: str, filter_stop_words: bool = False) -> set[str]:
-    """Extract lowercased word tokens with length >= 2, optionally filtering stop words.
+    """Extract lowercased word tokens with length >= 2 or 'i', optionally filtering stop words.
 
     Uses whitespace splitting and unicode punctuation stripping so Indic/Bengali
     combining vowel characters (matras) remain attached to their base characters.
@@ -318,7 +319,7 @@ def _tokenize(text: str, filter_stop_words: bool = False) -> set[str]:
     tokens = set()
     for raw_word in text.split():
         cleaned = raw_word.strip(_PUNCTUATION_CHARS).lower()
-        if len(cleaned) >= 2:
+        if len(cleaned) >= 2 or cleaned == "i":
             tokens.add(cleaned)
     if filter_stop_words:
         tokens = {t for t in tokens if t not in STOP_WORDS}
@@ -372,6 +373,11 @@ class KnowledgeService:
             logger.info("Loaded %d public facts from %s", len(self._public_facts), self._csv_path)
         except Exception:
             logger.exception("Failed to load knowledge CSV from %s", self._csv_path)
+
+    def reload(self) -> int:
+        """Reload public institutional facts from the CSV file and return the count."""
+        self._load_public_facts()
+        return len(self._public_facts)
 
     @property
     def public_facts_count(self) -> int:
@@ -478,15 +484,43 @@ class KnowledgeService:
             and raw_query_tokens & IDENTITY_QUESTION_TOKENS
         )
 
-        # If query has no meaningful tokens and is not a self-referential inquiry, expose nothing
-        if not meaningful_query_tokens and not is_self_identity_query:
-            return []
-
-        facts: list[str] = []
         name = context.preferred_name or context.display_name
         name_tokens = _tokenize(name, filter_stop_words=True)
 
-        include_name = is_self_identity_query or bool(meaningful_query_tokens & name_tokens)
+        # Named identity inquiry about the authorized person
+        # (e.g. "who is Apurbo", "tell me about Apurbo", "Apurbo কে")
+        is_named_identity_query = bool(
+            meaningful_query_tokens & name_tokens
+            and (
+                raw_query_tokens & IDENTITY_QUESTION_TOKENS
+                or any(
+                    kw in raw_query_tokens
+                    for kw in (
+                        "about",
+                        "details",
+                        "info",
+                        "information",
+                        "tell",
+                        "কে",
+                        "সম্পর্কে",
+                        "সম্পর্কেও",
+                        "তথ্য",
+                        "বলো",
+                        "বল",
+                        "বলুন",
+                    )
+                )
+            )
+        )
+
+        is_identity_query = is_self_identity_query or is_named_identity_query
+
+        # If query has no meaningful tokens and is not an identity inquiry, expose nothing
+        if not meaningful_query_tokens and not is_identity_query:
+            return []
+
+        facts: list[str] = []
+        include_name = is_identity_query or bool(meaningful_query_tokens & name_tokens)
 
         # Check role
         if context.role:
@@ -494,7 +528,7 @@ class KnowledgeService:
             if (
                 any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["role"])
                 or bool(meaningful_query_tokens & role_tokens)
-                or is_self_identity_query
+                or is_identity_query
             ):
                 include_name = True
                 label = "পদবি" if language == "bn" else "Role"
@@ -506,7 +540,7 @@ class KnowledgeService:
             if (
                 any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["department"])
                 or bool(meaningful_query_tokens & dept_tokens)
-                or is_self_identity_query
+                or is_identity_query
             ):
                 include_name = True
                 label = "বিভাগ" if language == "bn" else "Department"
@@ -538,7 +572,7 @@ class KnowledgeService:
             if (
                 any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["profile_description"])
                 or bool(meaningful_query_tokens & desc_tokens)
-                or is_self_identity_query
+                or is_identity_query
             ):
                 include_name = True
                 label = "বিবরণ" if language == "bn" else "Description"
