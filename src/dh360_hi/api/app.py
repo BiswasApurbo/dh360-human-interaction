@@ -18,6 +18,7 @@ from dh360_hi.api.routers.enrollment import router as enrollment_router
 from dh360_hi.api.routers.events import router as events_router
 from dh360_hi.api.routers.health import router as health_router
 from dh360_hi.api.routers.interaction import router as interaction_router
+from dh360_hi.api.routers.knowledge import router as knowledge_router
 from dh360_hi.api.routers.persons import router as persons_router
 from dh360_hi.api.routers.sessions import router as sessions_router
 from dh360_hi.api.security import OperatorSecurityError
@@ -32,6 +33,7 @@ from dh360_hi.edge.authorization_controller import AuthorizationController
 if TYPE_CHECKING:
     from dh360_hi.application.dialogue_coordinator import DialogueCoordinator
     from dh360_hi.application.service import HumanInteractionService
+    from dh360_hi.backend.knowledge_service import KnowledgeService
 
 
 @asynccontextmanager
@@ -75,6 +77,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 session_manager=service.runtime.session_manager,
                 timeout_seconds=timeout_sec,
                 on_transition=_on_auth_transition,
+                require_continuous_presence=False,
             )
             app.state.authorization_controller = auth_ctrl
         else:
@@ -125,6 +128,7 @@ def create_app(
     service: HumanInteractionService | None = None,
     authorization_controller: AuthorizationController | None = None,
     dialogue_coordinator: DialogueCoordinator | None = None,
+    knowledge_service: KnowledgeService | None = None,
 ) -> FastAPI:
     """Construct the FastAPI application with service and controller wired in."""
     app = FastAPI(title="dh360-human-interaction API", lifespan=lifespan)
@@ -135,6 +139,7 @@ def create_app(
     app.state.service = service
     app.state.operator_auth = cfg.api
     app.state.dialogue_coordinator = dialogue_coordinator
+    app.state.knowledge_service = knowledge_service
 
     hub = InteractionEventHub()
     hub.attach(service)
@@ -163,6 +168,7 @@ def create_app(
             session_manager=service.runtime.session_manager,
             timeout_seconds=timeout_sec,
             on_transition=_on_auth_trans_created,
+            require_continuous_presence=False,
         )
         service.authorization_controller = app.state.authorization_controller
     else:
@@ -236,4 +242,5 @@ def create_app(
     app.include_router(authorization_router)
     app.include_router(demo_router)
     app.include_router(dialogue_router)
+    app.include_router(knowledge_router)
     return app

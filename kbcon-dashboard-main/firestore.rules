@@ -1,0 +1,98 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- সাহায্যকারী ফাংশন ----------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // role আসে Custom Claims থেকে, যা শুধু Cloud Function/স্ক্রিপ্ট সেট করতে পারে
+    function isSuperAdmin() {
+      return isSignedIn() && request.auth.token.role == 'superAdmin';
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.role == 'admin';
+    }
+
+    // ---------- users ----------
+    // নিজের প্রোফাইল পড়া যাবে, Super Admin সবার পড়তে পারবে।
+    // লেখা বন্ধ: Admin তৈরি/বদল হবে শুধু Cloud Function দিয়ে।
+    match /users/{uid} {
+      allow read: if isSignedIn() && (request.auth.uid == uid || isSuperAdmin());
+      allow write: if false;
+    }
+
+    // ---------- robots ----------
+    // Super Admin সব দেখবে, Admin শুধু নিজের Assign করা Robot।
+    // তৈরি/Assign/মোছা শুধু Cloud Function দিয়ে।
+    match /robots/{robotId} {
+      allow read: if isSuperAdmin()
+                  || (isAdmin() && resource.data.assignedAdminId == request.auth.uid);
+      allow create, delete: if false;
+
+      // Admin শুধু config বদলাতে পারবে, মালিকানা বা অন্য ফিল্ড নয়
+      allow update: if isAdmin()
+                    && resource.data.assignedAdminId == request.auth.uid
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['config', 'mode']);
+
+      // Telemetry: পড়া যাবে মালিকের, লেখা শুধু Cloud Function
+      match /telemetry/{id} {
+        allow read: if isSuperAdmin()
+                    || (isAdmin()
+                        && get(/databases/$(database)/documents/robots/$(robotId))
+                             .data.assignedAdminId == request.auth.uid);
+        allow write: if false;
+      }
+    }
+
+    // ---------- knowledgeBases ----------
+    match /knowledgeBases/{kbId} {
+      allow read: if isSuperAdmin()
+                  || (isAdmin() && resource.data.ownerAdminId == request.auth.uid);
+      allow write: if false;
+
+      match /items/{itemId} {
+        allow read: if isSuperAdmin()
+                    || (isAdmin()
+                        && get(/databases/$(database)/documents/knowledgeBases/$(kbId))
+                             .data.ownerAdminId == request.auth.uid);
+        allow write: if false;
+      }
+            match /changes/{changeId} {
+        allow read: if isSuperAdmin()
+                    || (isAdmin()
+                        && get(/databases/$(database)/documents/knowledgeBases/$(kbId))
+                             .data.ownerAdminId == request.auth.uid);
+        allow write: if false;
+      }
+    }
+
+    // ---------- importHistory ----------
+    match /importHistory/{id} {
+      allow read: if isSuperAdmin()
+                  || (isAdmin() && resource.data.by == request.auth.uid);
+      allow write: if false;
+    }
+
+    // ---------- auditLogs ----------
+    match /auditLogs/{id} {
+      allow read: if isSuperAdmin();
+      allow write: if false;
+    }
+
+    // ---------- robotCredentials ----------
+    // ক্লায়েন্ট থেকে সম্পূর্ণ বন্ধ, শুধু Cloud Function (Admin SDK) অ্যাক্সেস করবে
+    match /robotCredentials/{robotId} {
+      allow read, write: if false;
+    }
+
+    // বাকি সবকিছু বন্ধ
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

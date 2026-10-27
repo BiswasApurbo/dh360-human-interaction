@@ -11,6 +11,7 @@ from dh360_hi.application.dialogue_coordinator import DialogueCoordinator
 from dh360_hi.application.factory import create_interaction_service
 from dh360_hi.application.loader import load_config
 from dh360_hi.application.service import HumanInteractionService
+from dh360_hi.backend.knowledge_service import KnowledgeService
 from dh360_hi.contracts.errors import ApplicationError, ServiceUnavailableError
 
 
@@ -52,6 +53,28 @@ def get_dialogue_coordinator(request: Request) -> DialogueCoordinator:
             detail="Dialogue coordinator is not configured or initialized",
         )
     return coord
+
+
+def get_knowledge_service(request: Request) -> KnowledgeService:
+    """Fetch or lazily initialize the KnowledgeService instance from app state."""
+    knowledge_svc = cast(
+        KnowledgeService | None,
+        getattr(request.app.state, "knowledge_service", None),
+    )
+    if knowledge_svc is not None:
+        return knowledge_svc
+
+    coord = getattr(request.app.state, "dialogue_coordinator", None)
+    if coord is not None and hasattr(coord, "_knowledge_service"):
+        knowledge_svc = coord._knowledge_service
+        request.app.state.knowledge_service = knowledge_svc
+        return knowledge_svc
+
+    svc = cast(HumanInteractionService | None, getattr(request.app.state, "service", None))
+    person_svc = getattr(svc, "person_service", None) if svc is not None else None
+    knowledge_svc = KnowledgeService(person_service=person_svc)
+    request.app.state.knowledge_service = knowledge_svc
+    return knowledge_svc
 
 
 def _translate_app_error(exc: ApplicationError) -> HTTPException:
