@@ -1,7 +1,7 @@
 # Digital Health 360 (DH360) Human Interaction Configuration
 # Default configuration for Edge / Raspberry Pi 5 Deployment
 
-db_path = "dh360.db"
+db_path = "dh360_hi.db"
 auto_init_db = true
 camera_index = 0
 detector_model_path = "models/weights/face_detection_yunet_2023mar.onnx"
