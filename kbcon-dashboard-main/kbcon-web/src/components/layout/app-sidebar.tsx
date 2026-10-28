@@ -5,6 +5,7 @@ import { Link, usePathname } from "@/i18n/navigation";
 import {
   LayoutDashboard,
   Bot,
+  Sparkles,
   UserCheck,
   BookOpen,
   Activity,
@@ -28,6 +29,7 @@ import { useRole } from "@/features/auth/use-role";
 const items = [
   { key: "dashboard", href: "/dashboard", icon: LayoutDashboard },
   { key: "robots", href: "/robots", icon: Bot },
+  { key: "assistant", href: "/assistant", icon: Sparkles },
   { key: "people", href: "/people", icon: UserCheck },
   { key: "knowledgeBase", href: "/knowledge-base", icon: BookOpen },
   { key: "telemetry", href: "/telemetry", icon: Activity },
