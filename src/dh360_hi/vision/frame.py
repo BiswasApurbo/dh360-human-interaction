@@ -182,22 +182,27 @@ class WebcamFrameSource(FrameSource):
         target_height: int | None = 480,
         target_fps: float | None = 30.0,
         prefer_mjpeg: bool = True,
+        auto_discover: bool = True,
     ) -> None:
         self.camera_index = camera_index
         self.target_width = target_width
         self.target_height = target_height
         self.target_fps = target_fps
         self.prefer_mjpeg = prefer_mjpeg
+        self.auto_discover = auto_discover
         self._cap: cv2.VideoCapture | None = None
         self._frame_id = 0
         self._fps = target_fps or 30.0
         self._resolution = (0, 0)
         self._read_timestamps: deque[float] = deque(maxlen=30)
+        self._consecutive_read_failures = 0
+        self._last_reopen_attempt: float = 0.0
 
-    def open(self) -> None:
-        self._cap = cv2.VideoCapture(self.camera_index)
-        if not self._cap.isOpened():
-            raise RuntimeError(f"Failed to open webcam at index {self.camera_index}")
+    def _open_device(self, index: int) -> cv2.VideoCapture | None:
+        cap = cv2.VideoCapture(index)
+        if not cap.isOpened():
+            cap.release()
+            return None
 
         # On Linux V4L2 systems, disable dynamic exposure framerate throttling to sustain full FPS
         if sys.platform.startswith("linux"):
@@ -206,7 +211,7 @@ class WebcamFrameSource(FrameSource):
                     [
                         "v4l2-ctl",
                         "-d",
-                        f"/dev/video{self.camera_index}",
+                        f"/dev/video{index}",
                         "--set-ctrl=exposure_dynamic_framerate=0",
                     ],
                     check=False,
@@ -217,14 +222,45 @@ class WebcamFrameSource(FrameSource):
                 pass
 
         if self.prefer_mjpeg:
-            self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc(*"MJPG"))
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc(*"MJPG"))
 
         if self.target_width and self.target_height:
-            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.target_width)
-            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.target_height)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.target_width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.target_height)
 
         if self.target_fps:
-            self._cap.set(cv2.CAP_PROP_FPS, self.target_fps)
+            cap.set(cv2.CAP_PROP_FPS, self.target_fps)
+
+        # Confirm that a frame can actually be captured from this device
+        success, _ = cap.read()
+        if not success:
+            cap.release()
+            return None
+
+        return cap
+
+    def open(self) -> None:
+        candidates = [self.camera_index]
+        if self.auto_discover:
+            for idx in [0, 1, 2, 3, 4]:
+                if idx not in candidates:
+                    candidates.append(idx)
+
+        cap = None
+        selected_index = self.camera_index
+        for idx in candidates:
+            cap = self._open_device(idx)
+            if cap is not None:
+                selected_index = idx
+                break
+
+        if cap is None:
+            raise RuntimeError(
+                f"Failed to open webcam at index {self.camera_index} (scanned candidates {candidates})"
+            )
+
+        self.camera_index = selected_index
+        self._cap = cap
 
         width = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -235,16 +271,34 @@ class WebcamFrameSource(FrameSource):
             self._fps = float(raw_fps)
         self._frame_id = 0
         self._read_timestamps.clear()
+        self._consecutive_read_failures = 0
 
     def read(self) -> Frame | None:
+        now = time.monotonic()
         if self._cap is None or not self._cap.isOpened():
-            return None
+            if self.auto_discover and (now - self._last_reopen_attempt >= 1.0):
+                self._last_reopen_attempt = now
+                try:
+                    self.open()
+                except Exception:
+                    pass
+            if self._cap is None or not self._cap.isOpened():
+                return None
 
         success, image = self._cap.read()
         if not success or image is None:
+            self._consecutive_read_failures += 1
+            if self.auto_discover and self._consecutive_read_failures >= 5:
+                if now - self._last_reopen_attempt >= 1.0:
+                    self._last_reopen_attempt = now
+                    try:
+                        self.release()
+                        self.open()
+                    except Exception:
+                        pass
             return None
 
-        now = time.monotonic()
+        self._consecutive_read_failures = 0
         self._read_timestamps.append(now)
 
         frame = Frame(

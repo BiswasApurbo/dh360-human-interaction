@@ -556,6 +556,10 @@ class EdgeInteractionRuntime:
                             self._config.max_consecutive_frame_errors,
                         )
                         if self.state == RuntimeState.ERROR:
+                            if isinstance(self._frame_source, WebcamFrameSource):
+                                # For real webcam hardware, keep thread alive and attempt recovery
+                                self._stop_event.wait(timeout=max(target_interval, 0.5))
+                                continue
                             logger.error(
                                 "Exceeded maximum consecutive camera read errors (%d); "
                                 "entering ERROR state",
@@ -571,6 +575,12 @@ class EdgeInteractionRuntime:
                     break
 
                 with self._lock:
+                    if self._state == RuntimeState.ERROR:
+                        self._state = RuntimeState.RUNNING
+                        logger.info(
+                            "EdgeInteractionRuntime recovered from frame error state; restored to RUNNING"
+                        )
+                    self._consecutive_errors = 0
                     self._latest_frame = frame
 
                 t_start = time.monotonic()

@@ -170,9 +170,16 @@ def handle_serve(args: argparse.Namespace) -> int:
                 soniox_key = None
                 gtts_json = None
 
-            llm_provider = ElivaGeminiAdapter(api_key=gemini_key)
-            stt_provider = ElivaSonioxAdapter(api_key=soniox_key)
-            tts_provider = ElivaGoogleTTSAdapter(credentials_json=gtts_json)
+            llm_provider = ElivaGeminiAdapter(
+                api_key=gemini_key or os.getenv("GEMINI_API_KEY")
+            )
+            stt_provider = ElivaSonioxAdapter(
+                api_key=soniox_key or os.getenv("SONIOX_API_KEY")
+            )
+            tts_provider = ElivaGoogleTTSAdapter(
+                credentials_json=gtts_json or os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON"),
+                credentials_file=os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),
+            )
             effective_mode = "live"
 
         dialogue_coord = DialogueCoordinator(
