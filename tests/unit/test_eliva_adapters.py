@@ -95,7 +95,8 @@ def test_gemini_missing_sdk_raises_typed_error(monkeypatch: pytest.MonkeyPatch) 
     orig_import = builtins.__import__
 
     def mock_import(name: str, *args: Any, **kwargs: Any) -> Any:
-        if "genai" in name:
+        fromlist = kwargs.get("fromlist") or (args[2] if len(args) > 2 else None)
+        if "genai" in name or (fromlist and "genai" in fromlist):
             raise ImportError("No module named 'google.genai'")
         return orig_import(name, *args, **kwargs)
 
