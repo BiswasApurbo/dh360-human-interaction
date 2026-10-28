@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useTranslations } from "next-intl";
-import { Plus, RefreshCw, Users, AlertCircle } from "lucide-react";
+import { motion } from "motion/react";
+import { Plus, RefreshCw, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { usePeople } from "./use-people";
 import { PeopleTable } from "./people-table";
@@ -59,37 +60,41 @@ export function PeoplePageContent() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Page Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold sm:text-2xl flex items-center gap-2">
-            <Users className="size-6 text-sky-600" />
+          <h1 className="text-xl font-bold text-sky-900 sm:text-2xl">
             {t("title")}
           </h1>
-          <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
+          <p className="text-sm text-sky-800/80">{t("subtitle")}</p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={refresh}
+        <div className="flex flex-wrap items-center gap-2">
+          <motion.button
+            type="button"
+            onClick={() => refresh()}
             disabled={loading}
-            className="h-9 gap-1.5"
+            whileHover={{ scale: 1.04 }}
+            whileTap={{ scale: 0.96 }}
+            className="flex h-10 items-center gap-2 rounded-xl border border-sky-300 bg-white px-3.5 text-sm font-semibold text-sky-800 shadow-sm hover:bg-sky-50 disabled:opacity-60"
           >
-            <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
+            <RefreshCw
+              className={`size-4 ${loading ? "animate-spin text-sky-500" : "text-sky-600"}`}
+            />
+            {t("refresh")}
+          </motion.button>
 
-          <Button
-            size="sm"
+          <motion.button
+            type="button"
             onClick={() => setCreateOpen(true)}
-            className="h-9 gap-1.5 bg-sky-600 hover:bg-sky-700 text-white"
+            whileHover={{ scale: 1.04 }}
+            whileTap={{ scale: 0.96 }}
+            className="flex h-10 items-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-sky-600 px-4 text-sm font-semibold text-white shadow-md shadow-sky-300/60"
           >
             <Plus className="size-4" />
             {t("registerPerson")}
-          </Button>
+          </motion.button>
         </div>
       </div>
 
@@ -121,6 +126,7 @@ export function PeoplePageContent() {
         onRequestResetBiometrics={handleRequestResetBiometrics}
         onRequestEnroll={handleRequestEnroll}
         onOpenAuthorization={() => setAuthOpen(true)}
+        onRequestRegister={() => setCreateOpen(true)}
       />
 
       {/* Dialogs & Sheets */}

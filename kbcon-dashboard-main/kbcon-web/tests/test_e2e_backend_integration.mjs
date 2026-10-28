@@ -133,7 +133,8 @@ let backendProcess;
 
 async function startBackend() {
   const pythonBin = path.join(REPO_ROOT, ".venv/bin/dh360-hi");
-  const configPath = path.join(REPO_ROOT, "dh360-test-config.toml");
+  const testConfig = path.join(REPO_ROOT, "dh360-test-config.toml");
+  const configPath = fs.existsSync(testConfig) ? testConfig : path.join(REPO_ROOT, "config/default.toml");
 
   backendProcess = spawn(
     pythonBin,

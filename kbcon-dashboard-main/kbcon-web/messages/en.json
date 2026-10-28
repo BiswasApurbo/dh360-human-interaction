@@ -7,7 +7,8 @@
     "language": "Language",
     "search": "Search...",
     "notifications": "Notifications",
-    "profile": "My account"
+    "profile": "My account",
+    "refresh": "Refresh"
   },
   "Nav": {
     "dashboard": "Dashboard",
@@ -345,6 +346,7 @@
     "title": "Registered People",
     "subtitle": "Manage registered individuals, profiles, and biometric enrollment",
     "registerPerson": "Register Person",
+    "refresh": "Refresh",
     "searchPlaceholder": "Search by name or ID...",
     "noPeople": "No registered people found",
     "noPeopleDesc": "Register a new person or run biometric enrollment to get started.",

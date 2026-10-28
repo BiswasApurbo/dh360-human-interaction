@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import {
   Camera,
   MoreHorizontal,
+  Plus,
   RefreshCw,
   Search,
   Shield,
@@ -42,6 +43,7 @@ interface PeopleTableProps {
   onRequestResetBiometrics: (person: PersonProfile) => void;
   onRequestEnroll: (person: PersonProfile) => void;
   onOpenAuthorization: () => void;
+  onRequestRegister?: () => void;
 }
 
 export function PeopleTable({
@@ -52,6 +54,7 @@ export function PeopleTable({
   onRequestResetBiometrics,
   onRequestEnroll,
   onOpenAuthorization,
+  onRequestRegister,
 }: PeopleTableProps) {
   const t = useTranslations("People");
   const { role } = useRole();
@@ -132,6 +135,16 @@ export function PeopleTable({
                     <p className="text-xs text-muted-foreground">
                       {t("noPeopleDesc")}
                     </p>
+                    {onRequestRegister && (
+                      <Button
+                        size="sm"
+                        onClick={onRequestRegister}
+                        className="mt-2 h-8 gap-1.5 bg-sky-600 hover:bg-sky-700 text-white text-xs"
+                      >
+                        <Plus className="size-3.5" />
+                        {t("registerPerson")}
+                      </Button>
+                    )}
                   </div>
                 </TableCell>
               </TableRow>

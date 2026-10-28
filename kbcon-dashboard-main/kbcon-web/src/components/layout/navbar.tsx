@@ -21,6 +21,8 @@ import { LanguageSwitcher } from "./language-switcher";
 const titles = [
   { href: "/dashboard", key: "dashboard" },
   { href: "/robots", key: "robots" },
+  { href: "/assistant", key: "assistant" },
+  { href: "/people", key: "people" },
   { href: "/knowledge-base", key: "knowledgeBase" },
   { href: "/telemetry", key: "telemetry" },
   { href: "/settings", key: "settings" },

@@ -5,11 +5,8 @@ import { useTranslations } from "next-intl";
 import {
   AlertCircle,
   Bot,
-  CheckCircle2,
-  Globe,
   Loader2,
   Mic,
-  MicOff,
   Radio,
   RefreshCw,
   Send,
@@ -30,6 +27,16 @@ import type {
   DialogueVoiceTurnResponse,
 } from "./types";
 
+let messageSeq = 0;
+function nextMessageId(prefix: string): string {
+  messageSeq += 1;
+  return `${prefix}-${Date.now()}-${messageSeq}`;
+}
+
+function currentTimestamp(): number {
+  return Date.now() / 1000;
+}
+
 export function AssistantPageContent() {
   const t = useTranslations("Assistant");
 
@@ -47,20 +54,30 @@ export function AssistantPageContent() {
   const [turnError, setTurnError] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
-  const browserRecognitionRef = useRef<any>(null);
+  const browserRecognitionRef = useRef<{
+    start: () => void;
+    stop: () => void;
+    lang: string;
+    interimResults: boolean;
+    maxAlternatives: number;
+    onstart: (() => void) | null;
+    onend: (() => void) | null;
+    onerror: (() => void) | null;
+    onresult: ((event: { results: Array<Array<{ transcript: string }>> }) => void) | null;
+  } | null>(null);
 
   // Privacy isolation callback: instantly clear personal messages when face or authorization is lost
-  const handleAuthorizationLost = useCallback((_lostPersonId: string | null) => {
+  const handleAuthorizationLost = useCallback(() => {
     setMessages((prev) => {
       const sanitized = prev.filter((msg) => !msg.isPersonal);
       if (sanitized.length < prev.length) {
         return [
           ...sanitized,
           {
-            id: `system-lost-${Date.now()}`,
+            id: nextMessageId("system-lost"),
             role: "system",
             text: "Personal session concluded. Private conversation records have been safely cleared.",
-            timestamp: Date.now() / 1000,
+            timestamp: currentTimestamp(),
             language: "en",
           },
         ];
@@ -73,7 +90,6 @@ export function AssistantPageContent() {
     session,
     isAuthorized,
     currentDisplayName,
-    scanning,
     rescan,
     getHeaders,
   } = useAssistantAuth({
@@ -140,10 +156,10 @@ export function AssistantPageContent() {
     setTurnError(null);
 
     const userMessage: ChatMessage = {
-      id: `user-${Date.now()}`,
+      id: nextMessageId("user"),
       role: "user",
       text: query,
-      timestamp: Date.now() / 1000,
+      timestamp: currentTimestamp(),
       language,
       isPersonal: false,
     };
@@ -180,7 +196,7 @@ export function AssistantPageContent() {
       }
 
       const modelMessage: ChatMessage = {
-        id: `model-${Date.now()}`,
+        id: nextMessageId("model"),
         role: "model",
         text: data.text,
         timestamp: data.timestamp,
@@ -196,10 +212,10 @@ export function AssistantPageContent() {
       setMessages((prev) => [
         ...prev,
         {
-          id: `error-${Date.now()}`,
+          id: nextMessageId("error"),
           role: "system",
           text: `${t("errorOccurred")}: ${errMsg}`,
-          timestamp: Date.now() / 1000,
+          timestamp: currentTimestamp(),
           language,
           error: errMsg,
         },
@@ -239,7 +255,7 @@ export function AssistantPageContent() {
         setMessages((prev) => [
           ...prev,
           {
-            id: `user-voice-${Date.now()}`,
+            id: nextMessageId("user-voice"),
             role: "user",
             text: data.user_text,
             timestamp: data.timestamp - 1,
@@ -248,7 +264,7 @@ export function AssistantPageContent() {
             isVoice: true,
           },
           {
-            id: `model-${Date.now()}`,
+            id: nextMessageId("model"),
             role: "model",
             text: data.text,
             timestamp: data.timestamp,
@@ -270,8 +286,11 @@ export function AssistantPageContent() {
   // Browser speech recognition (for remote dashboard operators)
   const handleBrowserVoiceTurn = () => {
     if (typeof window === "undefined") return;
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const win = window as unknown as {
+      SpeechRecognition?: new () => NonNullable<typeof browserRecognitionRef.current>;
+      webkitSpeechRecognition?: new () => NonNullable<typeof browserRecognitionRef.current>;
+    };
+    const SpeechRecognition = win.SpeechRecognition || win.webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
       alert("Browser Speech Recognition is not supported on this browser. Use Robot Mic.");
@@ -294,7 +313,7 @@ export function AssistantPageContent() {
       recognition.onend = () => setIsListeningBrowser(false);
       recognition.onerror = () => setIsListeningBrowser(false);
 
-      recognition.onresult = (event: any) => {
+      recognition.onresult = (event: { results: Array<Array<{ transcript: string }>> }) => {
         const transcript = event.results[0]?.[0]?.transcript;
         if (transcript) {
           void handleSendText(transcript);

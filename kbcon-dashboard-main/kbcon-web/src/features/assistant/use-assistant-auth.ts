@@ -20,7 +20,9 @@ export function useAssistantAuth({
 
   const prevSessionRef = useRef<AuthorizationSession | null>(null);
   const callbacksRef = useRef({ onAuthorizationLost, onAuthorizationGranted });
-  callbacksRef.current = { onAuthorizationLost, onAuthorizationGranted };
+  useEffect(() => {
+    callbacksRef.current = { onAuthorizationLost, onAuthorizationGranted };
+  });
 
   const getHeaders = useCallback(async (): Promise<HeadersInit> => {
     const headers: Record<string, string> = {
@@ -93,7 +95,11 @@ export function useAssistantAuth({
     if (!user || authLoading) return;
 
     let mounted = true;
-    void startOrSyncScan();
+    const timeout = setTimeout(() => {
+      if (mounted) {
+        void startOrSyncScan();
+      }
+    }, 0);
 
     const interval = setInterval(() => {
       if (mounted) {
@@ -103,6 +109,7 @@ export function useAssistantAuth({
 
     return () => {
       mounted = false;
+      clearTimeout(timeout);
       clearInterval(interval);
       // NOTE: We intentionally DO NOT cancel the session on unmount
       // to preserve continuous background perception across navigation.
