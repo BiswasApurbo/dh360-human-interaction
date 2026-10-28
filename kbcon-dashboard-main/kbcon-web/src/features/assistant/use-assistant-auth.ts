@@ -141,7 +141,9 @@ export function useAssistantAuth({
   }, [session]);
 
   const isAuthorized =
-    session?.status === "authorized" && Boolean(session?.person_id);
+    session?.status === "authorized" &&
+    Boolean(session?.person_id) &&
+    !session?.ended_at_iso;
   const currentPersonId = isAuthorized ? session?.person_id ?? null : null;
   const currentDisplayName = isAuthorized
     ? session?.display_name || session?.person_id || null

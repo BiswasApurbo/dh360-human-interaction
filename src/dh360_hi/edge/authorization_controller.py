@@ -46,22 +46,30 @@ class AuthorizationController:
         timeout_seconds: float = 30.0,
         on_transition: Callable[[AuthorizationSession], None] | None = None,
         require_continuous_presence: bool = True,
+        max_frame_staleness: float = 2.0,
+        max_absence_seconds: float = 2.0,
     ) -> None:
         self._session_manager = session_manager
         self._timeout_seconds = timeout_seconds
         self._on_transition = on_transition
         self._require_continuous_presence = require_continuous_presence
+        self._max_frame_staleness = max_frame_staleness
+        self._max_absence_seconds = max_absence_seconds
         self._lock = threading.Lock()
         self._session: AuthorizationSession | None = None
         self._deadline: float | None = None
         self._closed: bool = False
+        self._last_frame_timestamp: float = 0.0
+        self._last_presence_timestamp: float = 0.0
 
         # Register observer callback immediately
         self._session_manager.add_observer(self._on_frame)
         _logger.debug(
             "AuthorizationController registered observer with SessionManager "
-            "(require_continuous_presence=%s)",
+            "(require_continuous_presence=%s, max_frame_staleness=%.2f, max_absence=%.2f)",
             self._require_continuous_presence,
+            self._max_frame_staleness,
+            self._max_absence_seconds,
         )
 
     @property
@@ -76,31 +84,47 @@ class AuthorizationController:
         Raises ``ValueError`` if a session is already active.
         """
         session_to_notify = None
+        now = time.monotonic()
         with self._lock:
             if self._closed:
                 raise RuntimeError("AuthorizationController is closed")
 
-            # Check timeout before rejecting active session
-            if (
-                self._session is not None
-                and self._session.is_active
-                and not self._session.is_authorized
-                and self._deadline is not None
-                and time.monotonic() >= self._deadline
-            ):
-                try:
-                    self._session = self._session.complete(AuthorizationStatus.TIMEOUT)
-                    session_to_notify = self._session
-                    _logger.debug("AuthorizationController session timed out prior to start")
-                except Exception as exc:
-                    _logger.exception("Failed to complete timed-out session on start: %s", exc)
+            # Check timeout, frame staleness, or presence absence before evaluating active session
+            if self._session is not None and self._session.is_active:
+                should_expire = False
+                expire_status = AuthorizationStatus.TIMEOUT
+
+                if not self._session.is_authorized:
+                    if self._deadline is not None and now >= self._deadline:
+                        should_expire = True
+                        expire_status = AuthorizationStatus.TIMEOUT
+                else:
+                    # An authorized session where frames are stale or face is absent expires as LOST
+                    if (
+                        self._last_frame_timestamp > 0
+                        and (now - self._last_frame_timestamp > self._max_frame_staleness)
+                    ) or (
+                        self._last_presence_timestamp > 0
+                        and (now - self._last_presence_timestamp > self._max_absence_seconds)
+                    ):
+                        should_expire = True
+                        expire_status = AuthorizationStatus.LOST
+
+                if should_expire:
+                    try:
+                        self._session = self._session.complete(expire_status)
+                        session_to_notify = self._session
+                        _logger.debug("AuthorizationController session completed prior to start (%s)", expire_status)
+                    except Exception as exc:
+                        _logger.exception("Failed to complete session on start: %s", exc)
 
             if self._session is not None and self._session.is_active:
                 raise ValueError("An active authorization session already exists")
 
             new_session = AuthorizationSession()
             self._session = new_session
-            self._deadline = time.monotonic() + self._timeout_seconds
+            self._deadline = now + self._timeout_seconds
+            self._last_presence_timestamp = 0.0
             _logger.debug(
                 "AuthorizationController started new session %s with deadline %s",
                 new_session.authorization_id,
@@ -175,20 +199,43 @@ class AuthorizationController:
     def get_current(self) -> AuthorizationSession | None:
         """Return the latest session snapshot (may be ``None``)."""
         session_to_notify: AuthorizationSession | None = None
+        now = time.monotonic()
         with self._lock:
-            if (
-                self._session is not None
-                and self._session.is_active
-                and not self._session.is_authorized
-                and self._deadline is not None
-                and time.monotonic() >= self._deadline
-            ):
-                try:
-                    self._session = self._session.complete(AuthorizationStatus.TIMEOUT)
-                    session_to_notify = self._session
-                    _logger.debug("AuthorizationController session timed out")
-                except Exception as exc:
-                    _logger.exception("Failed to complete session on timeout: %s", exc)
+            if self._session is not None and self._session.is_active:
+                if self._session.is_authorized:
+                    # 1. Staleness check: camera stopped or disconnected
+                    if (
+                        self._last_frame_timestamp > 0
+                        and (now - self._last_frame_timestamp > self._max_frame_staleness)
+                    ):
+                        _logger.warning(
+                            "AuthorizationController: frame staleness exceeded (%.2fs); revoking authorization as LOST",
+                            now - self._last_frame_timestamp,
+                        )
+                        self._session = self._session.complete(AuthorizationStatus.LOST)
+                        session_to_notify = self._session
+                    # 2. Absence check: authorized face is no longer in camera view
+                    elif (
+                        self._last_presence_timestamp > 0
+                        and (now - self._last_presence_timestamp > self._max_absence_seconds)
+                    ):
+                        _logger.warning(
+                            "AuthorizationController: presence absence exceeded (%.2fs); revoking authorization as LOST",
+                            now - self._last_presence_timestamp,
+                        )
+                        self._session = self._session.complete(AuthorizationStatus.LOST)
+                        session_to_notify = self._session
+                else:
+                    if (
+                        self._deadline is not None
+                        and now >= self._deadline
+                    ):
+                        try:
+                            self._session = self._session.complete(AuthorizationStatus.TIMEOUT)
+                            session_to_notify = self._session
+                            _logger.debug("AuthorizationController session timed out")
+                        except Exception as exc:
+                            _logger.exception("Failed to complete session on timeout: %s", exc)
             current = self._session
 
         if session_to_notify is not None:
@@ -212,8 +259,11 @@ class AuthorizationController:
     def _on_frame(self, result: TwoRateFrameResult) -> None:
         """Observer invoked by ``SessionManager`` after processing each frame."""
         session_to_notify: AuthorizationSession | None = None
+        now = time.monotonic()
         try:
             with self._lock:
+                self._last_frame_timestamp = now
+
                 if self._session is None or not self._session.is_active:
                     return
 
@@ -221,7 +271,7 @@ class AuthorizationController:
                 if (
                     not self._session.is_authorized
                     and self._deadline is not None
-                    and time.monotonic() >= self._deadline
+                    and now >= self._deadline
                 ):
                     self._session = self._session.complete(AuthorizationStatus.TIMEOUT)
                     session_to_notify = self._session
@@ -235,6 +285,15 @@ class AuthorizationController:
                     identity_state = track_state.state if track_state is not None else None
 
                     previously_authorized = self._session.is_authorized
+
+                    if (
+                        previously_authorized
+                        and track_state is not None
+                        and track_state.state is IdentityState.IDENTIFIED
+                        and track_state.current_person_id == self._session.person_id
+                    ):
+                        self._last_presence_timestamp = now
+
                     new_status = derive_authorization_status(
                         identity_state,
                         target_result=target_result,
@@ -263,9 +322,14 @@ class AuthorizationController:
                             # Strict continuous presence policy: LOST on target/identity drop
                             self._session = self._session.complete(AuthorizationStatus.LOST)
                             session_to_notify = self._session
-                        # Under persistent policy (require_continuous_presence=False),
-                        # transient missed detections, head turns, conversational pauses,
-                        # or non-matching frames keep the session active and AUTHORIZED.
+                        elif (
+                            not self._require_continuous_presence
+                            and self._last_presence_timestamp > 0
+                            and (now - self._last_presence_timestamp > self._max_absence_seconds)
+                        ):
+                            # Persistent presence policy: expired after max_absence_seconds
+                            self._session = self._session.complete(AuthorizationStatus.LOST)
+                            session_to_notify = self._session
                     else:
                         prior_status = self._session.status
                         # Pre-authorization evolution:
@@ -280,6 +344,7 @@ class AuthorizationController:
                                     person_id=track_state.current_person_id,
                                     display_name=track_state.current_display_name,
                                 )
+                                self._last_presence_timestamp = now
                                 # Clear fixed inactivity deadline once successfully authorized
                                 self._deadline = None
                                 session_to_notify = self._session
@@ -293,6 +358,12 @@ class AuthorizationController:
                             and prior_status is not new_status
                         ):
                             self._session = self._session.transition(new_status)
+                            session_to_notify = self._session
+                        elif (
+                            new_status is AuthorizationStatus.ACTIVE
+                            and prior_status is not AuthorizationStatus.ACTIVE
+                        ):
+                            self._session = self._session.transition(AuthorizationStatus.ACTIVE)
                             session_to_notify = self._session
                         elif (
                             new_status is AuthorizationStatus.ACTIVE

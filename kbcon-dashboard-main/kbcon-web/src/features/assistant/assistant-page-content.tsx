@@ -145,7 +145,7 @@ export function AssistantPageContent() {
       text: query,
       timestamp: Date.now() / 1000,
       language,
-      isPersonal: isAuthorized,
+      isPersonal: false,
     };
 
     setMessages((prev) => [...prev, userMessage]);
@@ -169,6 +169,15 @@ export function AssistantPageContent() {
       }
 
       const data: DialogueTurnResponse = await res.json();
+      const isPrivilegedTurn = Boolean(data.metadata?.is_privileged);
+
+      if (isPrivilegedTurn) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === userMessage.id ? { ...m, isPersonal: true } : m
+          )
+        );
+      }
 
       const modelMessage: ChatMessage = {
         id: `model-${Date.now()}`,
@@ -176,7 +185,7 @@ export function AssistantPageContent() {
         text: data.text,
         timestamp: data.timestamp,
         language,
-        isPersonal: isAuthorized,
+        isPersonal: isPrivilegedTurn,
       };
 
       setMessages((prev) => [...prev, modelMessage]);
@@ -224,6 +233,7 @@ export function AssistantPageContent() {
       }
 
       const data: DialogueVoiceTurnResponse = await res.json();
+      const isPrivilegedTurn = Boolean(data.metadata?.is_privileged);
 
       if (data.user_text) {
         setMessages((prev) => [
@@ -234,7 +244,7 @@ export function AssistantPageContent() {
             text: data.user_text,
             timestamp: data.timestamp - 1,
             language,
-            isPersonal: isAuthorized,
+            isPersonal: isPrivilegedTurn,
             isVoice: true,
           },
           {
@@ -243,7 +253,7 @@ export function AssistantPageContent() {
             text: data.text,
             timestamp: data.timestamp,
             language,
-            isPersonal: isAuthorized,
+            isPersonal: isPrivilegedTurn,
             isVoice: true,
           },
         ]);

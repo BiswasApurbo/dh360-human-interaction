@@ -18,6 +18,7 @@ Tests cover:
 
 from __future__ import annotations
 
+import time
 from unittest import mock
 
 import pytest
@@ -682,3 +683,103 @@ class TestAuthorizationControllerTransitionNotification:
         assert ctrl.invalidate_person("p-any") is None
         ctrl.close()
         assert ctrl.invalidate_person("p-any") is None
+
+
+class TestStalenessAndAbsenceSafeguards:
+    def test_camera_frame_staleness_revokes_authorized_session_as_lost(self) -> None:
+        """When camera stops delivering frames, active authorization must revoke promptly as LOST."""
+        mgr = SessionManager(config=SessionConfig(require_confirmed_presence=True))
+        events: list[AuthorizationSession] = []
+        ctrl = AuthorizationController(
+            session_manager=mgr,
+            max_frame_staleness=1.0,
+            max_absence_seconds=1.0,
+            on_transition=events.append,
+        )
+        ctrl.start()
+
+        # Frame 1: Authorize Alice
+        auth_state = _mk_id_state(
+            track_id=1,
+            state=IdentityState.IDENTIFIED,
+            person_id="p-100",
+            display_name="Alice",
+        )
+        mgr.process_frame_result(_mk_frame(primary_track_id=1, identity_states={1: auth_state}))
+
+        assert ctrl.get_current() is not None
+        assert ctrl.get_current().status is AuthorizationStatus.AUTHORIZED
+        assert ctrl.get_current().is_authorized is True
+
+        # Simulate camera disconnect or frozen pipeline: 2 seconds pass with zero frames
+        base_time = time.monotonic()
+        with mock.patch("time.monotonic", return_value=base_time + 2.0):
+            current = ctrl.get_current()
+            assert current is not None
+            assert current.status is AuthorizationStatus.LOST
+            assert current.is_authorized is False
+            assert current.is_completed is True
+            assert current.ended_at_iso is not None
+            assert events[-1].status is AuthorizationStatus.LOST
+
+        ctrl.close()
+
+    def test_face_absence_revokes_authorized_session_as_lost(self) -> None:
+        """When authorized person walks away, session must revoke as LOST."""
+        mgr = SessionManager(config=SessionConfig(require_confirmed_presence=True))
+        ctrl = AuthorizationController(
+            session_manager=mgr,
+            require_continuous_presence=False,
+            max_frame_staleness=5.0,
+            max_absence_seconds=1.0,
+        )
+        ctrl.start()
+
+        auth_state = _mk_id_state(
+            track_id=1,
+            state=IdentityState.IDENTIFIED,
+            person_id="p-100",
+            display_name="Alice",
+        )
+        mgr.process_frame_result(_mk_frame(primary_track_id=1, identity_states={1: auth_state}))
+        assert ctrl.get_current().is_authorized is True
+
+        # Frames continue arriving from camera, but Alice is no longer present (empty room)
+        base_time = time.monotonic()
+        with mock.patch("time.monotonic", return_value=base_time + 1.5):
+            mgr.process_frame_result(_mk_frame(primary_track_id=None))
+            current = ctrl.get_current()
+            assert current is not None
+            assert current.status is AuthorizationStatus.LOST
+            assert current.is_authorized is False
+
+        ctrl.close()
+
+    def test_start_replaces_stale_session_cleanly(self) -> None:
+        """Calling start() when a prior session is stale completes it as LOST and begins new scan."""
+        mgr = SessionManager(config=SessionConfig(require_confirmed_presence=True))
+        ctrl = AuthorizationController(
+            session_manager=mgr,
+            max_frame_staleness=1.0,
+            max_absence_seconds=1.0,
+        )
+        sess1 = ctrl.start()
+
+        auth_state = _mk_id_state(
+            track_id=1,
+            state=IdentityState.IDENTIFIED,
+            person_id="p-100",
+            display_name="Alice",
+        )
+        mgr.process_frame_result(_mk_frame(primary_track_id=1, identity_states={1: auth_state}))
+        assert ctrl.get_current().is_authorized is True
+
+        base_time = time.monotonic()
+        with mock.patch("time.monotonic", return_value=base_time + 2.5):
+            # Attempting to start a new scan does not fail with 409; it gracefully finalizes stale session
+            sess2 = ctrl.start()
+            assert sess2.authorization_id != sess1.authorization_id
+            assert sess2.status is AuthorizationStatus.ACTIVE
+            assert sess2.is_active is True
+
+        ctrl.close()

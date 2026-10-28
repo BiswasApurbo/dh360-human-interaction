@@ -73,11 +73,16 @@ def register_subparser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     )
     parser.add_argument(
         "--continuous-presence",
+        dest="continuous_presence",
         action="store_true",
-        help=(
-            "Require continuous face presence to maintain authorization "
-            "(default: persistent until logout)"
-        ),
+        default=True,
+        help="Require continuous face presence to maintain authorization (default: True)",
+    )
+    parser.add_argument(
+        "--allow-persistent-auth",
+        dest="continuous_presence",
+        action="store_false",
+        help="Allow authorization to persist across temporary face absences",
     )
 
 
@@ -138,7 +143,7 @@ def handle_serve(args: argparse.Namespace) -> int:
     auth_ctrl = AuthorizationController(
         session_manager=service.runtime.session_manager,
         timeout_seconds=timeout_sec,
-        require_continuous_presence=getattr(args, "continuous_presence", False),
+        require_continuous_presence=getattr(args, "continuous_presence", True),
     )
 
     # Dialogue subsystem composition

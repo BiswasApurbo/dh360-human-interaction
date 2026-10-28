@@ -333,6 +333,7 @@ class DialogueCoordinator:
         user_text: str | None = None,
         language: SupportedLanguage | None = None,
         speak_response: bool = True,
+        blocking_tts: bool = False,
         now: float | None = None,
     ) -> DialogueTurn:
         """Execute a full dialogue exchange turn synchronously.
@@ -602,6 +603,8 @@ class DialogueCoordinator:
                 metadata["mock"] = True
             if error_code is not None:
                 metadata["error"] = error_code
+            metadata["is_privileged"] = bool(was_privileged and error_code is None)
+            metadata["speak_response"] = bool(should_speak)
 
             if should_speak and self._tts_provider is not None:
                 if self._stt_provider is not None:
@@ -609,7 +612,7 @@ class DialogueCoordinator:
                         self._stt_provider.hold()
 
                 try:
-                    self._tts_provider.speak(response_text, language=target_lang, blocking=True)
+                    self._tts_provider.speak(response_text, language=target_lang, blocking=blocking_tts)
                 except (TTSProviderError, ProviderError) as exc:
                     logger.warning("DialogueCoordinator: TTS playback failed: %s", exc)
                     metadata["tts_error"] = True
@@ -646,6 +649,7 @@ class DialogueCoordinator:
         user_text: str | None = None,
         language: SupportedLanguage | None = None,
         speak_response: bool = True,
+        blocking_tts: bool = False,
         now: float | None = None,
     ) -> DialogueTurn:
         """Asynchronously execute a dialogue turn, offloading synchronous providers to a thread.
@@ -658,5 +662,6 @@ class DialogueCoordinator:
             user_text=user_text,
             language=language,
             speak_response=speak_response,
+            blocking_tts=blocking_tts,
             now=now,
         )

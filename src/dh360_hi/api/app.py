@@ -77,7 +77,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 session_manager=service.runtime.session_manager,
                 timeout_seconds=timeout_sec,
                 on_transition=_on_auth_transition,
-                require_continuous_presence=False,
+                require_continuous_presence=True,
             )
             app.state.authorization_controller = auth_ctrl
         else:
@@ -168,7 +168,7 @@ def create_app(
             session_manager=service.runtime.session_manager,
             timeout_seconds=timeout_sec,
             on_transition=_on_auth_trans_created,
-            require_continuous_presence=False,
+            require_continuous_presence=True,
         )
         service.authorization_controller = app.state.authorization_controller
     else:

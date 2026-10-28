@@ -46,6 +46,7 @@ export interface DialogueTurnResponse {
     user_text?: string;
     is_voice?: boolean;
     mock?: boolean;
+    is_privileged?: boolean;
     error?: string;
     [key: string]: unknown;
   };
@@ -60,6 +61,7 @@ export interface DialogueVoiceTurnResponse {
   metadata?: {
     is_voice?: boolean;
     mock?: boolean;
+    is_privileged?: boolean;
     error?: string;
     [key: string]: unknown;
   };
