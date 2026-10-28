@@ -90,6 +90,16 @@ def test_gemini_missing_api_key_raises_typed_error(monkeypatch: pytest.MonkeyPat
 
 def test_gemini_missing_sdk_raises_typed_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify missing google-genai package raises sanitized LLMProviderError."""
+    import builtins
+
+    orig_import = builtins.__import__
+
+    def mock_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if "genai" in name:
+            raise ImportError("No module named 'google.genai'")
+        return orig_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", mock_import)
     monkeypatch.setenv("GEMINI_API_KEY", "test-dummy-key")
     adapter = ElivaGeminiAdapter(api_key="test-dummy-key")
 
