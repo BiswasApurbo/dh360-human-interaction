@@ -374,7 +374,7 @@ def load_config(
             or os.environ.get("DH360_HI_API__OPERATOR_TOKEN")
             or os.environ.get("DH360_HI_OPERATOR_TOKEN")
         )
-        if not fallback_token:
+        if not fallback_token and "PYTEST_CURRENT_TEST" not in os.environ:
             from pathlib import Path
             candidate_paths = [
                 Path("kbcon-dashboard-main/kbcon-web/.env.local"),

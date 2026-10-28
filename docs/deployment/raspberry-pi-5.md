@@ -91,7 +91,7 @@ sudo journalctl -u dh360-hi.service -f
 
 ## 5. Bridging Raspberry Pi to Vercel Dashboard
 
-Because Vercel runs in the cloud and cannot directly reach private LAN IP addresses (`192.168.x.x`), establish a secure tunnel to expose the FastAPI daemon (`127.0.0.1:8001`) without opening public router firewall ports:
+Because Vercel runs in the cloud and cannot directly reach private LAN IP addresses (`192.168.x.x`), establish a secure tunnel to expose the FastAPI daemon (`127.0.0.1:8000`) without opening public router firewall ports:
 
 ### Recommended: Cloudflare Tunnel (Free & Authenticated)
 1. Install `cloudflared` on the Pi:
@@ -101,7 +101,7 @@ Because Vercel runs in the cloud and cannot directly reach private LAN IP addres
    ```
 2. Start tunnel:
    ```bash
-   cloudflared tunnel --url http://127.0.0.1:8001
+   cloudflared tunnel --url http://127.0.0.1:8000
    ```
 3. Note the assigned tunnel URL (e.g., `https://dh360-pi.yourdomain.com`).
 4. Set this URL as `DH360_API_URL` in your Vercel Project Environment Variables.

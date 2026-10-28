@@ -1,0 +1,12 @@
+# Digital Health 360 (DH360) Human Interaction Configuration
+# Default configuration for Edge / Raspberry Pi 5 Deployment
+
+db_path = "dh360.db"
+auto_init_db = true
+camera_index = 0
+detector_model_path = "models/weights/face_detection_yunet_2023mar.onnx"
+embedder_model_path = "models/weights/face_recognition_sface_2021dec.onnx"
+
+[runtime]
+target_fps = 30.0
+session_timeout_seconds = 30.0
