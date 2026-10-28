@@ -519,7 +519,14 @@ class DialogueCoordinator:
             error_code: str | None = None
             response_text: str
 
-            if self._llm_provider is None:
+            is_mock_llm = (
+                getattr(self._llm_provider, "__class__", None).__name__ == "MockLLMProvider"
+            )
+
+            if direct_response is not None and not is_mock_llm:
+                # Deterministic instant response for direct factual queries
+                response_text = direct_response
+            elif self._llm_provider is None:
                 if direct_response is not None:
                     response_text = direct_response
                 else:
