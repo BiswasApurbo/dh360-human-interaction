@@ -74,7 +74,7 @@ def test_demo_endpoint_contains_chat_interface_and_safe_rendering() -> None:
     assert 'id="chat-tts-toggle"' in html
     assert 'id="chat-voice-status"' in html
     assert 'id="chat-error-box"' in html
-    assert "Conversational Assistant (Eliva)" in html
+    assert "Conversational Assistant (KBCON)" in html
     assert "dialogue:interact" in html
     assert "toggleVoiceInput" in html
     assert "stopSpeechAndListening" in html

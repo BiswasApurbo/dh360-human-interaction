@@ -21,6 +21,7 @@ from dh360_hi.integrations.eliva import (
     ElivaGoogleTTSAdapter,
     ElivaSonioxAdapter,
 )
+from dh360_hi.integrations.eliva.adapters import build_kbcon_system_instruction
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +177,11 @@ def handle_serve(args: argparse.Namespace) -> int:
                 gtts_json = None
 
             llm_provider = ElivaGeminiAdapter(
-                api_key=gemini_key or os.getenv("GEMINI_API_KEY")
+                api_key=gemini_key or os.getenv("GEMINI_API_KEY"),
+                system_instruction=build_kbcon_system_instruction(
+                    institution_type=knowledge_svc.institution_type,
+                    institution_name=knowledge_svc.institution_name,
+                ),
             )
             stt_provider = ElivaSonioxAdapter(
                 api_key=soniox_key or os.getenv("SONIOX_API_KEY")

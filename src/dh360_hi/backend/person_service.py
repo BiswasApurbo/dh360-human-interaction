@@ -265,6 +265,14 @@ class BasePersonService(ABC):
     ) -> InMemoryGallery:
         """Load an isolated InMemoryGallery from persisted database records."""
 
+    def get_setting(self, key: str, default: str | None = None) -> str | None:
+        """Retrieve a persistent setting value by key."""
+        return self.repository.get_setting(key, default)
+
+    def set_setting(self, key: str, value: str) -> None:
+        """Store or update a persistent setting value by key."""
+        self.repository.set_setting(key, value)
+
 
 class PersonService(BasePersonService):
     """Concrete PersonService coordinating domain validation and repository persistence."""

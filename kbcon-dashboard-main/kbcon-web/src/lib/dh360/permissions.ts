@@ -236,6 +236,15 @@ export const ALLOWED_DH360_RULES: RouteRule[] = [
     scope: "knowledge:manage",
   },
 
+  // System Settings & Institution Configuration
+  {
+    name: "settings_institution",
+    pattern: /^\/settings\/institution\/?$/,
+    allowedMethods: ["GET", "PUT", "POST"],
+    minRole: "admin",
+    scope: "settings:manage",
+  },
+
   // Session History & Analytics
   {
     name: "sessions_collection",

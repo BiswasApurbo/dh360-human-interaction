@@ -53,11 +53,11 @@ export async function handleDh360ProxyRequest(
 
   const principal = authResult.principal;
 
-  // 3. Inspect request body for PATCH / POST
+  // 3. Inspect request body for PATCH / POST / PUT
   let requestBodyObj: Record<string, unknown> | null = null;
   let rawBodyText: string | null = null;
 
-  if (method === "POST" || method === "PATCH") {
+  if (method === "POST" || method === "PATCH" || method === "PUT") {
     const contentType = request.headers.get("content-type") || "";
     const contentLength = parseInt(request.headers.get("content-length") || "0", 10);
 

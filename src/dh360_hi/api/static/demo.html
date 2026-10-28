@@ -747,7 +747,7 @@
     <div id="chat-section" class="status-panel" style="margin-top: 1rem; background-color: #ffffff; padding: 1.25rem;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
         <h3 style="font-size: 1rem; font-weight: 600; margin: 0; color: #111827; display: flex; align-items: center; gap: 0.5rem;">
-          <span>Conversational Assistant (Eliva)</span>
+          <span>Conversational Assistant (KBCON)</span>
         </h3>
         <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap: wrap;">
           <select id="chat-language" style="font-size: 0.8rem; padding: 0.25rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: white; color: var(--text);">
@@ -788,7 +788,7 @@
         <button id="chat-stop-btn" type="button" onclick="stopSpeechAndListening()" style="display: none; font-size: 0.85rem; padding: 0.5rem 0.85rem; background: #dc2626; color: white; border-radius: 6px; border: none; cursor: pointer; font-weight: 500;" title="Stop audio playback or listening">
           <span>⏹ Stop</span>
         </button>
-        <input type="text" id="chat-input" placeholder="Type or click Speak (e.g. 'তুমি কে?' or 'Who is Eliva?')..." style="flex: 1; padding: 0.5rem 0.75rem; font-size: 0.85rem; font-family: inherit; border: 1px solid var(--border); border-radius: 6px;" onkeydown="handleChatKeyDown(event)" />
+        <input type="text" id="chat-input" placeholder="Type or click Speak (e.g. 'তুমি কে?' or 'Who are you?')..." style="flex: 1; padding: 0.5rem 0.75rem; font-size: 0.85rem; font-family: inherit; border: 1px solid var(--border); border-radius: 6px;" onkeydown="handleChatKeyDown(event)" />
         <button id="chat-send-btn" type="button" onclick="sendChatMessage()" style="font-size: 0.85rem; padding: 0.5rem 1rem;">Send</button>
       </div>
 
@@ -2779,7 +2779,7 @@
             }
           } else {
             if (speakResponse) {
-              setChatVoiceState("speaking", "Eliva is speaking answer aloud...");
+              setChatVoiceState("speaking", "KBCON is speaking answer aloud...");
               setTimeout(() => {
                 if (!isVoiceInFlight) setChatVoiceState("ready", "Ready");
               }, 4000);
@@ -2865,7 +2865,7 @@
         subtext.textContent = "Public knowledge only";
         if (logoutBtn) logoutBtn.style.display = "none";
         if (input && !input.value) {
-          input.placeholder = "Ask general questions (e.g. 'তুমি কে?' or 'Who is Eliva?')...";
+          input.placeholder = "Ask general questions (e.g. 'তুমি কে?' or 'Who are you?')...";
         }
         if (wasAuthorized) {
           appendChatSystemNotice("Authorization ended or identity changed — switched to General mode (confidential answers locked).");
@@ -2931,7 +2931,7 @@
 
       const senderSpan = document.createElement("span");
       senderSpan.style.fontWeight = "600";
-      senderSpan.textContent = role === "user" ? "You" : "Eliva";
+      senderSpan.textContent = role === "user" ? "You" : "KBCON";
       headerDiv.appendChild(senderSpan);
 
       if (isMock) {
@@ -2965,7 +2965,7 @@
       const loadDiv = document.createElement("div");
       loadDiv.className = "chat-loading";
       loadDiv.id = "chat-loading-indicator";
-      loadDiv.textContent = "Eliva is thinking...";
+      loadDiv.textContent = "KBCON is thinking...";
       history.appendChild(loadDiv);
       history.scrollTop = history.scrollHeight;
       return loadDiv;
@@ -3042,7 +3042,7 @@
       const ttsToggle = document.getElementById("chat-tts-toggle");
       const speakResponse = ttsToggle ? ttsToggle.checked : true;
 
-      setChatVoiceState("thinking", "Eliva is thinking...");
+      setChatVoiceState("thinking", "KBCON is thinking...");
 
       try {
         const resp = await fetch("/dialogue/turn", {
@@ -3071,7 +3071,7 @@
             setChatVoiceState("ready", "Ready");
           } else {
             if (speakResponse) {
-              setChatVoiceState("speaking", "Eliva is speaking answer aloud...");
+              setChatVoiceState("speaking", "KBCON is speaking answer aloud...");
               setTimeout(() => {
                 setChatVoiceState("ready", "Ready");
               }, 4000);

@@ -21,6 +21,7 @@ from dh360_hi.api.routers.interaction import router as interaction_router
 from dh360_hi.api.routers.knowledge import router as knowledge_router
 from dh360_hi.api.routers.persons import router as persons_router
 from dh360_hi.api.routers.sessions import router as sessions_router
+from dh360_hi.api.routers.settings import router as settings_router
 from dh360_hi.api.security import OperatorSecurityError
 from dh360_hi.application.factory import create_interaction_service
 from dh360_hi.application.loader import load_config
@@ -243,4 +244,5 @@ def create_app(
     app.include_router(demo_router)
     app.include_router(dialogue_router)
     app.include_router(knowledge_router)
+    app.include_router(settings_router)
     return app

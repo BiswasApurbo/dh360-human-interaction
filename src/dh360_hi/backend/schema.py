@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 SCHEMA_V1_SQL = """
 -- Schema Version Tracking
@@ -79,11 +79,24 @@ ALTER TABLE persons ADD COLUMN profile_description TEXT;
 ALTER TABLE persons ADD COLUMN ai_qa_pairs TEXT NOT NULL DEFAULT '[]';
 """
 
+SCHEMA_V4_SQL = """
+-- Migration v4: System Settings Table for Persistent Configuration
+CREATE TABLE IF NOT EXISTS system_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, str]] = {
     1: (SCHEMA_V1_SQL, "Initial schema: persons, face_embeddings, and indices with cascade delete"),
     2: (SCHEMA_V2_SQL, "Schema v2: interaction_sessions table and performance indices"),
     3: (
         SCHEMA_V3_SQL,
         "Schema v3: hospital profile and AI context fields for authorized person registration",
+    ),
+    4: (
+        SCHEMA_V4_SQL,
+        "Schema v4: system_settings table for persistent institution and system configuration",
     ),
 }

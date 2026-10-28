@@ -211,6 +211,12 @@ PROFILE_FIELD_KEYWORDS: dict[str, tuple[str, ...]] = {
         "অফিস",
         "কক্ষ",
         "বসেন",
+        "রুম কত",
+        "রুম নম্বর",
+        "রুম নং",
+        "কক্ষ নম্বর",
+        "অফিস কোথায়",
+        "বসার জায়গা",
     ),
     "working_hours": (
         "hours",
@@ -223,6 +229,11 @@ PROFILE_FIELD_KEYWORDS: dict[str, tuple[str, ...]] = {
         "কর্মঘণ্টা",
         "সময়সূচি",
         "সময়সূচি",
+        "কাজের সময়",
+        "সময়",
+        "ডিউটি",
+        "কখন বসেন",
+        "কখন থাকেন",
     ),
     "department": (
         "department",
@@ -232,6 +243,7 @@ PROFILE_FIELD_KEYWORDS: dict[str, tuple[str, ...]] = {
         "school",
         "বিভাগ",
         "অনুষদ",
+        "ডিপার্টমেন্ট",
     ),
     "role": (
         "role",
@@ -245,10 +257,14 @@ PROFILE_FIELD_KEYWORDS: dict[str, tuple[str, ...]] = {
         "dean",
         "officer",
         "assistant",
+        "doctor",
+        "cardiologist",
+        "lead",
         "পদবি",
         "পদ",
         "দায়িত্ব",
         "দায়িত্ব",
+        "ডেজিগনেশন",
     ),
     "profile_description": (
         "bio",
@@ -263,6 +279,7 @@ PROFILE_FIELD_KEYWORDS: dict[str, tuple[str, ...]] = {
         "বিবরণ",
         "বিশেষজ্ঞ",
         "গবেষণা",
+        "প্রোফাইল",
     ),
 }
 
@@ -271,7 +288,26 @@ SELF_REFERENTIAL_TOKENS: frozenset[str] = frozenset(
 )
 
 IDENTITY_QUESTION_TOKENS: frozenset[str] = frozenset(
-    {"who", "name", "identity", "profile", "কে", "নাম", "পরিচয়", "পরিচয়", "প্রোফাইল"}
+    {
+        "who",
+        "name",
+        "identity",
+        "profile",
+        "info",
+        "details",
+        "information",
+        "about",
+        "কে",
+        "নাম",
+        "পরিচয়",
+        "পরিচয়",
+        "প্রোফাইল",
+        "প্রোফাইলের",
+        "তথ্য",
+        "সম্পর্কে",
+        "বৃত্তান্ত",
+        "বিস্তারিত",
+    }
 )
 
 
@@ -283,6 +319,7 @@ class PublicFact:
     answer_en: str
     question_bn: str
     answer_bn: str
+    institution_type: str = "general"
 
     def get_question(self, language: SupportedLanguage) -> str:
         """Return question in requested language with fallback."""
@@ -333,16 +370,73 @@ class KnowledgeService:
         self,
         person_service: BasePersonService | None = None,
         csv_path: Path | str | None = None,
+        institution_type: str | None = None,
+        institution_name: str | None = None,
     ) -> None:
         self._person_service = person_service
         self._csv_path = Path(csv_path) if csv_path is not None else DEFAULT_KNOWLEDGE_CSV_PATH
         self._public_facts: list[PublicFact] = []
+
+        # Resolve persistent institution settings
+        resolved_type = institution_type
+        resolved_name = institution_name
+        if self._person_service is not None:
+            if resolved_type is None:
+                try:
+                    val = self._person_service.get_setting("institution_type")
+                    resolved_type = val if isinstance(val, str) else None
+                except Exception:
+                    resolved_type = None
+            if resolved_name is None:
+                try:
+                    val = self._person_service.get_setting("institution_name")
+                    resolved_name = val if isinstance(val, str) else None
+                except Exception:
+                    resolved_name = None
+
+        self._institution_type = self._normalize_institution_type(
+            resolved_type if isinstance(resolved_type, str) else "university"
+        )
+        self._institution_name = (
+            resolved_name.strip() if isinstance(resolved_name, str) else ""
+        )
         self._load_public_facts()
+
+    @staticmethod
+    def _normalize_institution_type(inst_type: str | None) -> str:
+        """Standardize institution mode to 'university' or 'clinic'."""
+        cleaned = (inst_type or "").strip().lower()
+        if cleaned in ("clinic", "hospital", "healthcare", "medical"):
+            return "clinic"
+        return "university"
+
+    @property
+    def institution_type(self) -> str:
+        """Active institution configuration ('university' or 'clinic')."""
+        return self._institution_type
+
+    @property
+    def institution_name(self) -> str:
+        """Configured institution name string."""
+        return self._institution_name
+
+    def set_institution(self, institution_type: str, institution_name: str = "") -> None:
+        """Update active institution configuration, persist to database, and reload knowledge."""
+        self._institution_type = self._normalize_institution_type(institution_type)
+        self._institution_name = (institution_name or "").strip()
+        if self._person_service is not None:
+            try:
+                self._person_service.set_setting("institution_type", self._institution_type)
+                self._person_service.set_setting("institution_name", self._institution_name)
+            except Exception:
+                logger.exception("Failed to persist institution settings to repository")
+        self.reload()
 
     def _load_public_facts(self) -> None:
         """Load public institutional facts from the CSV file.
 
-        Handles missing or malformed files gracefully without crashing.
+        Filters facts strictly based on the active institution configuration,
+        preventing cross-contamination between university and clinic domains.
         """
         self._public_facts.clear()
         if not self._csv_path.exists():
@@ -360,22 +454,40 @@ class KnowledgeService:
                     q_bn = row.get("প্রশ্ন (বাংলা)", "").strip()
                     a_bn = row.get("উত্তর (বাংলা)", "").strip()
 
+                    row_type = (row.get("Institution Type") or "").strip().lower()
+                    if not row_type:
+                        row_type = "university"
+                    elif row_type in ("clinic", "hospital", "healthcare"):
+                        row_type = "clinic"
+                    elif row_type in ("university", "campus", "academic"):
+                        row_type = "university"
+
                     # Only include rows that have at least one valid question and answer
                     if (q_en and a_en) or (q_bn and a_bn):
-                        self._public_facts.append(
-                            PublicFact(
-                                question_en=q_en,
-                                answer_en=a_en,
-                                question_bn=q_bn,
-                                answer_bn=a_bn,
+                        # Filter strictly by active institution type and general facts
+                        if row_type in ("general", self._institution_type):
+                            self._public_facts.append(
+                                PublicFact(
+                                    question_en=q_en,
+                                    answer_en=a_en,
+                                    question_bn=q_bn,
+                                    answer_bn=a_bn,
+                                    institution_type=row_type,
+                                )
                             )
-                        )
-            logger.info("Loaded %d public facts from %s", len(self._public_facts), self._csv_path)
+            logger.info(
+                "Loaded %d public facts for mode '%s' from %s",
+                len(self._public_facts),
+                self._institution_type,
+                self._csv_path,
+            )
         except Exception:
             logger.exception("Failed to load knowledge CSV from %s", self._csv_path)
 
     def reload(self) -> int:
         """Reload public institutional facts from the CSV file and return the count."""
+        self._load_public_facts()
+        return len(self._public_facts)
         self._load_public_facts()
         return len(self._public_facts)
 
@@ -478,11 +590,13 @@ class KnowledgeService:
         meaningful_query_tokens = _tokenize(query_text, filter_stop_words=True)
         raw_query_tokens = _tokenize(query_text, filter_stop_words=False)
 
-        # Self-referential identity inquiry (e.g. "who am i", "my name", "আমি কে", "আমার নাম")
-        is_self_identity_query = bool(
-            raw_query_tokens & SELF_REFERENTIAL_TOKENS
-            and raw_query_tokens & IDENTITY_QUESTION_TOKENS
+        # Self-referential identity inquiry (e.g. "who am i", "my name", "আমি কে", "আমার নাম", "আমার প্রোফাইলের তথ্য")
+        has_self_token = bool(raw_query_tokens & SELF_REFERENTIAL_TOKENS)
+        has_id_token = bool(raw_query_tokens & IDENTITY_QUESTION_TOKENS) or any(
+            any(id_kw in t for id_kw in ("প্রোফাইল", "তথ্য", "পরিচয়", "পরিচয়", "profile", "ident"))
+            for t in raw_query_tokens
         )
+        is_self_identity_query = has_self_token and has_id_token
 
         name = context.preferred_name or context.display_name
         name_tokens = _tokenize(name, filter_stop_words=True)
@@ -523,60 +637,82 @@ class KnowledgeService:
         include_name = is_identity_query or bool(meaningful_query_tokens & name_tokens)
 
         # Check role
+        asked_role = any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["role"])
         if context.role:
             role_tokens = _tokenize(context.role, filter_stop_words=True)
-            if (
-                any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["role"])
-                or bool(meaningful_query_tokens & role_tokens)
-                or is_identity_query
-            ):
+            if asked_role or bool(meaningful_query_tokens & role_tokens) or is_identity_query:
                 include_name = True
                 label = "পদবি" if language == "bn" else "Role"
                 facts.append(f"{label}: {context.role}")
+        elif asked_role or is_identity_query:
+            include_name = True
+            label = "পদবি" if language == "bn" else "Role"
+            not_rec = "প্রোফাইলে কোনো পদবি উল্লেখ নেই" if language == "bn" else "Not recorded in profile"
+            facts.append(f"{label}: {not_rec}")
 
         # Check department
+        asked_dept = any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["department"])
         if context.department:
             dept_tokens = _tokenize(context.department, filter_stop_words=True)
-            if (
-                any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["department"])
-                or bool(meaningful_query_tokens & dept_tokens)
-                or is_identity_query
-            ):
+            if asked_dept or bool(meaningful_query_tokens & dept_tokens) or is_identity_query:
                 include_name = True
                 label = "বিভাগ" if language == "bn" else "Department"
                 facts.append(f"{label}: {context.department}")
+        elif asked_dept or is_identity_query:
+            include_name = True
+            label = "বিভাগ" if language == "bn" else "Department"
+            not_rec = "প্রোফাইলে কোনো বিভাগ উল্লেখ নেই" if language == "bn" else "Not recorded in profile"
+            facts.append(f"{label}: {not_rec}")
 
         # Check office_room
+        asked_room = any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["office_room"])
         if context.office_room:
             room_tokens = _tokenize(context.office_room, filter_stop_words=True)
-            if any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["office_room"]) or bool(
-                meaningful_query_tokens & room_tokens
+            if (
+                asked_room
+                or bool(meaningful_query_tokens & room_tokens)
+                or is_identity_query
             ):
                 include_name = True
                 label = "অফিস রুম" if language == "bn" else "Office Room"
                 facts.append(f"{label}: {context.office_room}")
+        elif asked_room or is_identity_query:
+            include_name = True
+            label = "অফিস রুম" if language == "bn" else "Office Room"
+            not_rec = "প্রোফাইলে কোনো অফিস রুম উল্লেখ নেই" if language == "bn" else "Not recorded in profile"
+            facts.append(f"{label}: {not_rec}")
 
         # Check working_hours
+        asked_hours = any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["working_hours"])
         if context.working_hours:
             hours_tokens = _tokenize(context.working_hours, filter_stop_words=True)
-            if any(
-                kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["working_hours"]
-            ) or bool(meaningful_query_tokens & hours_tokens):
-                include_name = True
-                label = "কর্মঘণ্টা" if language == "bn" else "Working Hours"
-                facts.append(f"{label}: {context.working_hours}")
-
-        # Check profile_description
-        if context.profile_description:
-            desc_tokens = _tokenize(context.profile_description, filter_stop_words=True)
             if (
-                any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["profile_description"])
-                or bool(meaningful_query_tokens & desc_tokens)
+                asked_hours
+                or bool(meaningful_query_tokens & hours_tokens)
                 or is_identity_query
             ):
                 include_name = True
+                label = "কর্মঘণ্টা" if language == "bn" else "Working Hours"
+                facts.append(f"{label}: {context.working_hours}")
+        elif asked_hours or is_identity_query:
+            include_name = True
+            label = "কর্মঘণ্টা" if language == "bn" else "Working Hours"
+            not_rec = "প্রোফাইলে কোনো সময়সূচি উল্লেখ নেই" if language == "bn" else "Not recorded in profile"
+            facts.append(f"{label}: {not_rec}")
+
+        # Check profile_description
+        asked_desc = any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["profile_description"])
+        if context.profile_description:
+            desc_tokens = _tokenize(context.profile_description, filter_stop_words=True)
+            if asked_desc or bool(meaningful_query_tokens & desc_tokens) or is_identity_query:
+                include_name = True
                 label = "বিবরণ" if language == "bn" else "Description"
                 facts.append(f"{label}: {context.profile_description}")
+        elif asked_desc or is_identity_query:
+            include_name = True
+            label = "বিবরণ" if language == "bn" else "Description"
+            not_rec = "প্রোফাইলে কোনো বিবরণ উল্লেখ নেই" if language == "bn" else "Not recorded in profile"
+            facts.append(f"{label}: {not_rec}")
 
         # 4. Filter personal Q&A pairs with meaningful token overlap (stop words excluded)
         matched_qas: list[tuple[int, Any]] = []
@@ -639,3 +775,270 @@ class KnowledgeService:
                 context_blocks.append(f"{header}\n" + "\n".join(privileged_facts))
 
         return "\n\n".join(context_blocks).strip()
+
+    def resolve_structured_profile_inquiry(
+        self,
+        query: str,
+        context: PersonContextDTO,
+        language: SupportedLanguage = "bn",
+    ) -> str | None:
+        """Deterministically resolve factual personal profile inquiries without LLM hallucination.
+
+        Returns a formatted response string for direct profile questions, or None if the query
+        is not a direct profile inquiry and should proceed to generative LLM.
+        """
+        query_text = (query or "").strip()
+        if not query_text:
+            return None
+
+        raw_query_tokens = _tokenize(query_text, filter_stop_words=False)
+        name = context.preferred_name or context.display_name
+
+        # Detect self-referential or direct target
+        is_self = bool(raw_query_tokens & SELF_REFERENTIAL_TOKENS)
+        is_named = bool(name and _tokenize(name, filter_stop_words=True) & raw_query_tokens)
+
+        # 1. Full Profile Inquiry (e.g. "আমার প্রোফাইলের তথ্য বলো", "tell me my profile details", "আমার প্রোফাইল কি")
+        is_profile_kw = any(
+            kw in query_text.lower()
+            for kw in (
+                "প্রোফাইল",
+                "প্রোফাইলের তথ্য",
+                "profile",
+                "my profile",
+                "details about me",
+                "আমার তথ্য",
+            )
+        )
+        if (is_self or is_named) and is_profile_kw:
+            if language == "bn":
+                lines = ["আপনার সংরক্ষিত প্রোফাইল তথ্য:"]
+                lines.append(f"• নাম: {name}")
+                lines.append(f"• পদবি: {context.role or 'প্রোফাইলে কোনো পদবি উল্লেখ নেই'}")
+                lines.append(f"• বিভাগ: {context.department or 'প্রোফাইলে কোনো বিভাগ উল্লেখ নেই'}")
+                lines.append(f"• অফিস রুম: {context.office_room or 'প্রোফাইলে কোনো অফিস রুম উল্লেখ নেই'}")
+                lines.append(f"• কর্মঘণ্টা: {context.working_hours or 'প্রোফাইলে কোনো সময়সূচি উল্লেখ নেই'}")
+                if context.profile_description:
+                    lines.append(f"• বিবরণ: {context.profile_description}")
+                return "\n".join(lines)
+            else:
+                lines = ["Your recorded profile details:"]
+                lines.append(f"• Name: {name}")
+                lines.append(f"• Role: {context.role or 'Not recorded in profile'}")
+                lines.append(f"• Department: {context.department or 'Not recorded in profile'}")
+                lines.append(f"• Office/Room: {context.office_room or 'Not recorded in profile'}")
+                lines.append(f"• Working Hours: {context.working_hours or 'Not recorded in profile'}")
+                if context.profile_description:
+                    lines.append(f"• Description: {context.profile_description}")
+                return "\n".join(lines)
+
+        # 2. Specific Field Inquiries
+        # Role inquiry (e.g. "আমার পদবি কি?", "what is my role?", "what is my position?")
+        if any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["role"]):
+            if is_self or is_named or any(q in query_text for q in ("কি", "কী", "what", "tell")):
+                if context.role:
+                    return (
+                        f"আপনার পদবি হলো {context.role}।"
+                        if language == "bn"
+                        else f"Your role is {context.role}."
+                    )
+                return (
+                    "আপনার প্রোফাইলে কোনো পদবি উল্লেখ করা নেই।"
+                    if language == "bn"
+                    else "No role is recorded in your profile."
+                )
+
+        # Department inquiry (e.g. "আমার বিভাগ কি?", "what is my department?")
+        if any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["department"]):
+            if is_self or is_named or any(q in query_text for q in ("কি", "কী", "what", "tell")):
+                if context.department:
+                    return (
+                        f"আপনার বিভাগ হলো {context.department}।"
+                        if language == "bn"
+                        else f"Your department is {context.department}."
+                    )
+                return (
+                    "আপনার প্রোফাইলে কোনো বিভাগ উল্লেখ করা নেই।"
+                    if language == "bn"
+                    else "No department is recorded in your profile."
+                )
+
+        # Office/Room inquiry (e.g. "আমার রুম কত?", "where is my office?", "আমার অফিস কোথায়?")
+        if any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["office_room"]):
+            if is_self or is_named or any(
+                q in query_text for q in ("কত", "কোথায়", "কোথায়", "where", "what", "room", "office")
+            ):
+                if context.office_room:
+                    return (
+                        f"আপনার অফিস রুম হলো {context.office_room}।"
+                        if language == "bn"
+                        else f"Your office room is {context.office_room}."
+                    )
+                return (
+                    "আপনার প্রোফাইলে কোনো অফিস রুম উল্লেখ করা নেই।"
+                    if language == "bn"
+                    else "No office room is recorded in your profile."
+                )
+
+        # Working Hours inquiry (e.g. "আমার কাজের সময় কি?", "what are my working hours?")
+        if any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["working_hours"]):
+            if is_self or is_named or any(
+                q in query_text for q in ("কি", "কী", "what", "কখন", "when", "hours", "schedule")
+            ):
+                if context.working_hours:
+                    return (
+                        f"আপনার কাজের সময়সূচি হলো {context.working_hours}।"
+                        if language == "bn"
+                        else f"Your working hours are {context.working_hours}."
+                    )
+                return (
+                    "আপনার প্রোফাইলে কোনো কাজের সময়সূচি উল্লেখ করা নেই।"
+                    if language == "bn"
+                    else "No working hours are recorded in your profile."
+                )
+
+        # Name / Identity inquiry (e.g. "আমার নাম কি?", "who am i?")
+        if is_self and any(kw in raw_query_tokens for kw in ("name", "who", "নাম", "কে")):
+            return f"আপনার নাম {name}।" if language == "bn" else f"Your name is {name}."
+
+        # Description inquiry
+        if any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["profile_description"]):
+            if is_self or is_named:
+                if context.profile_description:
+                    return (
+                        f"আপনার প্রোফাইলের বিবরণ: {context.profile_description}"
+                        if language == "bn"
+                        else f"Your profile description: {context.profile_description}"
+                    )
+                return (
+                    "আপনার প্রোফাইলে কোনো বিবরণ উল্লেখ নেই।"
+                    if language == "bn"
+                    else "No profile description is recorded."
+                )
+
+        # 3. Direct personal Q&A match
+        meaningful_tokens = _tokenize(query_text, filter_stop_words=True)
+        if meaningful_tokens:
+            for qa in context.qa_pairs:
+                qa_q_tokens = _tokenize(qa.question, filter_stop_words=True)
+                if qa_q_tokens and (meaningful_tokens == qa_q_tokens or qa_q_tokens.issubset(meaningful_tokens)):
+                    return qa.answer
+
+        return None
+
+    def resolve_direct_kbcon_inquiry(
+        self,
+        query: str,
+        language: SupportedLanguage = "bn",
+    ) -> str | None:
+        """Resolve direct assistant identity and purpose inquiries deterministically."""
+        q_clean = (query or "").strip().lower()
+        if not q_clean:
+            return None
+
+        # Clean punctuation
+        tokens = {t.strip(string.punctuation) for t in q_clean.split()}
+
+        is_identity = (
+            q_clean in (
+                "who are you",
+                "who are you?",
+                "who r u",
+                "who r u?",
+                "what is your name",
+                "what is your name?",
+                "your name",
+                "your name?",
+                "তুমি কে",
+                "তুমি কে?",
+                "তোমার নাম কি",
+                "তোমার নাম কি?",
+                "তোমার নাম কী",
+                "তোমার নাম কী?",
+                "tumi ke",
+                "tumi ke?",
+                "tumi k",
+                "tumi k?",
+                "tomar nam ki",
+                "tomar nam ki?",
+                "tomar naam ki",
+                "tomar naam ki?",
+            )
+            or ("who" in tokens and "you" in tokens)
+            or ("tumi" in tokens and "ke" in tokens)
+            or ("তুমি" in tokens and "কে" in tokens)
+        )
+
+        is_purpose = (
+            q_clean in (
+                "what is your purpose",
+                "what is your purpose?",
+                "your purpose",
+                "your purpose?",
+                "what do you do",
+                "what do you do?",
+                "what is your job",
+                "what is your job?",
+                "তোমার উদ্দেশ্য কি",
+                "তোমার উদ্দেশ্য কি?",
+                "তোমার উদ্দেশ্য কী",
+                "তোমার উদ্দেশ্য কী?",
+                "তোমার কাজ কি",
+                "তোমার কাজ কি?",
+                "তোমার কাজ কী",
+                "তোমার কাজ কী?",
+                "কেন তৈরি করা হয়েছে",
+                "কেন তৈরি করা হয়েছে?",
+            )
+            or ("purpose" in tokens and ("your" in tokens or "what" in tokens))
+            or ("উদ্দেশ্য" in tokens and ("তোমার" in tokens or "কি" in tokens or "কী" in tokens))
+            or ("কাজ" in tokens and ("তোমার" in tokens or "কি" in tokens or "কী" in tokens))
+        )
+
+        inst_name = f" {self._institution_name}" if self._institution_name else ""
+
+        if is_identity:
+            if self._institution_type == "clinic":
+                if language == "bn":
+                    return (
+                        f"আমি কেবিসিওএন (KBCON), একটি মানবাকৃতির রোবট সহকারী। "
+                        f"আমি এই স্বাস্থ্যসেবা কেন্দ্রে{inst_name} রোগী, দর্শনার্থী ও কর্মীদের সহায়তা করার জন্য প্রস্তুত।"
+                    )
+                return (
+                    f"I'm KBCON, a humanoid robot assistant designed to help patients, "
+                    f"visitors, and healthcare staff at this healthcare facility{inst_name}."
+                )
+            else:
+                if language == "bn":
+                    return (
+                        f"আমি কেবিসিওএন (KBCON), একটি মানবাকৃতির রোবট সহকারী। "
+                        f"আমি এই বিশ্ববিদ্যালয়ের{inst_name} ছাত্র-ছাত্রী, শিক্ষক ও দর্শনার্থীদের সহায়তা করার জন্য প্রস্তুত।"
+                    )
+                return (
+                    f"I'm KBCON, a humanoid robot assistant designed to support students, "
+                    f"faculty, and visitors at this university{inst_name}."
+                )
+
+        if is_purpose:
+            if self._institution_type == "clinic":
+                if language == "bn":
+                    return (
+                        f"আমার উদ্দেশ্য হলো স্বাস্থ্যসেবা কেন্দ্রে{inst_name} রোগী ও দর্শনার্থীদের সঠিক তথ্য প্রদান, "
+                        f"বহির্বিভাগ ও জরুরি বিভাগের দিকনির্দেশনা দেওয়া এবং স্বাস্থ্যসেবা কর্মীদের সহায়তা করা।"
+                    )
+                return (
+                    f"My purpose is to guide patients and visitors, provide information about outpatient, "
+                    f"emergency, and diagnostic services, and assist healthcare staff at this facility{inst_name}."
+                )
+            else:
+                if language == "bn":
+                    return (
+                        f"আমার উদ্দেশ্য হলো বিশ্ববিদ্যালয়ের{inst_name} বিভিন্ন বিভাগ, ভর্তি তথ্য, ল্যাব ও লাইব্রেরি সম্পর্কে "
+                        f"দিকনির্দেশনা দেওয়া এবং শিক্ষার্থী ও শিক্ষকদের প্রয়োজনীয় তথ্য দিয়ে সহায়তা করা।"
+                    )
+                return (
+                    f"My purpose is to assist with university information, guide visitors across departments "
+                    f"and facilities, and support students and faculty{inst_name}."
+                )
+
+        return None

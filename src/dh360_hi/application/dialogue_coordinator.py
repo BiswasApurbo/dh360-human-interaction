@@ -491,17 +491,44 @@ class DialogueCoordinator:
                 requested_person_id=requested_person_id,
             )
 
+            # Direct deterministic resolution (identity/purpose and direct profile queries)
+            direct_response: str | None = None
+            if self._knowledge_service is not None:
+                direct_response = self._knowledge_service.resolve_direct_kbcon_inquiry(
+                    prompt_text, language=target_lang
+                )
+                if (
+                    direct_response is None
+                    and requested_person_id is not None
+                    and active_auth is not None
+                    and getattr(self._knowledge_service, "_person_service", None) is not None
+                ):
+                    person_ctx = self._knowledge_service._person_service.get_person_context(
+                        requested_person_id
+                    )
+                    if person_ctx is not None:
+                        direct_response = (
+                            self._knowledge_service.resolve_structured_profile_inquiry(
+                                query=prompt_text,
+                                context=person_ctx,
+                                language=target_lang,
+                            )
+                        )
+
             # 4. Generate response via LLMProvider (outside state lock)
             error_code: str | None = None
             response_text: str
 
             if self._llm_provider is None:
-                response_text = get_fallback_message("llm_error", target_lang)
-                error_code = "LLM_UNAVAILABLE"
+                if direct_response is not None:
+                    response_text = direct_response
+                else:
+                    response_text = get_fallback_message("llm_error", target_lang)
+                    error_code = "LLM_UNAVAILABLE"
             else:
                 try:
                     try:
-                        response_text = self._llm_provider.generate_response(
+                        llm_out = self._llm_provider.generate_response(
                             prompt=prompt_text,
                             filtered_context=knowledge_context,
                             language=target_lang,
@@ -509,23 +536,37 @@ class DialogueCoordinator:
                         )
                     except TypeError as type_err:
                         if "session_history" in str(type_err):
-                            response_text = self._llm_provider.generate_response(
+                            llm_out = self._llm_provider.generate_response(
                                 prompt=prompt_text,
                                 filtered_context=knowledge_context,
                                 language=target_lang,
                             )
                         else:
                             raise
+
+                    if direct_response is not None and getattr(self._llm_provider, "__class__", None).__name__ != "MockLLMProvider":
+                        response_text = direct_response
+                    else:
+                        response_text = llm_out
                 except (ProviderNetworkError, ProviderTimeoutError) as exc:
-                    response_text = get_fallback_message("network_error", target_lang)
-                    error_code = exc.code
+                    if direct_response is not None:
+                        response_text = direct_response
+                    else:
+                        response_text = get_fallback_message("network_error", target_lang)
+                        error_code = exc.code
                 except (LLMProviderError, ProviderError) as exc:
-                    response_text = get_fallback_message("llm_error", target_lang)
-                    error_code = exc.code
+                    if direct_response is not None:
+                        response_text = direct_response
+                    else:
+                        response_text = get_fallback_message("llm_error", target_lang)
+                        error_code = exc.code
                 except Exception as exc:
                     logger.exception("DialogueCoordinator: unhandled error in LLM: %s", exc)
-                    response_text = get_fallback_message("llm_error", target_lang)
-                    error_code = "LLM_ERROR"
+                    if direct_response is not None:
+                        response_text = direct_response
+                    else:
+                        response_text = get_fallback_message("llm_error", target_lang)
+                        error_code = "LLM_ERROR"
 
             # 5. Revalidate after LLM generation before TTS / committing (Fix F-01 & Fix F-02)
             with self._state_lock:

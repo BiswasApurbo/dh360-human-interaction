@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from abc import ABC, abstractmethod
+from datetime import UTC, datetime
 
 from dh360_hi.backend.database import DatabaseManager
 from dh360_hi.backend.exceptions import (
@@ -91,6 +92,14 @@ class BasePersonRepository(ABC):
     @abstractmethod
     def count_embeddings(self, person_id: str | None = None) -> int:
         """Count total embedding records in the repository."""
+
+    @abstractmethod
+    def get_setting(self, key: str, default: str | None = None) -> str | None:
+        """Retrieve a persistent setting value by key."""
+
+    @abstractmethod
+    def set_setting(self, key: str, value: str) -> None:
+        """Store or update a persistent setting value by key."""
 
 
 class SQLitePersonRepository(BasePersonRepository):
@@ -472,3 +481,26 @@ class SQLitePersonRepository(BasePersonRepository):
             cur.execute(query, params)
             row = cur.fetchone()
             return int(row[0]) if row else 0
+
+    def get_setting(self, key: str, default: str | None = None) -> str | None:
+        """Retrieve a persistent setting value by key."""
+        query = "SELECT value FROM system_settings WHERE key = ?;"
+        with self._db.readonly_cursor() as cur:
+            cur.execute(query, (key,))
+            row = cur.fetchone()
+            if row is not None and row[0] is not None:
+                return str(row[0])
+            return default
+
+    def set_setting(self, key: str, value: str) -> None:
+        """Store or update a persistent setting value by key."""
+        query = """
+        INSERT INTO system_settings (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at;
+        """
+        now_iso = datetime.now(UTC).isoformat()
+        with self._db.transaction() as cur:
+            cur.execute(query, (key, value, now_iso))

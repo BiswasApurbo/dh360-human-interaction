@@ -27,6 +27,8 @@ class OperatorScope(StrEnum):
     AUTHORIZATION_MANAGE = "authorization:manage"
     DIALOGUE_INTERACT = "dialogue:interact"
     KNOWLEDGE_MANAGE = "knowledge:manage"
+    SETTINGS_MANAGE = "settings:manage"
+    SETTINGS_READ = "settings:read"
 
 
 @dataclass(frozen=True)

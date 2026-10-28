@@ -18,8 +18,8 @@ def test_fresh_database_creates_all_v3_columns() -> None:
     """Verify that fresh database creation at schema v3 includes all six new person columns."""
     db = DatabaseManager(":memory:")
     try:
-        assert db.get_schema_version() == 3
-        assert CURRENT_SCHEMA_VERSION == 3
+        assert db.get_schema_version() == CURRENT_SCHEMA_VERSION
+        assert CURRENT_SCHEMA_VERSION >= 3
 
         with db.readonly_cursor() as cur:
             cur.execute("PRAGMA table_info(persons);")
@@ -120,10 +120,10 @@ def test_v2_to_v3_migration_preserves_existing_person_data(tmp_path: Path) -> No
     conn.commit()
     conn.close()
 
-    # Step 2: Open with DatabaseManager, triggering automatic migration to v3
+    # Step 2: Open with DatabaseManager, triggering automatic migration to current schema
     db = DatabaseManager(db_file)
     try:
-        assert db.get_schema_version() == 3
+        assert db.get_schema_version() == CURRENT_SCHEMA_VERSION
 
         with db.readonly_cursor() as cur:
             cur.execute("SELECT * FROM persons WHERE person_id = ?;", (pid,))

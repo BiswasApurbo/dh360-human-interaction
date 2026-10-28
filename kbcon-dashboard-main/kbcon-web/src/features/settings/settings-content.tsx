@@ -9,6 +9,7 @@ import { usePathname, useRouter } from "@/i18n/navigation";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/features/auth/use-auth";
+import { InstitutionCard } from "./institution-card";
 import { RetentionCard } from "./retention-card";
 
 const cardClass =
@@ -241,6 +242,7 @@ export function SettingsContent() {
           </motion.button>
         </div>
       </motion.section>
+      <InstitutionCard />
       <RetentionCard />
     </div>
   );
