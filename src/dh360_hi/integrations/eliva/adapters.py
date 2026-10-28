@@ -58,10 +58,26 @@ logger = logging.getLogger(__name__)
 def build_kbcon_system_instruction(
     institution_type: str = "university",
     institution_name: str = "",
+    target_language: SupportedLanguage = "bn",
 ) -> str:
     """Build dynamic system prompt for KBCON persona based on institution configuration."""
     inst_name = f" ({institution_name})" if institution_name else ""
     inst_name_bn = f" ({institution_name})" if institution_name else ""
+
+    if target_language == "en":
+        lang_control_section = (
+            "LANGUAGE & VOICE CONTROL\n"
+            "    - The caller has selected ENGLISH as the authoritative response language.\n"
+            "    - You MUST provide your entire response in clear, natural English, even if the user question was asked or typed in Bangla.\n"
+            "    - Exception: If the user explicitly asks in their prompt to answer in another language (e.g. 'বাংলায় বলো', 'in Bangla'), follow the user's explicit request."
+        )
+    else:
+        lang_control_section = (
+            "LANGUAGE & VOICE CONTROL\n"
+            "    - The caller has selected BANGLA as the authoritative response language.\n"
+            "    - You MUST provide your entire response in clear Bangla script, even if the user question was asked or typed in English.\n"
+            "    - Exception: If the user explicitly asks in their prompt to answer in another language (e.g. 'answer in English', 'in English'), follow the user's explicit request."
+        )
 
     if institution_type == "clinic":
         identity_en = (
@@ -134,11 +150,7 @@ KNOWLEDGE SOURCE HIERARCHY
 
 {institution_rules}
 
-LANGUAGE & VOICE CONTROL
-    - Your default and primary language is Bangla (written in Bangla script).
-    - If the user types in Bangla or Banglish (Bangla written using Latin alphabet), ALWAYS reply strictly in Bangla script.
-    - Reply in English ONLY if the user asks their question entirely in English.
-    - Never mix Bangla and English words in the same sentence.
+{lang_control_section}
 
 TEXT-TO-SPEECH (TTS) OPTIMIZATION RULES
     - Keep all responses under three short sentences unless explicitly requested otherwise.
@@ -309,8 +321,27 @@ class ElivaGeminiAdapter(LLMProvider):
         try:
             from google.genai import types  # type: ignore[import-untyped]
 
+            target_instruction = self.system_instruction
+            if target_instruction:
+                if language == "en":
+                    target_instruction = target_instruction.replace(
+                        "BANGLA as the authoritative response language",
+                        "ENGLISH as the authoritative response language",
+                    ).replace(
+                        "clear Bangla script",
+                        "clear, natural English",
+                    )
+                else:
+                    target_instruction = target_instruction.replace(
+                        "ENGLISH as the authoritative response language",
+                        "BANGLA as the authoritative response language",
+                    ).replace(
+                        "clear, natural English",
+                        "clear Bangla script",
+                    )
+
             config = types.GenerateContentConfig(
-                system_instruction=self.system_instruction,
+                system_instruction=target_instruction,
             )
 
             # Pass history turns if provided for this specific session
@@ -378,9 +409,17 @@ class ElivaGeminiAdapter(LLMProvider):
             sections.append(f"[LOCAL KNOWLEDGE MATCHES]:\n{filtered_context.strip()}")
 
         if language == "en":
-            sections.append("[LANGUAGE DIRECTIVE]: Respond completely in natural English.")
+            sections.append(
+                "[AUTHORITATIVE OUTPUT LANGUAGE: ENGLISH]\n"
+                "The user has selected English. You MUST respond completely in natural English. "
+                "Do NOT reply in Bangla even if the user question was written in Bangla."
+            )
         elif language == "bn":
-            sections.append("[LANGUAGE DIRECTIVE]: Respond strictly in Bangla script.")
+            sections.append(
+                "[AUTHORITATIVE OUTPUT LANGUAGE: BANGLA]\n"
+                "The user has selected Bangla. You MUST respond strictly in pure Bangla script. "
+                "Do NOT reply in English even if the user question was written in English."
+            )
 
         sections.append(f"[USER QUESTION]: {prompt.strip()}")
         return "\n\n".join(sections)

@@ -200,12 +200,12 @@ export function AssistantPageContent() {
         role: "model",
         text: data.text,
         timestamp: data.timestamp,
-        language,
+        language: (data.language as AssistantLanguage) || language,
         isPersonal: isPrivilegedTurn,
       };
 
       setMessages((prev) => [...prev, modelMessage]);
-      playLocalSpeech(data.text, language);
+      playLocalSpeech(data.text, (data.language as AssistantLanguage) || language);
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : t("errorOccurred");
       setTurnError(errMsg);
@@ -396,24 +396,24 @@ export function AssistantPageContent() {
   };
 
   return (
-    <div className="mx-auto flex h-[calc(100vh-8.5rem)] max-w-5xl flex-col gap-3">
+    <div className="mx-auto flex h-full min-h-0 w-full max-w-6xl flex-1 flex-col gap-3">
       {/* Top Banner: Mode & Authorization Status */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-sky-200 bg-white/90 p-4 shadow-sm backdrop-blur-md">
+      <div className="shrink-0 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-sky-200 bg-white/95 px-4 py-3 shadow-sm backdrop-blur-md">
         <div className="flex items-center gap-3">
           <div
-            className={`flex size-11 items-center justify-center rounded-2xl shadow-sm ring-1 ${
+            className={`flex size-10 items-center justify-center rounded-2xl shadow-sm ring-1 ${
               isAuthorized
                 ? "bg-emerald-50 text-emerald-600 ring-emerald-300"
                 : "bg-sky-50 text-sky-600 ring-sky-300"
             }`}
           >
-            {isAuthorized ? <ShieldCheck className="size-6" /> : <Bot className="size-6" />}
+            {isAuthorized ? <ShieldCheck className="size-5" /> : <Bot className="size-5" />}
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-base font-bold text-sky-950">{t("title")}</h1>
+              <h1 className="text-sm font-bold text-sky-950 sm:text-base">{t("title")}</h1>
               <span
-                className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-0.5 text-xs font-extrabold ring-1 ${
+                className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-0.5 text-[11px] font-extrabold ring-1 ${
                   isAuthorized
                     ? "bg-emerald-500 text-white ring-emerald-600"
                     : "bg-sky-600 text-white ring-sky-700"
@@ -423,7 +423,7 @@ export function AssistantPageContent() {
                 {isAuthorized ? t("authorizedModeBadge") : t("generalModeBadge")}
               </span>
             </div>
-            <p className="text-xs text-sky-800/80">
+            <p className="text-[11px] text-sky-800/80 line-clamp-1 sm:text-xs">
               {isAuthorized ? t("authorizedModeDesc") : t("generalModeDesc")}
             </p>
           </div>
@@ -437,23 +437,23 @@ export function AssistantPageContent() {
           <button
             type="button"
             onClick={() => setAudioEnabled(!audioEnabled)}
-            className={`flex items-center gap-1.5 rounded-2xl px-3 py-1.5 text-xs font-semibold ring-1 transition-colors ${
+            className={`flex items-center gap-1.5 rounded-xl px-2.5 py-1 text-xs font-semibold ring-1 transition-colors ${
               audioEnabled
                 ? "bg-sky-50 text-sky-800 ring-sky-300 hover:bg-sky-100"
                 : "bg-slate-100 text-slate-600 ring-slate-300 hover:bg-slate-200"
             }`}
             title={audioEnabled ? t("audioOn") : t("audioOff")}
           >
-            {audioEnabled ? <Volume2 className="size-4 text-sky-600" /> : <VolumeX className="size-4" />}
+            {audioEnabled ? <Volume2 className="size-3.5 text-sky-600" /> : <VolumeX className="size-3.5" />}
             <span className="hidden sm:inline">{audioEnabled ? t("audioOn") : t("audioOff")}</span>
           </button>
 
           {/* Language selector */}
-          <div className="flex items-center rounded-2xl bg-slate-100 p-0.5 ring-1 ring-slate-200">
+          <div className="flex items-center rounded-xl bg-slate-100 p-0.5 ring-1 ring-slate-200">
             <button
               type="button"
               onClick={() => setLanguage("bn")}
-              className={`rounded-xl px-2.5 py-1 text-xs font-bold transition-all ${
+              className={`rounded-lg px-2 py-0.5 text-xs font-bold transition-all ${
                 language === "bn"
                   ? "bg-white text-sky-800 shadow-sm"
                   : "text-slate-600 hover:text-slate-900"
@@ -464,7 +464,7 @@ export function AssistantPageContent() {
             <button
               type="button"
               onClick={() => setLanguage("en")}
-              className={`rounded-xl px-2.5 py-1 text-xs font-bold transition-all ${
+              className={`rounded-lg px-2 py-0.5 text-xs font-bold transition-all ${
                 language === "en"
                   ? "bg-white text-sky-800 shadow-sm"
                   : "text-slate-600 hover:text-slate-900"
@@ -479,40 +479,48 @@ export function AssistantPageContent() {
             <button
               type="button"
               onClick={() => setMessages([])}
-              className="rounded-2xl p-2 text-slate-500 ring-1 ring-slate-200 hover:bg-red-50 hover:text-red-600 hover:ring-red-200"
+              className="rounded-xl p-1.5 text-slate-500 ring-1 ring-slate-200 hover:bg-red-50 hover:text-red-600 hover:ring-red-200"
               title={t("clearChat")}
             >
-              <Trash2 className="size-4" />
+              <Trash2 className="size-3.5" />
             </button>
           )}
         </div>
       </div>
 
       {/* Main Conversation Stream */}
-      <div className="flex flex-1 flex-col overflow-hidden rounded-3xl border border-sky-200 bg-white/95 p-4 shadow-md backdrop-blur-sm sm:p-6">
-        <div className="flex-1 space-y-4 overflow-y-auto pr-2">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl border border-sky-200 bg-white/95 p-4 shadow-md backdrop-blur-sm sm:p-5">
+        <div className="flex-1 min-h-0 space-y-3.5 overflow-y-auto pr-2">
           {/* Welcome state if no messages */}
           {messages.length === 0 && (
-            <div className="mx-auto my-auto flex max-w-lg flex-col items-center justify-center space-y-4 py-8 text-center">
+            <div className="mx-auto my-auto flex max-w-lg flex-col items-center justify-center space-y-3.5 py-6 text-center">
               <div
-                className={`flex size-16 items-center justify-center rounded-3xl shadow-lg ring-1 ${
+                className={`flex size-14 items-center justify-center rounded-3xl shadow-lg ring-1 ${
                   isAuthorized
                     ? "bg-emerald-100 text-emerald-700 ring-emerald-300"
                     : "bg-sky-100 text-sky-700 ring-sky-300"
                 }`}
               >
-                {isAuthorized ? <ShieldCheck className="size-9" /> : <Bot className="size-9" />}
+                {isAuthorized ? <ShieldCheck className="size-8" /> : <Bot className="size-8" />}
               </div>
               <div>
-                <h2 className="text-lg font-bold text-sky-950">
+                <h2 className="text-base font-bold text-sky-950 sm:text-lg">
                   {isAuthorized
-                    ? t("welcomeAuthorized", { name: currentDisplayName || "User" })
-                    : t("welcomeTitle")}
+                    ? language === "bn"
+                      ? `স্বাগতম, ${currentDisplayName || "ব্যবহারকারী"}!`
+                      : `Welcome back, ${currentDisplayName || "User"}!`
+                    : language === "bn"
+                    ? "আসসালামু আলাইকুম! আমি কেবিসিওএন (KBCON)।"
+                    : "Hello! I am KBCON."}
                 </h2>
-                <p className="mt-1.5 text-sm text-sky-800/80 leading-relaxed">
+                <p className="mt-1 text-xs sm:text-sm text-sky-800/80 leading-relaxed">
                   {isAuthorized
-                    ? t("welcomeAuthorized", { name: currentDisplayName || "User" })
-                    : t("welcomeGeneral")}
+                    ? language === "bn"
+                      ? `স্বাগতম, ${currentDisplayName || "ব্যবহারকারী"}! আপনার ব্যক্তিগত সহকারী মোড সক্রিয়। আপনি আপনার সংরক্ষিত প্রোফাইল, বিভাগ, রুম বা সময়সূচি সম্পর্কে যেকোনো প্রশ্ন করতে পারেন।`
+                      : `Welcome back, ${currentDisplayName || "User"}! Your verified personal assistant mode is active. You can ask about your registered profile, department, office room, working hours, or general questions.`
+                    : language === "bn"
+                    ? "আমি কেবিসিওএন, একটি মানবাকৃতির রোবট সহকারী। আমাদের প্রাতিষ্ঠানিক তথ্য, সুযোগ-সুবিধা বা সাধারণ জ্ঞানের যেকোনো প্রশ্ন করতে পারেন!"
+                    : "I am KBCON, an interactive humanoid robot assistant. Ask me anything about our facilities, services, academic or clinical information, or general knowledge!"}
                 </p>
               </div>
 
@@ -523,7 +531,7 @@ export function AssistantPageContent() {
                     key={idx}
                     type="button"
                     onClick={() => void handleSendText(q)}
-                    className="rounded-2xl bg-sky-50 px-3.5 py-1.5 text-xs font-semibold text-sky-800 ring-1 ring-sky-200 hover:bg-sky-100 hover:ring-sky-300 transition-all text-left"
+                    className="rounded-xl bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-800 ring-1 ring-sky-200 hover:bg-sky-100 hover:ring-sky-300 transition-all text-left"
                   >
                     💬 {q}
                   </button>

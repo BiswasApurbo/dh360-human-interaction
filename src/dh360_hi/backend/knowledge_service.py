@@ -207,51 +207,90 @@ PROFILE_FIELD_KEYWORDS: dict[str, tuple[str, ...]] = {
         "desk",
         "location",
         "sit",
+        "sitting",
+        "floor",
+        "suite",
         "রুম",
-        "অফিস",
+        "রুমে",
+        "রুমের",
         "কক্ষ",
+        "কক্ষে",
+        "কক্ষের",
+        "অফিস",
+        "অফিসে",
+        "অফিসের",
+        "চেম্বার",
+        "চেম্বারে",
+        "কেবিন",
+        "কেবিনে",
+        "ফ্লোর",
+        "ফ্লোরে",
+        "তলা",
+        "তলায়",
+        "তলায়",
         "বসেন",
-        "রুম কত",
-        "রুম নম্বর",
-        "রুম নং",
-        "কক্ষ নম্বর",
-        "অফিস কোথায়",
-        "বসার জায়গা",
+        "বসার",
     ),
     "working_hours": (
         "hours",
         "working",
+        "work",
         "schedule",
         "time",
         "timing",
         "available",
+        "availability",
+        "duty",
         "days",
+        "shift",
         "কর্মঘণ্টা",
+        "কর্মঘন্টা",
         "সময়সূচি",
         "সময়সূচি",
-        "কাজের সময়",
+        "সময়সূচী",
+        "সময়সূচী",
         "সময়",
+        "সময়",
+        "সময়ে",
+        "সময়ে",
         "ডিউটি",
+        "ডিউটির",
+        "শিফট",
         "কখন বসেন",
         "কখন থাকেন",
+        "কখন পাওয়া যাবে",
+        "কখন পাওয়া যাবে",
+        "কাজের সময়",
+        "কাজের সময়",
     ),
     "department": (
         "department",
         "dept",
         "faculty",
         "discipline",
+        "division",
+        "unit",
         "school",
         "বিভাগ",
-        "অনুষদ",
+        "বিভাগে",
+        "বিভাগের",
         "ডিপার্টমেন্ট",
+        "ডিপার্টমেন্টে",
+        "ডিপার্টমেন্টের",
+        "অনুষদ",
+        "অনুষদে",
+        "অনুষদের",
     ),
     "role": (
         "role",
         "designation",
         "title",
         "position",
-        "job",
+        "post",
         "rank",
+        "job",
+        "profession",
+        "occupation",
         "professor",
         "lecturer",
         "dean",
@@ -260,11 +299,23 @@ PROFILE_FIELD_KEYWORDS: dict[str, tuple[str, ...]] = {
         "doctor",
         "cardiologist",
         "lead",
+        "engineer",
         "পদবি",
+        "পদবীর",
+        "পদবিতে",
+        "পদবী",
         "পদ",
+        "পদে",
+        "পদের",
         "দায়িত্ব",
         "দায়িত্ব",
+        "দায়িত্বে",
         "ডেজিগনেশন",
+        "ডেজিগনেশনে",
+        "পজিশন",
+        "পজিশনে",
+        "হিসেবে",
+        "হিসাবে",
     ),
     "profile_description": (
         "bio",
@@ -273,13 +324,21 @@ PROFILE_FIELD_KEYWORDS: dict[str, tuple[str, ...]] = {
         "background",
         "specialist",
         "specialty",
+        "speciality",
         "expertise",
         "research",
+        "experience",
         "area",
+        "about me",
+        "details",
         "বিবরণ",
+        "বিবরণে",
         "বিশেষজ্ঞ",
+        "বিশেষত্ব",
         "গবেষণা",
+        "অভিজ্ঞতা",
         "প্রোফাইল",
+        "প্রোফাইলের",
     ),
 }
 
@@ -533,6 +592,15 @@ class KnowledgeService:
         scored_matches.sort(key=lambda x: x[0], reverse=True)
         return [fact.format_fact(language) for _, fact in scored_matches[:max_results]]
 
+    @staticmethod
+    def _matches_field_keywords(field_name: str, query_text: str, query_tokens: set[str]) -> bool:
+        """Check if query matches field keywords via token intersection or substring stem matching."""
+        keywords = PROFILE_FIELD_KEYWORDS.get(field_name, ())
+        if any(kw in query_tokens for kw in keywords):
+            return True
+        q_lower = query_text.lower()
+        return any(kw in q_lower for kw in keywords)
+
     def get_privileged_context(
         self,
         requested_person_id: str,
@@ -637,7 +705,7 @@ class KnowledgeService:
         include_name = is_identity_query or bool(meaningful_query_tokens & name_tokens)
 
         # Check role
-        asked_role = any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["role"])
+        asked_role = self._matches_field_keywords("role", query_text, raw_query_tokens)
         if context.role:
             role_tokens = _tokenize(context.role, filter_stop_words=True)
             if asked_role or bool(meaningful_query_tokens & role_tokens) or is_identity_query:
@@ -651,7 +719,7 @@ class KnowledgeService:
             facts.append(f"{label}: {not_rec}")
 
         # Check department
-        asked_dept = any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["department"])
+        asked_dept = self._matches_field_keywords("department", query_text, raw_query_tokens)
         if context.department:
             dept_tokens = _tokenize(context.department, filter_stop_words=True)
             if asked_dept or bool(meaningful_query_tokens & dept_tokens) or is_identity_query:
@@ -665,7 +733,7 @@ class KnowledgeService:
             facts.append(f"{label}: {not_rec}")
 
         # Check office_room
-        asked_room = any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["office_room"])
+        asked_room = self._matches_field_keywords("office_room", query_text, raw_query_tokens)
         if context.office_room:
             room_tokens = _tokenize(context.office_room, filter_stop_words=True)
             if (
@@ -683,7 +751,7 @@ class KnowledgeService:
             facts.append(f"{label}: {not_rec}")
 
         # Check working_hours
-        asked_hours = any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["working_hours"])
+        asked_hours = self._matches_field_keywords("working_hours", query_text, raw_query_tokens)
         if context.working_hours:
             hours_tokens = _tokenize(context.working_hours, filter_stop_words=True)
             if (
@@ -701,7 +769,7 @@ class KnowledgeService:
             facts.append(f"{label}: {not_rec}")
 
         # Check profile_description
-        asked_desc = any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["profile_description"])
+        asked_desc = self._matches_field_keywords("profile_description", query_text, raw_query_tokens)
         if context.profile_description:
             desc_tokens = _tokenize(context.profile_description, filter_stop_words=True)
             if asked_desc or bool(meaningful_query_tokens & desc_tokens) or is_identity_query:
@@ -795,8 +863,71 @@ class KnowledgeService:
         name = context.preferred_name or context.display_name
 
         # Detect self-referential or direct target
-        is_self = bool(raw_query_tokens & SELF_REFERENTIAL_TOKENS)
-        is_named = bool(name and _tokenize(name, filter_stop_words=True) & raw_query_tokens)
+        is_self = bool(raw_query_tokens & SELF_REFERENTIAL_TOKENS) or any(
+            p in query_text.lower()
+            for p in (
+                "who am i",
+                "about me",
+                "my ",
+                " me ",
+                "myself",
+                "mine",
+                "আমার",
+                "আমি",
+                "আমায়",
+                "আমাকে",
+                "নিজের",
+                "নিজেকে",
+            )
+        )
+        is_named = bool(
+            name
+            and (
+                _tokenize(name, filter_stop_words=True) & raw_query_tokens
+                or name.lower() in query_text.lower()
+            )
+        )
+
+        # Disallow general/third-party knowledge queries from being intercepted as personal profile
+        has_third_party_entity = any(
+            entity in query_text.lower()
+            for entity in (
+                "shakib",
+                "mitochondria",
+                "dna",
+                "library",
+                "লাইব্রেরি",
+                "লাইব্রেরির",
+                "fair",
+                "মেলা",
+                "মেলার",
+                "বিশ্ববিদ্যালয়",
+                "বিশ্ববিদ্যালয়ের",
+                "বিশ্ববিদ্যালয়ের",
+                "university",
+                "clinic",
+                "হাসপাতাল",
+                "robotech",
+                "admission",
+                "ভর্তি",
+                "weather",
+                "আবহাওয়া",
+                "আবহাওয়া",
+                "প্রধানমন্ত্রী",
+                "president",
+                "minister",
+                "capital",
+                "রাজধানী",
+                "currency",
+                "টাকা",
+            )
+        )
+        if has_third_party_entity and not is_named:
+            return None
+
+        # Short attribute question targeting the user (e.g. "রুম কত?", "রুম নম্বর কত?", "পদবি কি?", "কোন ডিপার্টমেন্ট?")
+        is_short_attribute_query = len(raw_query_tokens) <= 4 and not has_third_party_entity
+        is_target_match = is_self or is_named or is_short_attribute_query
 
         # 1. Full Profile Inquiry (e.g. "আমার প্রোফাইলের তথ্য বলো", "tell me my profile details", "আমার প্রোফাইল কি")
         is_profile_kw = any(
@@ -808,6 +939,8 @@ class KnowledgeService:
                 "my profile",
                 "details about me",
                 "আমার তথ্য",
+                "আমার বিস্তারিত",
+                "সব তথ্য",
             )
         )
         if (is_self or is_named) and is_profile_kw:
@@ -834,91 +967,82 @@ class KnowledgeService:
 
         # 2. Specific Field Inquiries
         # Role inquiry (e.g. "আমার পদবি কি?", "what is my role?", "what is my position?")
-        if any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["role"]):
-            if is_self or is_named or any(q in query_text for q in ("কি", "কী", "what", "tell")):
-                if context.role:
-                    return (
-                        f"আপনার পদবি হলো {context.role}।"
-                        if language == "bn"
-                        else f"Your role is {context.role}."
-                    )
+        if is_target_match and self._matches_field_keywords("role", query_text, raw_query_tokens):
+            if context.role:
                 return (
-                    "আপনার প্রোফাইলে কোনো পদবি উল্লেখ করা নেই।"
+                    f"আপনার পদবি হলো {context.role}।"
                     if language == "bn"
-                    else "No role is recorded in your profile."
+                    else f"Your role is {context.role}."
                 )
+            return (
+                "আপনার প্রোফাইলে কোনো পদবি উল্লেখ করা নেই।"
+                if language == "bn"
+                else "No role is recorded in your profile."
+            )
 
-        # Department inquiry (e.g. "আমার বিভাগ কি?", "what is my department?")
-        if any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["department"]):
-            if is_self or is_named or any(q in query_text for q in ("কি", "কী", "what", "tell")):
-                if context.department:
-                    return (
-                        f"আপনার বিভাগ হলো {context.department}।"
-                        if language == "bn"
-                        else f"Your department is {context.department}."
-                    )
+        # Department inquiry (e.g. "আমার বিভাগ কি?", "what is my department?", "আমি কোন ডিপার্টমেন্টে?")
+        if is_target_match and self._matches_field_keywords("department", query_text, raw_query_tokens):
+            if context.department:
                 return (
-                    "আপনার প্রোফাইলে কোনো বিভাগ উল্লেখ করা নেই।"
+                    f"আপনার বিভাগ হলো {context.department}।"
                     if language == "bn"
-                    else "No department is recorded in your profile."
+                    else f"Your department is {context.department}."
                 )
+            return (
+                "আপনার প্রোফাইলে কোনো বিভাগ উল্লেখ করা নেই।"
+                if language == "bn"
+                else "No department is recorded in your profile."
+            )
 
-        # Office/Room inquiry (e.g. "আমার রুম কত?", "where is my office?", "আমার অফিস কোথায়?")
-        if any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["office_room"]):
-            if is_self or is_named or any(
-                q in query_text for q in ("কত", "কোথায়", "কোথায়", "where", "what", "room", "office")
-            ):
-                if context.office_room:
-                    return (
-                        f"আপনার অফিস রুম হলো {context.office_room}।"
-                        if language == "bn"
-                        else f"Your office room is {context.office_room}."
-                    )
+        # Office/Room inquiry (e.g. "আমার রুম কত?", "where is my office?", "আমার অফিস কোথায়?", "আমার ফ্লোর কত?")
+        if is_target_match and self._matches_field_keywords("office_room", query_text, raw_query_tokens):
+            if context.office_room:
                 return (
-                    "আপনার প্রোফাইলে কোনো অফিস রুম উল্লেখ করা নেই।"
+                    f"আপনার অফিস রুম হলো {context.office_room}।"
                     if language == "bn"
-                    else "No office room is recorded in your profile."
+                    else f"Your office room is {context.office_room}."
                 )
+            return (
+                "আপনার প্রোফাইলে কোনো অফিস রুম উল্লেখ করা নেই।"
+                if language == "bn"
+                else "No office room is recorded in your profile."
+            )
 
         # Working Hours inquiry (e.g. "আমার কাজের সময় কি?", "what are my working hours?")
-        if any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["working_hours"]):
-            if is_self or is_named or any(
-                q in query_text for q in ("কি", "কী", "what", "কখন", "when", "hours", "schedule")
-            ):
-                if context.working_hours:
-                    return (
-                        f"আপনার কাজের সময়সূচি হলো {context.working_hours}।"
-                        if language == "bn"
-                        else f"Your working hours are {context.working_hours}."
-                    )
+        if is_target_match and self._matches_field_keywords("working_hours", query_text, raw_query_tokens):
+            if context.working_hours:
                 return (
-                    "আপনার প্রোফাইলে কোনো কাজের সময়সূচি উল্লেখ করা নেই।"
+                    f"আপনার কাজের সময়সূচি হলো {context.working_hours}।"
                     if language == "bn"
-                    else "No working hours are recorded in your profile."
+                    else f"Your working hours are {context.working_hours}."
                 )
+            return (
+                "আপনার প্রোফাইলে কোনো কাজের সময়সূচি উল্লেখ করা নেই।"
+                if language == "bn"
+                else "No working hours are recorded in your profile."
+            )
 
         # Name / Identity inquiry (e.g. "আমার নাম কি?", "who am i?")
         if is_self and any(kw in raw_query_tokens for kw in ("name", "who", "নাম", "কে")):
             return f"আপনার নাম {name}।" if language == "bn" else f"Your name is {name}."
 
         # Description inquiry
-        if any(kw in raw_query_tokens for kw in PROFILE_FIELD_KEYWORDS["profile_description"]):
-            if is_self or is_named:
-                if context.profile_description:
-                    return (
-                        f"আপনার প্রোফাইলের বিবরণ: {context.profile_description}"
-                        if language == "bn"
-                        else f"Your profile description: {context.profile_description}"
-                    )
+        if is_target_match and self._matches_field_keywords("profile_description", query_text, raw_query_tokens):
+            if context.profile_description:
                 return (
-                    "আপনার প্রোফাইলে কোনো বিবরণ উল্লেখ নেই।"
+                    f"আপনার প্রোফাইলের বিবরণ: {context.profile_description}"
                     if language == "bn"
-                    else "No profile description is recorded."
+                    else f"Your profile description: {context.profile_description}"
                 )
+            return (
+                "আপনার প্রোফাইলে কোনো বিবরণ উল্লেখ নেই।"
+                if language == "bn"
+                else "No profile description is recorded."
+            )
 
         # 3. Direct personal Q&A match
         meaningful_tokens = _tokenize(query_text, filter_stop_words=True)
-        if meaningful_tokens:
+        if meaningful_tokens and (is_self or is_named):
             for qa in context.qa_pairs:
                 qa_q_tokens = _tokenize(qa.question, filter_stop_words=True)
                 if qa_q_tokens and (meaningful_tokens == qa_q_tokens or qa_q_tokens.issubset(meaningful_tokens)):

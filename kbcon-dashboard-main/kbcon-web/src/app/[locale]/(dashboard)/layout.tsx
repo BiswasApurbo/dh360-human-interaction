@@ -14,13 +14,13 @@ export default function DashboardLayout({
       <TooltipProvider>
         <SidebarProvider>
           <AppSidebar />
-          <SidebarInset className="bg-gradient-to-br from-sky-100 via-sky-50 to-sky-200">
+          <SidebarInset className="h-svh max-h-svh overflow-hidden flex flex-col bg-gradient-to-br from-sky-100 via-sky-50 to-sky-200">
             <Navbar />
-            <main className="relative min-h-screen flex-1 overflow-hidden p-4 sm:p-6 lg:p-8">
+            <main className="relative flex min-h-0 flex-1 flex-col overflow-y-auto p-3 sm:p-4 lg:p-5">
               {/* হালকা সাজানোর বৃত্ত */}
               <div className="pointer-events-none absolute -right-24 top-10 size-72 rounded-full bg-sky-200/40 blur-3xl" />
               <div className="pointer-events-none absolute -bottom-24 left-10 size-72 rounded-full bg-cyan-200/30 blur-3xl" />
-              <div className="relative">{children}</div>
+              <div className="relative flex min-h-0 flex-1 flex-col">{children}</div>
             </main>
           </SidebarInset>
         </SidebarProvider>
