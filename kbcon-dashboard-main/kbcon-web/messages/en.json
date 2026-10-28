@@ -404,9 +404,13 @@
     "stopAuth": "End Session",
     "statusIdle": "Idle",
     "statusActive": "Active - Scanning for faces...",
+    "statusNoFace": "No Face Detected",
+    "statusUnknown": "Unknown Person (Not Enrolled)",
+    "statusUncertain": "Uncertain Identity - Analyzing...",
     "statusAuthorized": "Authorized Person Identified",
     "statusLost": "Face Lost - Searching...",
     "statusTimeout": "Session Timed Out",
+    "statusCancelled": "Session Cancelled",
     "noCamera": "No camera preview available. Ensure the robot hardware is connected."
   }
 }

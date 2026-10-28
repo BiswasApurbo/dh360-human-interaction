@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 import time
 from abc import ABC, abstractmethod
 from collections import deque
@@ -196,6 +198,23 @@ class WebcamFrameSource(FrameSource):
         self._cap = cv2.VideoCapture(self.camera_index)
         if not self._cap.isOpened():
             raise RuntimeError(f"Failed to open webcam at index {self.camera_index}")
+
+        # On Linux V4L2 systems, disable dynamic exposure framerate throttling to sustain full FPS
+        if sys.platform.startswith("linux"):
+            try:
+                subprocess.run(
+                    [
+                        "v4l2-ctl",
+                        "-d",
+                        f"/dev/video{self.camera_index}",
+                        "--set-ctrl=exposure_dynamic_framerate=0",
+                    ],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception:
+                pass
 
         if self.prefer_mjpeg:
             self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc(*"MJPG"))

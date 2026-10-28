@@ -17,12 +17,20 @@ import { useAuth } from "@/features/auth/use-auth";
 
 interface AuthorizationSession {
   authorization_id: string;
-  status: "active" | "authorized" | "lost" | "timeout" | "cancelled";
+  status:
+    | "active"
+    | "authorized"
+    | "unknown"
+    | "uncertain"
+    | "no_face"
+    | "lost"
+    | "timeout"
+    | "cancelled";
   person_id?: string | null;
   display_name?: string | null;
-  started_at?: number;
-  authorized_at?: number | null;
-  ended_at?: number | null;
+  created_at_iso?: string;
+  updated_at_iso?: string;
+  ended_at_iso?: string | null;
 }
 
 interface AuthorizationDialogProps {
@@ -92,6 +100,14 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
     };
   }, [user, authLoading, fetchCurrentSession]);
 
+  const isSessionRunning = Boolean(
+    session &&
+      !session.ended_at_iso &&
+      session.status !== "timeout" &&
+      session.status !== "cancelled" &&
+      session.status !== "lost"
+  );
+
   async function startAuthorization() {
     if (!user) {
       setError("Please sign in with an authorized account.");
@@ -105,6 +121,11 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
         method: "POST",
         headers,
       });
+      if (res.status === 409) {
+        // Active session already running; sync state immediately without throwing
+        await fetchCurrentSession();
+        return;
+      }
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         if (res.status === 503) {
@@ -130,11 +151,20 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
     setError(null);
     try {
       const headers = await getHeaders();
-      await fetch("/api/dh360/authorization/sessions/current", {
+      const res = await fetch("/api/dh360/authorization/sessions/current", {
         method: "DELETE",
         headers,
       });
-      setSession(null);
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        if (data) {
+          setSession(data);
+        } else {
+          setSession(null);
+        }
+      } else {
+        await fetchCurrentSession();
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to stop session");
     } finally {
@@ -158,6 +188,27 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
           <div className="flex items-center gap-3 rounded-2xl bg-sky-50 p-4 text-sm font-semibold text-sky-800 ring-1 ring-sky-200">
             <Loader2 className="size-5 shrink-0 animate-spin text-sky-600" />
             <span>{t("statusActive")}</span>
+          </div>
+        );
+      case "no_face":
+        return (
+          <div className="flex items-center gap-3 rounded-2xl bg-amber-50/70 p-4 text-sm font-semibold text-amber-800 ring-1 ring-amber-200">
+            <Loader2 className="size-5 shrink-0 animate-spin text-amber-600" />
+            <span>{t("statusNoFace")}</span>
+          </div>
+        );
+      case "unknown":
+        return (
+          <div className="flex items-center gap-3 rounded-2xl bg-rose-50 p-4 text-sm font-semibold text-rose-800 ring-1 ring-rose-200">
+            <AlertCircle className="size-5 shrink-0 text-rose-600" />
+            <span>{t("statusUnknown")}</span>
+          </div>
+        );
+      case "uncertain":
+        return (
+          <div className="flex items-center gap-3 rounded-2xl bg-purple-50 p-4 text-sm font-semibold text-purple-800 ring-1 ring-purple-200">
+            <Loader2 className="size-5 shrink-0 animate-spin text-purple-600" />
+            <span>{t("statusUncertain")}</span>
           </div>
         );
       case "authorized":
@@ -192,6 +243,13 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
           <div className="flex items-center gap-3 rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-700 ring-1 ring-slate-200">
             <Clock className="size-5 shrink-0 text-slate-500" />
             <span>{t("statusTimeout")}</span>
+          </div>
+        );
+      case "cancelled":
+        return (
+          <div className="flex items-center gap-3 rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-700 ring-1 ring-slate-200">
+            <X className="size-5 shrink-0 text-slate-500" />
+            <span>{t("statusCancelled")}</span>
           </div>
         );
       default:
@@ -254,7 +312,7 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
               {t("cancel")}
             </button>
 
-            {session && session.status === "active" ? (
+            {isSessionRunning ? (
               <button
                 type="button"
                 onClick={stopAuthorization}

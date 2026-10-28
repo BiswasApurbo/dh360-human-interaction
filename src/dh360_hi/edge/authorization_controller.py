@@ -75,9 +75,26 @@ class AuthorizationController:
         Returns the newly created :class:`AuthorizationSession`.
         Raises ``ValueError`` if a session is already active.
         """
+        session_to_notify = None
         with self._lock:
             if self._closed:
                 raise RuntimeError("AuthorizationController is closed")
+
+            # Check timeout before rejecting active session
+            if (
+                self._session is not None
+                and self._session.is_active
+                and not self._session.is_authorized
+                and self._deadline is not None
+                and time.monotonic() >= self._deadline
+            ):
+                try:
+                    self._session = self._session.complete(AuthorizationStatus.TIMEOUT)
+                    session_to_notify = self._session
+                    _logger.debug("AuthorizationController session timed out prior to start")
+                except Exception as exc:
+                    _logger.exception("Failed to complete timed-out session on start: %s", exc)
+
             if self._session is not None and self._session.is_active:
                 raise ValueError("An active authorization session already exists")
 
@@ -89,7 +106,11 @@ class AuthorizationController:
                 new_session.authorization_id,
                 self._deadline,
             )
-            return new_session
+
+        if session_to_notify is not None:
+            self._notify_transition(session_to_notify)
+
+        return new_session
 
     def cancel(self) -> AuthorizationSession:
         """Cancel the active authorization session if one exists.

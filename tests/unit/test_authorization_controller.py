@@ -181,6 +181,17 @@ class TestAuthorizationControllerLifecycle:
         assert sess2.authorization_id != sess1.authorization_id
         assert sess2.status is AuthorizationStatus.ACTIVE
 
+    def test_start_allowed_when_previous_session_expired_without_prior_get_current(
+        self, controller: AuthorizationController
+    ) -> None:
+        sess1 = controller.start()
+        # Advance time past deadline without calling get_current() or pumping frames
+        with mock.patch("time.monotonic", return_value=controller._deadline + 1):  # type: ignore[operator]
+            sess2 = controller.start()
+            assert sess2.authorization_id != sess1.authorization_id
+            assert sess2.status is AuthorizationStatus.ACTIVE
+            assert sess2.is_active is True
+
     def test_cancel_active_session(self, controller: AuthorizationController) -> None:
         """Verify an active session can be explicitly cancelled."""
         sess1 = controller.start()
