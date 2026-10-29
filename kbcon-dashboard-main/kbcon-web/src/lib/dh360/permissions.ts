@@ -227,7 +227,21 @@ export const ALLOWED_DH360_RULES: RouteRule[] = [
     scope: "dialogue:interact",
   },
 
-  // Knowledge Base Synchronization
+  // Knowledge Base Management (CRUD & Synchronization)
+  {
+    name: "knowledge_items_collection",
+    pattern: /^\/knowledge\/items\/?$/,
+    allowedMethods: ["GET", "POST"],
+    minRole: "admin",
+    scope: "knowledge:manage",
+  },
+  {
+    name: "knowledge_item_entity",
+    pattern: /^\/knowledge\/items\/([A-Za-z0-9_-]+)\/?$/,
+    allowedMethods: ["GET", "PUT", "PATCH", "DELETE"],
+    minRole: "admin",
+    scope: "knowledge:manage",
+  },
   {
     name: "knowledge_reload",
     pattern: /^\/knowledge\/reload\/?$/,

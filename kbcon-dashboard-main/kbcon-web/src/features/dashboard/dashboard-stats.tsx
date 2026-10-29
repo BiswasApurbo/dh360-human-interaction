@@ -11,13 +11,21 @@ import { effectiveStatus } from "@/lib/robot-status";
 export function DashboardStats() {
   const t = useTranslations("Dashboard");
   const { role, loading: roleLoading } = useRole();
-  const { robots, loading } = useRobots(role);
+  const { robots, loading, error } = useRobots(role);
   const now = useNow();
 
   if (roleLoading || loading) {
     return (
       <div className="flex justify-center py-10">
         <Loader2 className="size-6 animate-spin text-sky-500" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-xs font-semibold text-red-700">
+        Unable to load fleet statistics from robot registry. Please check connectivity.
       </div>
     );
   }

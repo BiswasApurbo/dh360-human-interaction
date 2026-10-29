@@ -53,7 +53,7 @@ export function AssistantPageContent() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [turnError, setTurnError] = useState<string | null>(null);
 
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const browserRecognitionRef = useRef<{
     start: () => void;
     stop: () => void;
@@ -96,13 +96,18 @@ export function AssistantPageContent() {
     onAuthorizationLost: handleAuthorizationLost,
   });
 
-  // Auto-scroll chat view to bottom
-  const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  // Auto-scroll chat view to bottom strictly within the conversation container
+  const scrollToBottom = useCallback((smooth = true) => {
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTo({
+        top: messagesContainerRef.current.scrollHeight,
+        behavior: smooth ? "smooth" : "auto",
+      });
+    }
   }, []);
 
   useEffect(() => {
-    scrollToBottom();
+    scrollToBottom(true);
   }, [messages, isProcessing, isListeningRobot, scrollToBottom]);
 
   // Handle client-side browser speech synthesis if audio enabled
@@ -396,9 +401,9 @@ export function AssistantPageContent() {
   };
 
   return (
-    <div className="mx-auto flex h-full min-h-0 w-full max-w-6xl flex-1 flex-col gap-3">
+    <div className="mx-auto flex h-full min-h-0 w-full max-w-5xl flex-1 flex-col gap-2.5 overflow-hidden">
       {/* Top Banner: Mode & Authorization Status */}
-      <div className="shrink-0 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-sky-200 bg-white/95 px-4 py-3 shadow-sm backdrop-blur-md">
+      <div className="shrink-0 flex flex-wrap items-center justify-between gap-2.5 rounded-2xl border border-sky-200 bg-white/95 px-4 py-2.5 shadow-sm backdrop-blur-md">
         <div className="flex items-center gap-3">
           <div
             className={`flex size-10 items-center justify-center rounded-2xl shadow-sm ring-1 ${
@@ -489,8 +494,8 @@ export function AssistantPageContent() {
       </div>
 
       {/* Main Conversation Stream */}
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl border border-sky-200 bg-white/95 p-4 shadow-md backdrop-blur-sm sm:p-5">
-        <div className="flex-1 min-h-0 space-y-3.5 overflow-y-auto pr-2">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl border border-sky-200 bg-white/95 p-3.5 sm:p-4 shadow-md backdrop-blur-sm">
+        <div ref={messagesContainerRef} className="flex-1 min-h-0 space-y-3 overflow-y-auto pr-1.5 sm:pr-2">
           {/* Welcome state if no messages */}
           {messages.length === 0 && (
             <div className="mx-auto my-auto flex max-w-lg flex-col items-center justify-center space-y-3.5 py-6 text-center">
@@ -643,11 +648,10 @@ export function AssistantPageContent() {
             </div>
           )}
 
-          <div ref={messagesEndRef} />
         </div>
 
         {/* Input Bar & Controls */}
-        <div className="mt-3 border-t border-sky-100 pt-3">
+        <div className="shrink-0 mt-2.5 border-t border-sky-100 pt-2.5">
           {turnError && (
             <div className="mb-2 flex items-center gap-2 rounded-2xl bg-red-50 p-2.5 text-xs font-medium text-red-700 ring-1 ring-red-200">
               <AlertCircle className="size-4 shrink-0 text-red-600" />
@@ -720,7 +724,7 @@ export function AssistantPageContent() {
           </form>
 
           {/* Privacy Footnote */}
-          <p className="mt-2 text-center text-[11px] text-sky-700/70">
+          <p className="mt-1.5 text-center text-[10px] sm:text-[11px] text-sky-700/70">
             {t("privacyNotice")}
           </p>
         </div>

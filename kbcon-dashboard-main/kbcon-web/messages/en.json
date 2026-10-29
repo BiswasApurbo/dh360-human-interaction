@@ -310,7 +310,22 @@
     "syncRobot": "Sync with Robot Runtime",
     "syncingRobot": "Syncing...",
     "syncSuccess": "Robot runtime reloaded with {count} public facts.",
-    "syncFailed": "Failed to sync robot runtime. Ensure robot is online."
+    "syncFailed": "Failed to sync robot runtime. Ensure robot is online.",
+    "institutionType": "Institution Mode",
+    "questionEn": "Question (English)",
+    "answerEn": "Answer (English)",
+    "questionBn": "Question (Bangla)",
+    "answerBn": "Answer (Bangla)",
+    "allModes": "All Modes",
+    "general": "General",
+    "university": "University / Education",
+    "clinic": "Clinic / Healthcare",
+    "deleteConfirmTitle": "Delete Knowledge Entry",
+    "deleteConfirmText": "Are you sure you want to delete this canonical knowledge record? This change is permanent and will reload the robot runtime immediately.",
+    "itemAdded": "Knowledge entry added successfully",
+    "itemUpdated": "Knowledge entry updated successfully",
+    "itemDeleted": "Knowledge entry deleted successfully",
+    "showingEntries": "Showing {count} of {total} canonical facts"
   },
   "Telemetry": {
     "title": "Telemetry",

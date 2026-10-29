@@ -195,3 +195,157 @@ export function useKbChanges(kbId: string) {
 
   return { changes, loading };
 }
+
+export type CanonicalKnowledgeItem = {
+  id: string;
+  index: number;
+  question_en: string;
+  answer_en: string;
+  question_bn: string;
+  answer_bn: string;
+  institution_type: "university" | "clinic" | "general";
+};
+
+export function useCanonicalKnowledge(initialQuery = "", initialType = "all") {
+  const { user, loading: authLoading } = useAuth();
+  const [items, setItems] = useState<CanonicalKnowledgeItem[]>([]);
+  const [total, setTotal] = useState<number>(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const getAuthHeaders = async () => {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (user) {
+      try {
+        const token = await user.getIdToken();
+        headers["Authorization"] = `Bearer ${token}`;
+      } catch (err) {
+        console.warn("[useCanonicalKnowledge] Failed to obtain Firebase ID token:", err);
+      }
+    }
+    return headers;
+  };
+
+  const loadData = async (queryStr = initialQuery, typeStr = initialType) => {
+    if (authLoading) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const headers = await getAuthHeaders();
+      const params = new URLSearchParams();
+      if (queryStr.trim()) params.set("query", queryStr.trim());
+      if (typeStr && typeStr !== "all") params.set("institution_type", typeStr);
+
+      const res = await fetch(`/api/dh360/knowledge/items?${params.toString()}`, {
+        headers,
+      });
+
+      if (!res.ok) {
+        throw new Error(`Failed to load knowledge items: HTTP ${res.status}`);
+      }
+
+      const data = await res.json();
+      setItems(data.items ?? []);
+      setTotal(data.total ?? 0);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Error fetching knowledge items";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!authLoading) {
+      void loadData(initialQuery, initialType);
+    }
+  }, [authLoading, initialQuery, initialType]);
+
+  const createItem = async (payload: {
+    question_en: string;
+    answer_en: string;
+    question_bn: string;
+    answer_bn: string;
+    institution_type: string;
+  }) => {
+    const headers = await getAuthHeaders();
+    const res = await fetch("/api/dh360/knowledge/items", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || `Failed to create item: HTTP ${res.status}`);
+    }
+    const created: CanonicalKnowledgeItem = await res.json();
+    await loadData();
+    return created;
+  };
+
+  const updateItem = async (
+    id: string,
+    payload: {
+      question_en?: string;
+      answer_en?: string;
+      question_bn?: string;
+      answer_bn?: string;
+      institution_type?: string;
+    }
+  ) => {
+    const headers = await getAuthHeaders();
+    const res = await fetch(`/api/dh360/knowledge/items/${id}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || `Failed to update item: HTTP ${res.status}`);
+    }
+    const updated: CanonicalKnowledgeItem = await res.json();
+    await loadData();
+    return updated;
+  };
+
+  const deleteItem = async (id: string) => {
+    const headers = await getAuthHeaders();
+    const res = await fetch(`/api/dh360/knowledge/items/${id}`, {
+      method: "DELETE",
+      headers,
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || `Failed to delete item: HTTP ${res.status}`);
+    }
+    await loadData();
+  };
+
+  const syncRuntime = async () => {
+    const headers = await getAuthHeaders();
+    const res = await fetch("/api/dh360/knowledge/reload", {
+      method: "POST",
+      headers,
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to sync runtime: HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    await loadData();
+    return data.facts_count as number;
+  };
+
+  return {
+    items,
+    total,
+    loading,
+    error,
+    refresh: loadData,
+    createItem,
+    updateItem,
+    deleteItem,
+    syncRuntime,
+  };
+}

@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import csv
 import logging
+import os
+import shutil
 import string
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,7 +36,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Default explicit path to the staged knowledge.csv file
+# Default explicit path to the packaged knowledge.csv file
 DEFAULT_KNOWLEDGE_CSV_PATH = (
     Path(__file__).resolve().parent.parent
     / "integrations"
@@ -42,6 +44,9 @@ DEFAULT_KNOWLEDGE_CSV_PATH = (
     / "resources"
     / "knowledge.csv"
 )
+
+# Persistent knowledge CSV path: lives in persistent data/ directory so code deployments never overwrite it
+PERSISTENT_KNOWLEDGE_CSV_PATH = Path("data") / "knowledge.csv"
 
 # Common grammatical stop words in English and Bangla
 STOP_WORDS: frozenset[str] = frozenset(
@@ -433,7 +438,18 @@ class KnowledgeService:
         institution_name: str | None = None,
     ) -> None:
         self._person_service = person_service
-        self._csv_path = Path(csv_path) if csv_path is not None else DEFAULT_KNOWLEDGE_CSV_PATH
+
+        if csv_path is not None:
+            self._csv_path = Path(csv_path)
+        else:
+            env_path = os.getenv("DH360_KNOWLEDGE_CSV_PATH")
+            if env_path:
+                self._csv_path = Path(env_path)
+            elif PERSISTENT_KNOWLEDGE_CSV_PATH.exists():
+                self._csv_path = PERSISTENT_KNOWLEDGE_CSV_PATH
+            else:
+                self._csv_path = DEFAULT_KNOWLEDGE_CSV_PATH
+
         self._public_facts: list[PublicFact] = []
 
         # Resolve persistent institution settings
@@ -491,6 +507,20 @@ class KnowledgeService:
                 logger.exception("Failed to persist institution settings to repository")
         self.reload()
 
+    def _ensure_storage_ready(self, for_write: bool = False) -> None:
+        """Ensure active CSV path exists and has initial data if newly provisioned."""
+        if self._csv_path.exists():
+            return
+
+        if for_write or self._csv_path == PERSISTENT_KNOWLEDGE_CSV_PATH:
+            if DEFAULT_KNOWLEDGE_CSV_PATH.exists():
+                try:
+                    self._csv_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(DEFAULT_KNOWLEDGE_CSV_PATH, self._csv_path)
+                    logger.info("Initialized persistent knowledge CSV at %s from template", self._csv_path)
+                except Exception:
+                    logger.warning("Failed to copy packaged knowledge template to %s", self._csv_path)
+
     def _load_public_facts(self) -> None:
         """Load public institutional facts from the CSV file.
 
@@ -498,6 +528,7 @@ class KnowledgeService:
         preventing cross-contamination between university and clinic domains.
         """
         self._public_facts.clear()
+        self._ensure_storage_ready(for_write=False)
         if not self._csv_path.exists():
             logger.warning("Knowledge CSV file not found at: %s", self._csv_path)
             return
@@ -547,8 +578,265 @@ class KnowledgeService:
         """Reload public institutional facts from the CSV file and return the count."""
         self._load_public_facts()
         return len(self._public_facts)
-        self._load_public_facts()
-        return len(self._public_facts)
+
+    @property
+    def csv_path(self) -> Path:
+        """Active path to the loaded knowledge CSV file."""
+        return self._csv_path
+
+    @staticmethod
+    def _parse_item_index(item_id: str) -> int | None:
+        """Parse numerical row index from 'kb-X' or integer string."""
+        s = (item_id or "").strip()
+        if s.lower().startswith("kb-"):
+            s = s[3:]
+        try:
+            val = int(s)
+            return val - 1 if val > 0 else None
+        except ValueError:
+            return None
+
+    def _read_all_raw_rows(self) -> list[dict[str, str]]:
+        """Read all rows from the active CSV file in original order."""
+        self._ensure_storage_ready(for_write=False)
+        if not self._csv_path.exists():
+            return []
+
+        rows: list[dict[str, str]] = []
+        with open(self._csv_path, encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if not row:
+                    continue
+                rows.append({
+                    "Question (English)": (row.get("Question (English)") or "").strip(),
+                    "Answer (English)": (row.get("Answer (English)") or "").strip(),
+                    "প্রশ্ন (বাংলা)": (row.get("প্রশ্ন (বাংলা)") or "").strip(),
+                    "উত্তর (বাংলা)": (row.get("উত্তর (বাংলা)") or "").strip(),
+                    "Institution Type": (row.get("Institution Type") or "general").strip().lower(),
+                })
+        return rows
+
+    def _atomic_write_rows(self, rows: list[dict[str, str]]) -> None:
+        """Write rows atomically using a temp file and backup to prevent data loss."""
+        # If currently pointing to packaged resource, switch to persistent data/ path on first write
+        if self._csv_path == DEFAULT_KNOWLEDGE_CSV_PATH and not os.getenv("DH360_KNOWLEDGE_CSV_PATH"):
+            PERSISTENT_KNOWLEDGE_CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
+            self._csv_path = PERSISTENT_KNOWLEDGE_CSV_PATH
+
+        target_path = self._csv_path
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # 1. Create backup if target file exists
+        if target_path.exists():
+            backup_path = target_path.with_suffix(".csv.bak")
+            try:
+                shutil.copy2(target_path, backup_path)
+            except Exception:
+                logger.warning("Could not create backup of knowledge CSV at %s", backup_path)
+
+        # 2. Write to temporary file
+        temp_path = target_path.with_suffix(".csv.tmp")
+        fieldnames = [
+            "Question (English)",
+            "Answer (English)",
+            "প্রশ্ন (বাংলা)",
+            "উত্তর (বাংলা)",
+            "Institution Type",
+        ]
+        with open(temp_path, mode="w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            for r in rows:
+                writer.writerow(r)
+
+        # 3. Atomic replacement
+        os.replace(temp_path, target_path)
+
+    def get_all_facts(
+        self,
+        query: str | None = None,
+        institution_type: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return all raw knowledge facts with stable IDs and optional filtering."""
+        rows = self._read_all_raw_rows()
+        cleaned_query = (query or "").strip().lower()
+        target_type = (institution_type or "").strip().lower()
+        if target_type in ("all", "*", ""):
+            target_type = None
+
+        facts: list[dict[str, Any]] = []
+        for idx, row in enumerate(rows):
+            q_en = row.get("Question (English)", "")
+            a_en = row.get("Answer (English)", "")
+            q_bn = row.get("প্রশ্ন (বাংলা)", "")
+            a_bn = row.get("উত্তর (বাংলা)", "")
+            itype = row.get("Institution Type", "general")
+            if itype not in ("university", "clinic", "general"):
+                if itype in ("hospital", "healthcare"):
+                    itype = "clinic"
+                elif itype in ("academic", "campus"):
+                    itype = "university"
+                else:
+                    itype = "general"
+
+            if target_type and itype != target_type:
+                continue
+
+            if cleaned_query:
+                searchable = f"{q_en} {a_en} {q_bn} {a_bn}".lower()
+                if cleaned_query not in searchable:
+                    continue
+
+            facts.append({
+                "id": f"kb-{idx + 1}",
+                "index": idx,
+                "question_en": q_en,
+                "answer_en": a_en,
+                "question_bn": q_bn,
+                "answer_bn": a_bn,
+                "institution_type": itype,
+            })
+        return facts
+
+    def get_fact_by_id(self, item_id: str) -> dict[str, Any] | None:
+        """Fetch a single knowledge entry by ID."""
+        idx = self._parse_item_index(item_id)
+        if idx is None:
+            return None
+        rows = self._read_all_raw_rows()
+        if idx < 0 or idx >= len(rows):
+            return None
+        r = rows[idx]
+        itype = r.get("Institution Type", "general")
+        if itype not in ("university", "clinic", "general"):
+            itype = "clinic" if itype in ("hospital", "healthcare") else ("university" if itype in ("academic", "campus") else "general")
+        return {
+            "id": f"kb-{idx + 1}",
+            "index": idx,
+            "question_en": r.get("Question (English)", ""),
+            "answer_en": r.get("Answer (English)", ""),
+            "question_bn": r.get("প্রশ্ন (বাংলা)", ""),
+            "answer_bn": r.get("উত্তর (বাংলা)", ""),
+            "institution_type": itype,
+        }
+
+    def add_fact(
+        self,
+        question_en: str = "",
+        answer_en: str = "",
+        question_bn: str = "",
+        answer_bn: str = "",
+        institution_type: str = "general",
+    ) -> dict[str, Any]:
+        """Add a new institutional fact, persist to CSV, and reload knowledge in memory."""
+        q_en = (question_en or "").strip()
+        a_en = (answer_en or "").strip()
+        q_bn = (question_bn or "").strip()
+        a_bn = (answer_bn or "").strip()
+
+        if not ((q_en and a_en) or (q_bn and a_bn)):
+            raise ValueError(
+                "Knowledge entry must have at least one complete Question and Answer pair in English or Bangla."
+            )
+
+        itype = (institution_type or "general").strip().lower()
+        if itype not in ("university", "clinic", "general"):
+            itype = "clinic" if itype in ("hospital", "healthcare") else ("university" if itype in ("academic", "campus") else "general")
+
+        rows = self._read_all_raw_rows()
+        new_row = {
+            "Question (English)": q_en,
+            "Answer (English)": a_en,
+            "প্রশ্ন (বাংলা)": q_bn,
+            "উত্তর (বাংলা)": a_bn,
+            "Institution Type": itype,
+        }
+        rows.append(new_row)
+        self._atomic_write_rows(rows)
+        self.reload()
+
+        new_idx = len(rows) - 1
+        return {
+            "id": f"kb-{new_idx + 1}",
+            "index": new_idx,
+            "question_en": q_en,
+            "answer_en": a_en,
+            "question_bn": q_bn,
+            "answer_bn": a_bn,
+            "institution_type": itype,
+        }
+
+    def update_fact(
+        self,
+        item_id: str,
+        question_en: str | None = None,
+        answer_en: str | None = None,
+        question_bn: str | None = None,
+        answer_bn: str | None = None,
+        institution_type: str | None = None,
+    ) -> dict[str, Any]:
+        """Update an existing knowledge entry, persist to CSV, and reload knowledge in memory."""
+        idx = self._parse_item_index(item_id)
+        if idx is None:
+            raise KeyError(f"Invalid knowledge item id: {item_id}")
+
+        rows = self._read_all_raw_rows()
+        if idx < 0 or idx >= len(rows):
+            raise KeyError(f"Knowledge item '{item_id}' not found.")
+
+        current = rows[idx]
+        q_en = current.get("Question (English)", "") if question_en is None else question_en.strip()
+        a_en = current.get("Answer (English)", "") if answer_en is None else answer_en.strip()
+        q_bn = current.get("প্রশ্ন (বাংলা)", "") if question_bn is None else question_bn.strip()
+        a_bn = current.get("উত্তর (বাংলা)", "") if answer_bn is None else answer_bn.strip()
+
+        if not ((q_en and a_en) or (q_bn and a_bn)):
+            raise ValueError(
+                "Knowledge entry must have at least one complete Question and Answer pair in English or Bangla."
+            )
+
+        if institution_type is not None:
+            itype = institution_type.strip().lower()
+            if itype not in ("university", "clinic", "general"):
+                itype = "clinic" if itype in ("hospital", "healthcare") else ("university" if itype in ("academic", "campus") else "general")
+        else:
+            itype = current.get("Institution Type", "general")
+
+        rows[idx] = {
+            "Question (English)": q_en,
+            "Answer (English)": a_en,
+            "প্রশ্ন (বাংলা)": q_bn,
+            "উত্তর (বাংলা)": a_bn,
+            "Institution Type": itype,
+        }
+        self._atomic_write_rows(rows)
+        self.reload()
+
+        return {
+            "id": f"kb-{idx + 1}",
+            "index": idx,
+            "question_en": q_en,
+            "answer_en": a_en,
+            "question_bn": q_bn,
+            "answer_bn": a_bn,
+            "institution_type": itype,
+        }
+
+    def delete_fact(self, item_id: str) -> bool:
+        """Delete an existing knowledge entry from CSV and reload knowledge in memory."""
+        idx = self._parse_item_index(item_id)
+        if idx is None:
+            raise KeyError(f"Invalid knowledge item id: {item_id}")
+
+        rows = self._read_all_raw_rows()
+        if idx < 0 or idx >= len(rows):
+            raise KeyError(f"Knowledge item '{item_id}' not found.")
+
+        rows.pop(idx)
+        self._atomic_write_rows(rows)
+        self.reload()
+        return True
 
     @property
     def public_facts_count(self) -> int:

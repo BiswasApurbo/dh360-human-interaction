@@ -56,7 +56,7 @@ export function Navbar() {
       initial={{ y: -56, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       transition={{ duration: 0.5, ease: "easeOut" }}
-      className="sticky top-0 z-20 flex h-16 items-center gap-3 overflow-hidden border-b border-sky-200 bg-gradient-to-r from-sky-100 via-sky-200 to-sky-100 px-3 text-sky-900 shadow-sm shadow-sky-200/60 sm:px-5"
+      className="sticky top-0 z-20 flex h-16 shrink-0 items-center gap-3 overflow-hidden border-b border-sky-200 bg-gradient-to-r from-sky-100 via-sky-200 to-sky-100 px-3 text-sky-900 shadow-sm shadow-sky-200/60 sm:px-5"
     >
       {/* সাজানোর বৃত্ত */}
       <div className="pointer-events-none absolute -right-10 -top-14 size-40 rounded-full bg-white/50" />
