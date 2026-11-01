@@ -80,4 +80,13 @@ jobs:
         run: node tests/test_dh360_bff.mjs
 
       - name: Run Dashboard Production Build
+        env:
+          NEXT_PUBLIC_FIREBASE_API_KEY: "AIzaSyDummyKeyForBuildValidationOnly12345"
+          NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: "kbcon-dashboard-4b009.firebaseapp.com"
+          NEXT_PUBLIC_FIREBASE_PROJECT_ID: "kbcon-dashboard-4b009"
+          NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: "kbcon-dashboard-4b009.appspot.com"
+          NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: "743780299959"
+          NEXT_PUBLIC_FIREBASE_APP_ID: "1:743780299959:web:dummy"
+          DH360_API_URL: "http://127.0.0.1:8001"
+          DH360_OPERATOR_TOKEN: "dh360-ci-token"
         run: npm run build
