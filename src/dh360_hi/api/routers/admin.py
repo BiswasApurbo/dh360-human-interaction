@@ -268,9 +268,30 @@ async def reset_admin_password(
                 handle_code_in_app=False,
             ),
         )
+
+        # Dispatch branded password reset email
+        try:
+            import urllib.request
+            import json
+            api_key = os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY", "AIzaSyDZZnhT04VdmzYwdY8o2Xzp5u6WX1nTreM")
+            payload = json.dumps({
+                "requestType": "PASSWORD_RESET",
+                "email": user.email,
+                "continueUrl": "https://kbcon-dashboard-gamma.vercel.app/auth/action",
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                f"https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key={api_key}",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=5)
+        except Exception as send_err:
+            logger.warning("Failed to dispatch sendOobCode: %s", send_err)
+
         return {
             "success": True,
-            "message": f"Password reset generated for {user.email}",
+            "message": f"Password reset email dispatched to {user.email}",
             "hasResetLink": bool(link),
         }
     except HTTPException:

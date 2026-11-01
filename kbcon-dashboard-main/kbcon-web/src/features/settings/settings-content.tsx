@@ -182,7 +182,11 @@ export function SettingsContent() {
     setResetMsg(null);
     try {
       const { auth } = await import("@/lib/firebase");
-      await sendPasswordResetEmail(auth, user.email);
+      const actionCodeSettings = {
+        url: "https://kbcon-dashboard-gamma.vercel.app/auth/action",
+        handleCodeInApp: false,
+      };
+      await sendPasswordResetEmail(auth, user.email, actionCodeSettings);
       setResetMsg({ ok: true, text: t("resetSent") });
     } catch {
       setResetMsg({ ok: false, text: t("resetFailed") });

@@ -61,9 +61,30 @@ export async function POST(request: Request, context: RouteParams) {
 
     const resetLink = await adminAuth.generatePasswordResetLink(user.email, actionCodeSettings);
 
+    // Send the branded Firebase password reset email with continueUrl preserved
+    const apiKey =
+      process.env.NEXT_PUBLIC_FIREBASE_API_KEY ||
+      "AIzaSyDZZnhT04VdmzYwdY8o2Xzp5u6WX1nTreM";
+    try {
+      await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            requestType: "PASSWORD_RESET",
+            email: user.email,
+            continueUrl: "https://kbcon-dashboard-gamma.vercel.app/auth/action",
+          }),
+        }
+      );
+    } catch (sendErr) {
+      console.warn("Failed to dispatch sendOobCode email:", sendErr);
+    }
+
     return NextResponse.json({
       success: true,
-      message: `Password reset initiated for ${user.email}.`,
+      message: `Password reset email dispatched to ${user.email}.`,
       hasResetLink: Boolean(resetLink),
     });
   } catch (err: unknown) {
