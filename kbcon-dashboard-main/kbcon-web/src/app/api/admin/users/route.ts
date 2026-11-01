@@ -70,7 +70,7 @@ export async function GET(request: Request) {
     // 2. Fetch users metadata from Firestore
     const firestoreDocs = await adminDb.collection("users").get();
     const firestoreMap = new Map<string, Record<string, unknown>>();
-    firestoreDocs.forEach((doc) => {
+    firestoreDocs.forEach((doc: { id: string; data: () => Record<string, unknown> }) => {
       firestoreMap.set(doc.id, doc.data());
     });
 
