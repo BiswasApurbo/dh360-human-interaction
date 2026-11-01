@@ -75,6 +75,8 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Run BFF Security Tests
+        env:
+          NODE_OPTIONS: "--import tsx"
         run: node tests/test_dh360_bff.mjs
 
       - name: Run Dashboard Production Build
