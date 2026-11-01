@@ -70,9 +70,14 @@ def test_stream_path_rejects_post(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_existing_context_endpoint_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    _configure_operator(monkeypatch, "interaction:read")
+    token = _configure_operator(monkeypatch, "interaction:read")
     with TestClient(create_app()) as client:
-        response = client.get("/interaction/context")
+        # Without token -> 401
+        unauthed = client.get("/interaction/context")
+        assert unauthed.status_code == 401
+
+        # With token -> 200
+        response = client.get("/interaction/context", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200
 
 

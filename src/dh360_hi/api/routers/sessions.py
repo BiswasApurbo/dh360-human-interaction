@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from dh360_hi.api.security import OperatorPrincipal, OperatorScope, require_scope
 from dh360_hi.application.service import HumanInteractionService
 from dh360_hi.backend.models import SessionQueryFilter
 from dh360_hi.contracts.errors import EntityNotFoundError
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+_interaction_read = Depends(require_scope(OperatorScope.INTERACTION_READ))
 
 
 def _get_service(request: Request) -> HumanInteractionService:
@@ -26,6 +28,7 @@ def list_sessions(
     person_id: str | None = None,
     limit: int = Query(50, gt=0),
     offset: int = Query(0, ge=0),
+    _operator: OperatorPrincipal = _interaction_read,
 ) -> list[dict[str, Any]]:
     """List historical interaction sessions with pagination."""
     service = _get_service(request)
@@ -34,7 +37,11 @@ def list_sessions(
 
 
 @router.get("/count")
-def count_sessions(request: Request, person_id: str | None = None) -> dict[str, int]:
+def count_sessions(
+    request: Request,
+    person_id: str | None = None,
+    _operator: OperatorPrincipal = _interaction_read,
+) -> dict[str, int]:
     """Count historical interaction sessions."""
     service = _get_service(request)
     return {"count": service.count_sessions(person_id=person_id)}
@@ -53,6 +60,7 @@ def get_aggregate_analytics(
     max_duration_seconds: float | None = Query(default=None, ge=0.0),
     limit: int = Query(50, gt=0),
     offset: int = Query(0, ge=0),
+    _operator: OperatorPrincipal = _interaction_read,
 ) -> dict[str, Any]:
     """Return SQL-side aggregate session analytics."""
     service = _get_service(request)
@@ -72,7 +80,11 @@ def get_aggregate_analytics(
 
 
 @router.get("/{session_id}")
-def get_session(request: Request, session_id: str) -> dict[str, Any]:
+def get_session(
+    request: Request,
+    session_id: str,
+    _operator: OperatorPrincipal = _interaction_read,
+) -> dict[str, Any]:
     """Retrieve a single historical session record."""
     service = _get_service(request)
     item = service.get_session(session_id)

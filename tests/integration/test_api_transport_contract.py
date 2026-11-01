@@ -24,8 +24,12 @@ def _configure_operator(monkeypatch: pytest.MonkeyPatch, scopes: str) -> str:
     return token
 
 
-def test_transport_layer_exposes_m31_contract() -> None:
+def test_transport_layer_exposes_m31_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The thin HTTP layer should expose the approved service-backed endpoints."""
+    token = _configure_operator(monkeypatch, "interaction:read")
+    headers = {"Authorization": f"Bearer {token}"}
     app = create_app()
 
     with TestClient(app) as client:
@@ -36,13 +40,13 @@ def test_transport_layer_exposes_m31_contract() -> None:
         assert "subsystems" in payload
         assert "timestamp_iso" in payload
 
-        context = client.get("/interaction/context")
+        context = client.get("/interaction/context", headers=headers)
         assert context.status_code == 200
         context_payload = context.json()
         assert "state" in context_payload
         assert "identity_known" in context_payload
 
-        latest_summary = client.get("/interaction/summary/latest")
+        latest_summary = client.get("/interaction/summary/latest", headers=headers)
         assert latest_summary.status_code == 200
         assert latest_summary.json() is None
 
@@ -53,15 +57,15 @@ def test_transport_layer_exposes_m31_contract() -> None:
         metrics = client.get("/runtime/metrics")
         assert metrics.status_code == 503
 
-        sessions = client.get("/sessions")
+        sessions = client.get("/sessions", headers=headers)
         assert sessions.status_code == 200
         assert sessions.json() == []
 
-        count = client.get("/sessions/count")
+        count = client.get("/sessions/count", headers=headers)
         assert count.status_code == 200
         assert count.json() == {"count": 0}
 
-        analytics = client.get("/sessions/analytics")
+        analytics = client.get("/sessions/analytics", headers=headers)
         assert analytics.status_code == 200
         analytics_payload = analytics.json()
         assert analytics_payload["total_sessions"] == 0
@@ -69,8 +73,12 @@ def test_transport_layer_exposes_m31_contract() -> None:
         assert analytics_payload["anonymous_sessions_count"] == 0
 
 
-def test_session_detail_and_analytics_return_populated_dtos() -> None:
+def test_session_detail_and_analytics_return_populated_dtos(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Historical session endpoints serialize populated application DTOs."""
+    token = _configure_operator(monkeypatch, "interaction:read")
+    headers = {"Authorization": f"Bearer {token}"}
     app = create_app()
     first_session_id = "00000000-0000-4000-8000-000000000001"
     anonymous_session_id = "00000000-0000-4000-8000-000000000002"
@@ -105,21 +113,21 @@ def test_session_detail_and_analytics_return_populated_dtos() -> None:
             )
         )
 
-        detail = client.get(f"/sessions/{first_session_id}")
+        detail = client.get(f"/sessions/{first_session_id}", headers=headers)
         assert detail.status_code == 200
         assert detail.json()["session_id"] == first_session_id
         assert detail.json()["person_id"] is None
         assert detail.json()["duration_seconds"] == 10.0
 
-        missing = client.get("/sessions/00000000-0000-4000-8000-000000000099")
+        missing = client.get("/sessions/00000000-0000-4000-8000-000000000099", headers=headers)
         assert missing.status_code == 404
         assert missing.json()["code"] == "ENTITY_NOT_FOUND"
 
-        sessions = client.get("/sessions")
+        sessions = client.get("/sessions", headers=headers)
         assert sessions.status_code == 200
         assert len(sessions.json()) == 2
 
-        analytics = client.get("/sessions/analytics")
+        analytics = client.get("/sessions/analytics", headers=headers)
         assert analytics.status_code == 200
         analytics_payload = analytics.json()
         assert analytics_payload["total_sessions"] == 2
@@ -140,12 +148,17 @@ def test_session_detail_and_analytics_return_populated_dtos() -> None:
         "/sessions/count?person_id=not-a-uuid",
     ],
 )
-def test_invalid_session_queries_return_422(path: str) -> None:
+def test_invalid_session_queries_return_422(
+    path: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Malformed and inconsistent session query parameters return client errors."""
+    token = _configure_operator(monkeypatch, "interaction:read")
+    headers = {"Authorization": f"Bearer {token}"}
     app = create_app()
 
     with TestClient(app) as client:
-        response = client.get(path)
+        response = client.get(path, headers=headers)
 
     assert response.status_code == 422
     assert response.json()["error"] == "VALIDATION_ERROR"

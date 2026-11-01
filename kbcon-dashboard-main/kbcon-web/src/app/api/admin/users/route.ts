@@ -28,6 +28,17 @@ export async function GET(request: Request) {
     );
   }
 
+  // Enforce mandatory password change for bootstrap accounts
+  if (authResult.principal.mustChangePassword) {
+    return NextResponse.json(
+      {
+        error: "PASSWORD_CHANGE_REQUIRED",
+        message: "Mandatory password change required before accessing administrative endpoints.",
+      },
+      { status: 403 }
+    );
+  }
+
   // Only superAdmin can access admin management
   if (authResult.principal.role !== "superAdmin") {
     return NextResponse.json(
@@ -117,6 +128,17 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { error: authResult.code, message: authResult.message },
       { status: authResult.status }
+    );
+  }
+
+  // Enforce mandatory password change for bootstrap accounts
+  if (authResult.principal.mustChangePassword) {
+    return NextResponse.json(
+      {
+        error: "PASSWORD_CHANGE_REQUIRED",
+        message: "Mandatory password change required before accessing administrative endpoints.",
+      },
+      { status: 403 }
     );
   }
 

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
+import stat
 import threading
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -26,9 +28,24 @@ class DatabaseManager:
             db_file = Path(self._db_path).resolve()
             db_file.parent.mkdir(parents=True, exist_ok=True)
             self._db_path = str(db_file)
+            self._secure_file_permissions()
 
         if auto_init:
             self.initialize()
+
+    def _secure_file_permissions(self) -> None:
+        """Enforce strict 0600 file permissions on database and SQLite auxiliary files."""
+        if self._is_memory:
+            return
+        base_path = Path(self._db_path)
+        for target in [base_path, Path(f"{self._db_path}-wal"), Path(f"{self._db_path}-shm")]:
+            if target.exists():
+                try:
+                    current_mode = stat.S_IMODE(target.stat().st_mode)
+                    if current_mode != 0o600:
+                        target.chmod(0o600)
+                except OSError:
+                    pass
 
     @property
     def db_path(self) -> str:
@@ -44,17 +61,26 @@ class DatabaseManager:
         """Get or create the thread-safe connection with PRAGMAs configured."""
         with self._lock:
             if self._conn is None:
-                self._conn = sqlite3.connect(
-                    self._db_path,
-                    check_same_thread=False,
-                    timeout=5.0,
-                )
+                old_umask = None
+                if not self._is_memory:
+                    old_umask = os.umask(0o077)
+                try:
+                    self._conn = sqlite3.connect(
+                        self._db_path,
+                        check_same_thread=False,
+                        timeout=5.0,
+                    )
+                finally:
+                    if old_umask is not None:
+                        os.umask(old_umask)
+
                 self._conn.row_factory = sqlite3.Row
                 # Configure critical PRAGMAs
                 self._conn.execute("PRAGMA foreign_keys = ON;")
                 self._conn.execute("PRAGMA busy_timeout = 5000;")
                 if not self._is_memory:
                     self._conn.execute("PRAGMA journal_mode = WAL;")
+                self._secure_file_permissions()
             return self._conn
 
     @contextmanager
@@ -67,6 +93,7 @@ class DatabaseManager:
                 cursor.execute("BEGIN IMMEDIATE")
                 yield cursor
                 conn.commit()
+                self._secure_file_permissions()
             except Exception:
                 conn.rollback()
                 raise

@@ -23,6 +23,17 @@ export async function PATCH(request: Request, context: RouteParams) {
     );
   }
 
+  // Enforce mandatory password change for bootstrap accounts
+  if (authResult.principal.mustChangePassword) {
+    return NextResponse.json(
+      {
+        error: "PASSWORD_CHANGE_REQUIRED",
+        message: "Mandatory password change required before accessing administrative endpoints.",
+      },
+      { status: 403 }
+    );
+  }
+
   if (authResult.principal.role !== "superAdmin") {
     return NextResponse.json(
       { error: "FORBIDDEN", message: "Only Super Admin can update administrator profiles." },
@@ -118,6 +129,17 @@ export async function DELETE(request: Request, context: RouteParams) {
     return NextResponse.json(
       { error: authResult.code, message: authResult.message },
       { status: authResult.status }
+    );
+  }
+
+  // Enforce mandatory password change for bootstrap accounts
+  if (authResult.principal.mustChangePassword) {
+    return NextResponse.json(
+      {
+        error: "PASSWORD_CHANGE_REQUIRED",
+        message: "Mandatory password change required before accessing administrative endpoints.",
+      },
+      { status: 403 }
     );
   }
 
