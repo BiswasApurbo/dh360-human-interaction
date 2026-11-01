@@ -160,10 +160,10 @@ class EnrollmentConfig:
     minimum_samples: int = 5
     samples_per_direction: int = 10
     direction_targets: dict[str, int] = field(default_factory=default_direction_targets)
-    max_attempts: int = 240
+    max_attempts: int = 600
     duplicate_similarity_threshold: float = 0.95
     min_sample_interval_seconds: float = 0.2
-    timeout_seconds: float = 120.0
+    timeout_seconds: float = 180.0
     model_name: str = "SFace"
     model_version: str = "2021dec"
     mirrored_camera: bool = False

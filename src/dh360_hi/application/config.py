@@ -352,14 +352,14 @@ class HumanInteractionConfig:
             enrollment = EnrollmentConfig(
                 target_samples=int(enrollment_data.get("target_samples", 30)),
                 minimum_samples=int(enrollment_data.get("minimum_samples", 5)),
-                max_attempts=int(enrollment_data.get("max_attempts", 240)),
+                max_attempts=int(enrollment_data.get("max_attempts", 600)),
                 duplicate_similarity_threshold=float(
                     enrollment_data.get("duplicate_similarity_threshold", 0.95)
                 ),
                 min_sample_interval_seconds=float(
                     enrollment_data.get("min_sample_interval_seconds", 0.2)
                 ),
-                timeout_seconds=float(enrollment_data.get("timeout_seconds", 120.0)),
+                timeout_seconds=float(enrollment_data.get("timeout_seconds", 180.0)),
                 model_name=str(enrollment_data.get("model_name", "SFace")),
                 model_version=str(enrollment_data.get("model_version", "2021dec")),
             )
