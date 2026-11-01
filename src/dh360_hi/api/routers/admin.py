@@ -25,7 +25,7 @@ _operator_manage = Depends(require_scope(OperatorScope.SETTINGS_MANAGE))
 _firebase_initialized = False
 
 
-def get_firebase_app():
+def get_firebase_app() -> Any:
     """Lazily initialize the Firebase Admin SDK."""
     import firebase_admin
     from firebase_admin import credentials
@@ -54,14 +54,14 @@ def get_firebase_app():
     )
 
 
-def get_firebase_auth():
+def get_firebase_auth() -> Any:
     get_firebase_app()
     from firebase_admin import auth
 
     return auth
 
 
-def get_firebase_firestore():
+def get_firebase_firestore() -> Any:
     app = get_firebase_app()
     from firebase_admin import firestore
 
@@ -140,7 +140,6 @@ async def list_admin_users(
     _auth: OperatorPrincipal = _operator_manage,
 ) -> dict[str, Any]:
     """List all administrative users from Firestore and Firebase Auth."""
-    auth_module = get_firebase_auth()
     db = get_firebase_firestore()
 
     try:
