@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { authenticateFirebaseToken } from "@/lib/dh360/auth";
-import { getAdminAuth, getAdminFirestore } from "@/lib/server-admin";
+import {
+  forwardAdminRequestToBackend,
+  getAdminAuth,
+  getAdminFirestore,
+  hasServerAdminCredentials,
+} from "@/lib/server-admin";
 
 const DEFAULT_ADMIN_PERMS = {
   dashboard: true,
@@ -29,6 +34,19 @@ export async function GET(request: Request) {
       { error: "FORBIDDEN", message: "Only Super Admin can manage administrative accounts." },
       { status: 403 }
     );
+  }
+
+  if (!hasServerAdminCredentials()) {
+    try {
+      const res = await forwardAdminRequestToBackend("/admin/users", "GET");
+      const data = await res.json();
+      return NextResponse.json(data, { status: res.status });
+    } catch (err: unknown) {
+      return NextResponse.json(
+        { error: "INTERNAL_ERROR", message: err instanceof Error ? err.message : "Failed to retrieve accounts." },
+        { status: 500 }
+      );
+    }
   }
 
   try {
@@ -136,6 +154,25 @@ export async function POST(request: Request) {
     ...DEFAULT_ADMIN_PERMS,
     ...permissionsInput,
   };
+
+  if (!hasServerAdminCredentials()) {
+    try {
+      const res = await forwardAdminRequestToBackend("/admin/users", "POST", {
+        name,
+        email,
+        password,
+        role: "admin",
+        permissions,
+      });
+      const data = await res.json();
+      return NextResponse.json(data, { status: res.status });
+    } catch (err: unknown) {
+      return NextResponse.json(
+        { error: "CREATION_FAILED", message: err instanceof Error ? err.message : "Failed to create Admin account." },
+        { status: 500 }
+      );
+    }
+  }
 
   try {
     const adminAuth = getAdminAuth();

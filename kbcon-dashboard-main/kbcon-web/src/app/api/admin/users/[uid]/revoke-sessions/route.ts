@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { authenticateFirebaseToken } from "@/lib/dh360/auth";
-import { getAdminAuth } from "@/lib/server-admin";
+import {
+  forwardAdminRequestToBackend,
+  getAdminAuth,
+  hasServerAdminCredentials,
+} from "@/lib/server-admin";
 
 interface RouteParams {
   params: Promise<{ uid: string }> | { uid: string };
@@ -23,6 +27,19 @@ export async function POST(request: Request, context: RouteParams) {
       { error: "FORBIDDEN", message: "Only Super Admin can revoke sessions." },
       { status: 403 }
     );
+  }
+
+  if (!hasServerAdminCredentials()) {
+    try {
+      const res = await forwardAdminRequestToBackend(`/admin/users/${uid}/revoke-sessions`, "POST");
+      const data = await res.json();
+      return NextResponse.json(data, { status: res.status });
+    } catch (err: unknown) {
+      return NextResponse.json(
+        { error: "REVOCATION_FAILED", message: err instanceof Error ? err.message : "Failed to revoke sessions." },
+        { status: 500 }
+      );
+    }
   }
 
   try {

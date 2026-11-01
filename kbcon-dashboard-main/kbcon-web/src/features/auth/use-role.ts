@@ -61,7 +61,12 @@ export function useRole() {
         const r = result.claims.role;
         const validRole = r === "superAdmin" || r === "admin" ? r : null;
         setRole(validRole);
-        setMustChangePassword(Boolean(result.claims.mustChangePassword));
+        const sessionResolved =
+          typeof window !== "undefined" &&
+          sessionStorage.getItem(`mustChangePasswordResolved_${user.uid}`) === "true";
+        setMustChangePassword(
+          Boolean(result.claims.mustChangePassword) && !sessionResolved
+        );
         if (validRole === "superAdmin") {
           setPermissions(DEFAULT_SUPER_ADMIN_PERMISSIONS);
         } else if (

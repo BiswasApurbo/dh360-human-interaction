@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { authenticateFirebaseToken } from "@/lib/dh360/auth";
-import { getAdminAuth } from "@/lib/server-admin";
+import {
+  forwardAdminRequestToBackend,
+  getAdminAuth,
+  hasServerAdminCredentials,
+} from "@/lib/server-admin";
 
 interface RouteParams {
   params: Promise<{ uid: string }> | { uid: string };
@@ -25,6 +29,19 @@ export async function POST(request: Request, context: RouteParams) {
     );
   }
 
+  if (!hasServerAdminCredentials()) {
+    try {
+      const res = await forwardAdminRequestToBackend(`/admin/users/${uid}/reset-password`, "POST");
+      const data = await res.json();
+      return NextResponse.json(data, { status: res.status });
+    } catch (err: unknown) {
+      return NextResponse.json(
+        { error: "RESET_FAILED", message: err instanceof Error ? err.message : "Failed to generate password reset." },
+        { status: 500 }
+      );
+    }
+  }
+
   try {
     const adminAuth = getAdminAuth();
     const user = await adminAuth.getUser(uid);
@@ -44,12 +61,9 @@ export async function POST(request: Request, context: RouteParams) {
 
     const resetLink = await adminAuth.generatePasswordResetLink(user.email, actionCodeSettings);
 
-    // If an email transport (e.g. Identity Toolkit sendOobCode or SMTP) is available, it sends.
-    // In all cases, the link generation validates that Firebase accepts reset for this user.
     return NextResponse.json({
       success: true,
       message: `Password reset initiated for ${user.email}.`,
-      // For verification during tests or audit if needed by caller:
       hasResetLink: Boolean(resetLink),
     });
   } catch (err: unknown) {

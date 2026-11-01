@@ -104,19 +104,29 @@ export function ForcePasswordChangeModal({
       // 2. Update Firebase Authentication password
       await updatePassword(user, newPassword);
 
-      // 3. Inform server to clear temporary bootstrap status
-      const token = await user.getIdToken();
-      const res = await fetch("/api/auth/clear-temporary-password", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      // Successfully updated password in Firebase Auth!
+      // Record resolution in sessionStorage so the active session is never trapped
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem(`mustChangePasswordResolved_${user.uid}`, "true");
+      }
 
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.message || "Failed to finalize password change");
+      // 3. Inform server to clear temporary bootstrap status
+      try {
+        const token = await user.getIdToken();
+        const res = await fetch("/api/auth/clear-temporary-password", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (!res.ok) {
+          const errJson = await res.json().catch(() => ({}));
+          console.warn("Backend bootstrap status clear note:", errJson.message || res.statusText);
+        }
+      } catch (postErr) {
+        console.warn("Backend bootstrap status network note:", postErr);
       }
 
       // 4. Force refresh ID token so claims update in browser
@@ -125,7 +135,7 @@ export function ForcePasswordChangeModal({
       setSuccess(true);
       setTimeout(() => {
         onPasswordChanged();
-      }, 1500);
+      }, 1200);
     } catch (err: unknown) {
       const code = (err as { code?: string })?.code;
       if (code === "auth/invalid-credential" || code === "auth/wrong-password") {

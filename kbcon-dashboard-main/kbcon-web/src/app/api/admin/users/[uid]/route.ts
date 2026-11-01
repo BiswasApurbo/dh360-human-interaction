@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { authenticateFirebaseToken } from "@/lib/dh360/auth";
-import { getAdminAuth, getAdminFirestore } from "@/lib/server-admin";
+import {
+  forwardAdminRequestToBackend,
+  getAdminAuth,
+  getAdminFirestore,
+  hasServerAdminCredentials,
+} from "@/lib/server-admin";
 
 interface RouteParams {
   params: Promise<{ uid: string }> | { uid: string };
@@ -30,6 +35,19 @@ export async function PATCH(request: Request, context: RouteParams) {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "BAD_REQUEST", message: "Invalid JSON body." }, { status: 400 });
+  }
+
+  if (!hasServerAdminCredentials()) {
+    try {
+      const res = await forwardAdminRequestToBackend(`/admin/users/${uid}`, "PATCH", body);
+      const data = await res.json();
+      return NextResponse.json(data, { status: res.status });
+    } catch (err: unknown) {
+      return NextResponse.json(
+        { error: "UPDATE_FAILED", message: err instanceof Error ? err.message : "Failed to update user." },
+        { status: 500 }
+      );
+    }
   }
 
   try {
@@ -116,6 +134,19 @@ export async function DELETE(request: Request, context: RouteParams) {
       { error: "FORBIDDEN", message: "Cannot delete your own active Super Admin account." },
       { status: 403 }
     );
+  }
+
+  if (!hasServerAdminCredentials()) {
+    try {
+      const res = await forwardAdminRequestToBackend(`/admin/users/${uid}`, "DELETE");
+      const data = await res.json();
+      return NextResponse.json(data, { status: res.status });
+    } catch (err: unknown) {
+      return NextResponse.json(
+        { error: "DELETE_FAILED", message: err instanceof Error ? err.message : "Failed to delete user." },
+        { status: 500 }
+      );
+    }
   }
 
   try {

@@ -11,6 +11,7 @@ import os from "node:os";
 import { getApps, initializeApp, cert, type App } from "firebase-admin/app";
 import { getAuth, type Auth } from "firebase-admin/auth";
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
+import { getDh360Config } from "./dh360/config";
 
 let adminApp: App | null = null;
 
@@ -55,6 +56,10 @@ function resolveServiceAccount(): Record<string, unknown> | null {
   return null;
 }
 
+export function hasServerAdminCredentials(): boolean {
+  return resolveServiceAccount() !== null;
+}
+
 export function getServerAdminApp(): App {
   if (adminApp) return adminApp;
 
@@ -91,4 +96,22 @@ export function getAdminAuth(): Auth {
 
 export function getAdminFirestore(): Firestore {
   return getFirestore(getServerAdminApp());
+}
+
+export async function forwardAdminRequestToBackend(
+  subpath: string,
+  method: string,
+  body?: unknown
+): Promise<Response> {
+  const config = getDh360Config();
+  const upstreamUrl = new URL(subpath, config.apiUrl);
+  return fetch(upstreamUrl.toString(), {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${config.operatorToken}`,
+    },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    signal: AbortSignal.timeout(10000),
+  });
 }

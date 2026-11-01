@@ -11,6 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from dh360_hi.api.event_hub import InteractionEventHub
+from dh360_hi.api.routers.admin import router as admin_router
 from dh360_hi.api.routers.authorization import router as authorization_router
 from dh360_hi.api.routers.demo import router as demo_router
 from dh360_hi.api.routers.dialogue import router as dialogue_router
@@ -245,4 +246,5 @@ def create_app(
     app.include_router(dialogue_router)
     app.include_router(knowledge_router)
     app.include_router(settings_router)
+    app.include_router(admin_router)
     return app
