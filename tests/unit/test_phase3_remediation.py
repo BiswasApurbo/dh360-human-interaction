@@ -1,29 +1,26 @@
 """Tests for Phase 3 security remediation.
 
 Verifies:
-1. /health sanitization for public/unauthenticated requests (no db_path or private internal details).
-2. /health privileged response for authenticated operators with INTERACTION_READ or SETTINGS_READ.
+1. /health sanitization for public/unauthenticated requests (no db_path).
+2. /health privileged response for authenticated operators.
 3. Unauthenticated rejection (401) of /runtime/state and /runtime/metrics.
-4. Timestamp integrity: frames and persisted sessions use true Unix wall-clock epochs (year >= 2026).
+4. Timestamp integrity: frames and persisted sessions use true Unix wall-clock epochs.
 5. Graceful fallback to synthetic source when webcam device cannot be opened.
 """
 
 from __future__ import annotations
 
-import os
 import secrets
 import time
-from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from dh360_hi.api.app import create_app
-from dh360_hi.application.service import HumanInteractionService
-from dh360_hi.contracts.dto import InteractionSessionDTO, epoch_to_iso
 from dh360_hi.backend.models import SessionRecord
-from dh360_hi.vision.frame import Frame, SyntheticFrameSource, WebcamFrameSource
+from dh360_hi.contracts.dto import InteractionSessionDTO
+from dh360_hi.vision.frame import SyntheticFrameSource
 
 
 def _configure_operator(monkeypatch: pytest.MonkeyPatch, scopes: str = "interaction:read") -> str:
@@ -62,7 +59,9 @@ class TestPublicApiExposureRemediation:
                 assert "status" in sub
                 assert "message" in sub
                 # Details must be empty dict for unauthenticated callers
-                assert sub.get("details") == {}, f"Subsystem {sub_name} leaked details to unauthenticated caller"
+                assert sub.get("details") == {}, (
+                    f"Subsystem {sub_name} leaked details to unauthenticated caller"
+                )
 
     def test_authenticated_health_returns_full_diagnostic_details(
         self, monkeypatch: pytest.MonkeyPatch
@@ -148,6 +147,7 @@ class TestWebcamServeFallback:
     def test_webcam_open_failure_falls_back_to_synthetic(self) -> None:
         """When webcam cannot be opened, handle_serve falls back to SyntheticFrameSource."""
         from argparse import Namespace
+
         from dh360_hi.cli.serve import handle_serve
 
         args = Namespace(
@@ -166,8 +166,13 @@ class TestWebcamServeFallback:
         )
 
         # Mock uvicorn.run to prevent blocking server run
-        with patch("uvicorn.run") as mock_uvicorn_run, \
-             patch("dh360_hi.vision.frame.WebcamFrameSource.open", side_effect=RuntimeError("Device busy")):
+        with (
+            patch("uvicorn.run") as mock_uvicorn_run,
+            patch(
+                "dh360_hi.vision.frame.WebcamFrameSource.open",
+                side_effect=RuntimeError("Device busy"),
+            ),
+        ):
             # handle_serve should catch RuntimeError from webcam and fall back to synthetic
             exit_code = handle_serve(args)
             assert exit_code == 0

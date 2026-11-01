@@ -139,7 +139,7 @@ def handle_serve(args: argparse.Namespace) -> int:
     except Exception as exc:
         if getattr(args, "source", "") == "webcam":
             logger.warning(
-                "Failed to open webcam (%s). Falling back to synthetic frame source to maintain daemon API, health, and dialogue uptime.",
+                "Webcam open failed (%s); using synthetic frame source to maintain API uptime.",
                 exc,
             )
             from dh360_hi.vision.frame import SyntheticFrameSource
