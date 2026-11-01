@@ -71,6 +71,21 @@ const FORGED_TOKEN = createMockJwt({
   exp: nowSec + 3600,
 });
 
+const BOOTSTRAP_TOKEN = createMockJwt({
+  sub: "bootstrap-123",
+  email: "bootstrap@kbcon.local",
+  role: "superAdmin",
+  mustChangePassword: true,
+  exp: nowSec + 3600,
+});
+
+const ADMIN_NO_PEOPLE_TOKEN = createMockJwt({
+  sub: "admin-no-people",
+  email: "admin-np@kbcon.local",
+  role: "admin",
+  exp: nowSec + 3600,
+});
+
 const TEST_OPERATOR_TOKEN = "test-secret-operator-token-xyz-987";
 
 let mockServer;
@@ -140,6 +155,43 @@ async function startMockServer() {
                       email: "disabled@kbcon.local",
                       disabled: true, // Account disabled
                       customAttributes: JSON.stringify({ role: "admin" }),
+                    },
+                  ],
+                })
+              );
+              return;
+            }
+
+            if (token === BOOTSTRAP_TOKEN) {
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(
+                JSON.stringify({
+                  users: [
+                    {
+                      localId: "bootstrap-123",
+                      email: "bootstrap@kbcon.local",
+                      disabled: false,
+                      customAttributes: JSON.stringify({ role: "superAdmin", mustChangePassword: true }),
+                    },
+                  ],
+                })
+              );
+              return;
+            }
+
+            if (token === ADMIN_NO_PEOPLE_TOKEN) {
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(
+                JSON.stringify({
+                  users: [
+                    {
+                      localId: "admin-no-people",
+                      email: "admin-np@kbcon.local",
+                      disabled: false,
+                      customAttributes: JSON.stringify({
+                        role: "admin",
+                        permissions: { people: false, assistant: true, dashboard: true, settings: false },
+                      }),
                     },
                   ],
                 })
@@ -405,6 +457,38 @@ async function runTests() {
     const res = await handleDh360ProxyRequest(req, ["persons", "p-100"]);
     assert.strictEqual(res.status, 204);
     assert.strictEqual(lastDh360Request.method, "DELETE");
+  });
+
+  await test("2.7 Bootstrap account with mustChangePassword=true is blocked with HTTP 403", async () => {
+    const req = new Request("http://localhost:3000/api/dh360/health", {
+      headers: { Authorization: `Bearer ${BOOTSTRAP_TOKEN}` },
+    });
+    const res = await handleDh360ProxyRequest(req, ["health"]);
+    assert.strictEqual(res.status, 403);
+    const body = await res.json();
+    assert.strictEqual(body.error, "PASSWORD_CHANGE_REQUIRED");
+  });
+
+  await test("2.8 Admin without people permission is rejected with HTTP 403 on /persons", async () => {
+    const req = new Request("http://localhost:3000/api/dh360/persons", {
+      headers: { Authorization: `Bearer ${ADMIN_NO_PEOPLE_TOKEN}` },
+    });
+    const res = await handleDh360ProxyRequest(req, ["persons"]);
+    assert.strictEqual(res.status, 403);
+    const body = await res.json();
+    assert.strictEqual(body.error, "FORBIDDEN");
+    assert.strictEqual(body.message.includes("'people'"), true);
+  });
+
+  await test("2.9 Admin without settings permission is rejected with HTTP 403 on /settings/institution", async () => {
+    const req = new Request("http://localhost:3000/api/dh360/settings/institution", {
+      headers: { Authorization: `Bearer ${ADMIN_NO_PEOPLE_TOKEN}` },
+    });
+    const res = await handleDh360ProxyRequest(req, ["settings", "institution"]);
+    assert.strictEqual(res.status, 403);
+    const body = await res.json();
+    assert.strictEqual(body.error, "FORBIDDEN");
+    assert.strictEqual(body.message.includes("'settings'"), true);
   });
 
   // ---------------------------------------------------------------------------

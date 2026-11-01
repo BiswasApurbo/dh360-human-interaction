@@ -10,7 +10,7 @@ import { Lock, Mail, Loader2 } from "lucide-react";
 import { Link } from "@/i18n/navigation";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { signInWithEmailAndPassword } from "firebase/auth";
+import { signInWithEmailAndPassword, setPersistence, browserSessionPersistence } from "firebase/auth";
 import { useRouter } from "@/i18n/navigation";
 import { auth } from "@/lib/firebase";
 
@@ -34,6 +34,8 @@ export function LoginForm() {
   async function onSubmit(values: Values) {
     setError(null);
     try {
+      // Explicitly enforce session-only browser persistence for interactive sessions
+      await setPersistence(auth, browserSessionPersistence);
       await signInWithEmailAndPassword(auth, values.email, values.password);
       router.replace("/dashboard");
     } catch (err: unknown) {

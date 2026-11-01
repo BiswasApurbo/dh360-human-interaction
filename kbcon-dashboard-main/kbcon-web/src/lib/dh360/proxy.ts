@@ -53,6 +53,17 @@ export async function handleDh360ProxyRequest(
 
   const principal = authResult.principal;
 
+  // 2.1 Enforce mandatory password change for bootstrap accounts
+  if (principal.mustChangePassword) {
+    return Response.json(
+      {
+        error: "PASSWORD_CHANGE_REQUIRED",
+        message: "Mandatory password change required before accessing DH360 APIs.",
+      },
+      { status: 403 }
+    );
+  }
+
   // 3. Inspect request body for PATCH / POST / PUT
   let requestBodyObj: Record<string, unknown> | null = null;
   let rawBodyText: string | null = null;

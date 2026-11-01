@@ -41,7 +41,17 @@ export function AppSidebar() {
   const tc = useTranslations("Common");
   const pathname = usePathname();
   const { setOpenMobile } = useSidebar();
-  const { role } = useRole();
+  const { role, permissions } = useRole();
+
+  const isSuper = role === "superAdmin";
+
+  const visibleItems = items.filter(({ key }) => {
+    if (isSuper) return true;
+    if (permissions && key in permissions) {
+      return Boolean(permissions[key as keyof typeof permissions]);
+    }
+    return true;
+  });
 
   return (
     <Sidebar collapsible="icon">
@@ -60,7 +70,7 @@ export function AppSidebar() {
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              {items.map(({ key, href, icon: Icon }) => (
+              {visibleItems.map(({ key, href, icon: Icon }) => (
                 <SidebarMenuItem key={key}>
                   <SidebarMenuButton
                     asChild
@@ -75,7 +85,7 @@ export function AppSidebar() {
                 </SidebarMenuItem>
               ))}
 
-              {role === "superAdmin" && (
+              {isSuper && (
                 <SidebarMenuItem>
                   <SidebarMenuButton
                     asChild

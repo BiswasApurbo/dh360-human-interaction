@@ -14,6 +14,7 @@
     "class-variance-authority": "^0.7.1",
     "cn": "^0.4.0",
     "firebase": "^13.0.0",
+    "firebase-admin": "^14.5.0",
     "lucide-react": "^1.56.0",
     "motion": "^14.2.0",
     "next": "16.4.3",

@@ -1,44 +1,60 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { collection, onSnapshot, query, where } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { useCallback, useEffect, useState } from "react";
+import { useAuth } from "@/features/auth/use-auth";
 
 export type AdminRow = {
   uid: string;
   name: string;
   email: string;
+  role: "superAdmin" | "admin";
   active: boolean;
+  mustChangePassword?: boolean;
+  permissions: {
+    dashboard: boolean;
+    robots: boolean;
+    assistant: boolean;
+    people: boolean;
+    knowledgeBase: boolean;
+    telemetry: boolean;
+    settings: boolean;
+  };
+  createdAt?: string;
+  lastSignInTime?: string;
 };
 
 export function useAdmins(enabled: boolean) {
+  const { user } = useAuth();
   const [admins, setAdmins] = useState<AdminRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
-  useEffect(() => {
-    if (!enabled) return;
-    const q = query(collection(db, "users"), where("role", "==", "admin"));
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        setAdmins(
-          snap.docs.map((d) => ({
-            uid: d.id,
-            name: d.data().name ?? "",
-            email: d.data().email ?? "",
-            active: d.data().active !== false,
-          })),
-        );
-        setLoading(false);
-      },
-      () => {
-        setError(true);
-        setLoading(false);
-      },
-    );
-    return () => unsub();
-  }, [enabled]);
+  const fetchAdmins = useCallback(async () => {
+    if (!enabled || !user) return;
+    setLoading(true);
+    setError(false);
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch("/api/admin/users", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setAdmins(data.users || []);
+    } catch {
+      setError(true);
+    } finally {
+      setLoading(false);
+    }
+  }, [enabled, user]);
 
-  return { admins, loading, error };
+  useEffect(() => {
+    void fetchAdmins();
+  }, [fetchAdmins]);
+
+  return { admins, loading, error, refetch: fetchAdmins };
 }

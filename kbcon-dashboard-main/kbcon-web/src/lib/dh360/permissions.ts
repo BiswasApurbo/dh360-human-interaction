@@ -354,6 +354,55 @@ export function checkPermission(
     };
   }
 
+  // Check granular module permissions for ordinary Admin users
+  if (principal.role === "admin" && principal.permissions) {
+    if (normPath.startsWith("/persons") && principal.permissions.people === false) {
+      return {
+        matched: true,
+        allowed: false,
+        httpStatus: 403,
+        reason: "Access denied: Account lacks 'people' module permission.",
+        rule: matchedRule,
+      };
+    }
+    if (normPath.startsWith("/dialogue") && principal.permissions.assistant === false) {
+      return {
+        matched: true,
+        allowed: false,
+        httpStatus: 403,
+        reason: "Access denied: Account lacks 'assistant' module permission.",
+        rule: matchedRule,
+      };
+    }
+    if (normPath.startsWith("/knowledge") && principal.permissions.knowledgeBase === false) {
+      return {
+        matched: true,
+        allowed: false,
+        httpStatus: 403,
+        reason: "Access denied: Account lacks 'knowledgeBase' module permission.",
+        rule: matchedRule,
+      };
+    }
+    if (normPath.startsWith("/settings") && principal.permissions.settings === false) {
+      return {
+        matched: true,
+        allowed: false,
+        httpStatus: 403,
+        reason: "Access denied: Account lacks 'settings' module permission.",
+        rule: matchedRule,
+      };
+    }
+    if (normPath.startsWith("/sessions") && principal.permissions.telemetry === false) {
+      return {
+        matched: true,
+        allowed: false,
+        httpStatus: 403,
+        reason: "Access denied: Account lacks 'telemetry' module permission.",
+        rule: matchedRule,
+      };
+    }
+  }
+
   // Custom checks (e.g. consent_status payload check)
   if (matchedRule.customCheck) {
     const customResult = matchedRule.customCheck(body, principal);

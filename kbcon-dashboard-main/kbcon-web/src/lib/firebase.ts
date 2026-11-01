@@ -1,5 +1,10 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { getAuth, connectAuthEmulator } from "firebase/auth";
+import {
+  getAuth,
+  connectAuthEmulator,
+  setPersistence,
+  browserSessionPersistence,
+} from "firebase/auth";
 import { getFirestore, connectFirestoreEmulator } from "firebase/firestore";
 import { getFunctions, connectFunctionsEmulator } from "firebase/functions";
 
@@ -28,8 +33,17 @@ if (typeof window !== "undefined") {
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
+
+// Enforce session-only browser persistence: closing the browser requires logging in again.
+// Refreshing or navigating in the active session continues working normally.
+if (typeof window !== "undefined") {
+  setPersistence(auth, browserSessionPersistence).catch((err) => {
+    console.warn("[Firebase] Browser session persistence initialization:", err);
+  });
+}
+
 export const db = getFirestore(app);
-// Cloud Functions asia-south1 অঞ্চলে ডিপ্লয় হয়
+// Cloud Functions asia-south1
 export const functions = getFunctions(app, "asia-south1");
 
 const useEmulator = process.env.NEXT_PUBLIC_USE_EMULATOR === "true";

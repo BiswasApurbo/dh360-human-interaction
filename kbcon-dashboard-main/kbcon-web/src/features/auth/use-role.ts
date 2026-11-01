@@ -5,9 +5,43 @@ import { useAuth } from "./use-auth";
 
 export type Role = "superAdmin" | "admin" | null;
 
+export interface AdminPermissions {
+  dashboard: boolean;
+  robots: boolean;
+  assistant: boolean;
+  people: boolean;
+  knowledgeBase: boolean;
+  telemetry: boolean;
+  settings: boolean;
+}
+
+export const DEFAULT_SUPER_ADMIN_PERMISSIONS: AdminPermissions = {
+  dashboard: true,
+  robots: true,
+  assistant: true,
+  people: true,
+  knowledgeBase: true,
+  telemetry: true,
+  settings: true,
+};
+
+export const DEFAULT_ADMIN_PERMISSIONS: AdminPermissions = {
+  dashboard: true,
+  robots: true,
+  assistant: true,
+  people: true,
+  knowledgeBase: true,
+  telemetry: true,
+  settings: false,
+};
+
 export function useRole() {
   const { user, loading } = useAuth();
   const [role, setRole] = useState<Role>(null);
+  const [mustChangePassword, setMustChangePassword] = useState(false);
+  const [permissions, setPermissions] = useState<AdminPermissions>(
+    DEFAULT_ADMIN_PERMISSIONS
+  );
   const [roleLoading, setRoleLoading] = useState(true);
 
   useEffect(() => {
@@ -15,6 +49,8 @@ export function useRole() {
     if (!user) {
       const id = setTimeout(() => {
         setRole(null);
+        setMustChangePassword(false);
+        setPermissions(DEFAULT_ADMIN_PERMISSIONS);
         setRoleLoading(false);
       }, 0);
       return () => clearTimeout(id);
@@ -23,10 +59,30 @@ export function useRole() {
       .getIdTokenResult()
       .then((result) => {
         const r = result.claims.role;
-        setRole(r === "superAdmin" || r === "admin" ? r : null);
+        const validRole = r === "superAdmin" || r === "admin" ? r : null;
+        setRole(validRole);
+        setMustChangePassword(Boolean(result.claims.mustChangePassword));
+        if (validRole === "superAdmin") {
+          setPermissions(DEFAULT_SUPER_ADMIN_PERMISSIONS);
+        } else if (
+          result.claims.permissions &&
+          typeof result.claims.permissions === "object"
+        ) {
+          setPermissions({
+            ...DEFAULT_ADMIN_PERMISSIONS,
+            ...(result.claims.permissions as Partial<AdminPermissions>),
+          });
+        } else {
+          setPermissions(DEFAULT_ADMIN_PERMISSIONS);
+        }
       })
       .finally(() => setRoleLoading(false));
   }, [user, loading]);
 
-  return { role, loading: loading || roleLoading };
+  return {
+    role,
+    mustChangePassword,
+    permissions,
+    loading: loading || roleLoading,
+  };
 }

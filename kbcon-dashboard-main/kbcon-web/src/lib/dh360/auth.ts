@@ -11,10 +11,42 @@
 
 import crypto from "node:crypto";
 
+export interface AdminPermissions {
+  dashboard: boolean;
+  robots: boolean;
+  assistant: boolean;
+  people: boolean;
+  knowledgeBase: boolean;
+  telemetry: boolean;
+  settings: boolean;
+}
+
+export const DEFAULT_SUPER_ADMIN_PERMISSIONS: AdminPermissions = {
+  dashboard: true,
+  robots: true,
+  assistant: true,
+  people: true,
+  knowledgeBase: true,
+  telemetry: true,
+  settings: true,
+};
+
+export const DEFAULT_ADMIN_PERMISSIONS: AdminPermissions = {
+  dashboard: true,
+  robots: true,
+  assistant: true,
+  people: true,
+  knowledgeBase: true,
+  telemetry: true,
+  settings: false,
+};
+
 export interface AuthPrincipal {
   uid: string;
   email: string | null;
   role: "superAdmin" | "admin";
+  mustChangePassword?: boolean;
+  permissions?: AdminPermissions;
 }
 
 export type AuthResult =
@@ -236,7 +268,11 @@ export async function authenticateFirebaseToken(
         };
       }
 
-      let customClaims: { role?: string } = {};
+      let customClaims: {
+        role?: string;
+        mustChangePassword?: boolean;
+        permissions?: Record<string, boolean>;
+      } = {};
       if (user.customAttributes) {
         try {
           customClaims = JSON.parse(user.customAttributes);
@@ -260,12 +296,29 @@ export async function authenticateFirebaseToken(
         };
       }
 
+      const mustChangePassword = Boolean(
+        customClaims.mustChangePassword || payload.mustChangePassword
+      );
+      const permissions: AdminPermissions =
+        effectiveRole === "superAdmin"
+          ? DEFAULT_SUPER_ADMIN_PERMISSIONS
+          : {
+              ...DEFAULT_ADMIN_PERMISSIONS,
+              ...(typeof customClaims.permissions === "object"
+                ? customClaims.permissions
+                : typeof payload.permissions === "object"
+                ? (payload.permissions as Partial<AdminPermissions>)
+                : {}),
+            };
+
       return {
         success: true,
         principal: {
           uid: user.localId,
           email: user.email ?? payload.email ?? null,
           role: effectiveRole as "superAdmin" | "admin",
+          mustChangePassword,
+          permissions,
         },
       };
     } catch {
@@ -377,12 +430,25 @@ export async function authenticateFirebaseToken(
       };
     }
 
+    const mustChangePassword = Boolean(payload.mustChangePassword);
+    const permissions: AdminPermissions =
+      role === "superAdmin"
+        ? DEFAULT_SUPER_ADMIN_PERMISSIONS
+        : {
+            ...DEFAULT_ADMIN_PERMISSIONS,
+            ...(typeof payload.permissions === "object"
+              ? (payload.permissions as Partial<AdminPermissions>)
+              : {}),
+          };
+
     return {
       success: true,
       principal: {
         uid,
         email: payload.email || null,
         role: role as "superAdmin" | "admin",
+        mustChangePassword,
+        permissions,
       },
     };
   } catch {
