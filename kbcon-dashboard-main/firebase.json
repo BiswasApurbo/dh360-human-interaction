@@ -37,5 +37,20 @@
       "enabled": true
     },
     "singleProjectMode": true
+  },
+  "hosting": {
+    "public": "public",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "redirects": [
+      {
+        "source": "/__/auth/action",
+        "destination": "https://kbcon-dashboard-gamma.vercel.app/auth/action",
+        "type": 302
+      }
+    ]
   }
 }

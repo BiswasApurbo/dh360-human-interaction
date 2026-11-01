@@ -264,7 +264,7 @@ async def reset_admin_password(
         link = auth_module.generate_password_reset_link(
             user.email,
             action_code_settings=auth_module.ActionCodeSettings(
-                url="https://kbcon-dashboard-gamma.vercel.app/login",
+                url="https://kbcon-dashboard-gamma.vercel.app/auth/action",
                 handle_code_in_app=False,
             ),
         )

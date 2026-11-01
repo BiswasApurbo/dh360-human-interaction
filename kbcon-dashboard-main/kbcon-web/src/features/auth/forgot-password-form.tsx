@@ -33,7 +33,11 @@ export function ForgotPasswordForm() {
   async function onSubmit(values: Values) {
     setError(null);
     try {
-      await sendPasswordResetEmail(auth, values.email);
+      const actionCodeSettings = {
+        url: "https://kbcon-dashboard-gamma.vercel.app/auth/action",
+        handleCodeInApp: false,
+      };
+      await sendPasswordResetEmail(auth, values.email, actionCodeSettings);
       setSent(true);
     } catch (err) {
       const code = (err as { code?: string })?.code;

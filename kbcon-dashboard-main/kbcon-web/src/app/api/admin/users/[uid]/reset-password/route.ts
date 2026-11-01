@@ -53,9 +53,9 @@ export async function POST(request: Request, context: RouteParams) {
       );
     }
 
-    // Generate reset link via Firebase Admin SDK
+    // Generate reset link via Firebase Admin SDK targeting branded action handler
     const actionCodeSettings = {
-      url: "https://kbcon-dashboard-gamma.vercel.app/login",
+      url: "https://kbcon-dashboard-gamma.vercel.app/auth/action",
       handleCodeInApp: false,
     };
 
