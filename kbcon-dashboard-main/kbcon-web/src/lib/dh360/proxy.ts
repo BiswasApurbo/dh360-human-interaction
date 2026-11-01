@@ -10,8 +10,10 @@
  */
 
 import { authenticateFirebaseToken } from "./auth.ts";
-import { ConfigurationError, getDh360Config } from "./config.ts";
+import { ConfigurationError, getDh360Config, resetConfigCacheForTesting } from "./config.ts";
 import { checkPermission } from "./permissions.ts";
+
+export { resetConfigCacheForTesting };
 
 const MAX_BODY_BYTES = 1024 * 1024; // 1MB limit for JSON bodies
 

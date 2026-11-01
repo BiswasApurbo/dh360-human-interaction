@@ -18,8 +18,7 @@
 
 import http from "node:http";
 import assert from "node:assert";
-import { handleDh360ProxyRequest } from "../src/lib/dh360/proxy.ts";
-import { resetConfigCacheForTesting } from "../src/lib/dh360/config.ts";
+import { handleDh360ProxyRequest, resetConfigCacheForTesting } from "../src/lib/dh360/proxy.ts";
 
 function createMockJwt(payloadObj) {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
