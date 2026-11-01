@@ -113,6 +113,35 @@ def require_scopes(
     return authorize
 
 
+async def get_optional_operator_principal(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = _bearer_credentials,
+) -> OperatorPrincipal | None:
+    """Retrieve the authenticated operator principal if valid credentials are present, else None."""
+    config = getattr(request.app.state, "operator_auth", None)
+    if not isinstance(config, ApiConfig) or not _is_configured(config):
+        return None
+
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        return None
+
+    expected_token = config.operator_token
+    if not expected_token:
+        return None
+
+    if not secrets.compare_digest(
+        credentials.credentials.encode("utf-8"),
+        expected_token.encode("utf-8"),
+    ):
+        return None
+
+    try:
+        scopes = frozenset(OperatorScope(value) for value in config.operator_scopes)
+        return OperatorPrincipal(scopes=scopes)
+    except Exception:
+        return None
+
+
 def _is_configured(config: ApiConfig) -> bool:
     """Check that credentials and supported scopes are configured fail-closed."""
     token = config.operator_token

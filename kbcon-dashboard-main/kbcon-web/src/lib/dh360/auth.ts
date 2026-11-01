@@ -149,6 +149,10 @@ function getExpectedProjectId(): string {
   );
 }
 
+export interface AuthenticateOptions {
+  checkRevoked?: boolean;
+}
+
 /**
  * Validates a Firebase ID Token and returns the authenticated principal or structured failure.
  *
@@ -157,7 +161,8 @@ function getExpectedProjectId(): string {
  * Distinguishes unauthenticated (401) from insufficient role / forbidden (403).
  */
 export async function authenticateFirebaseToken(
-  authHeader: string | null | undefined
+  authHeader: string | null | undefined,
+  options?: AuthenticateOptions
 ): Promise<AuthResult> {
   if (!authHeader || typeof authHeader !== "string") {
     return {
@@ -268,10 +273,26 @@ export async function authenticateFirebaseToken(
         };
       }
 
+      if (options?.checkRevoked) {
+        const validSince = (user as { validSince?: string }).validSince;
+        if (validSince && typeof payload.auth_time === "number") {
+          const validSinceSec = parseInt(validSince, 10);
+          if (payload.auth_time < validSinceSec) {
+            return {
+              success: false,
+              status: 401,
+              code: "UNAUTHENTICATED",
+              message: "Token has been revoked. Please sign in again.",
+            };
+          }
+        }
+      }
+
       let customClaims: {
         role?: string;
         mustChangePassword?: boolean;
         permissions?: Record<string, boolean>;
+        revoked?: boolean;
       } = {};
       if (user.customAttributes) {
         try {
@@ -284,6 +305,15 @@ export async function authenticateFirebaseToken(
             message: "Malformed custom attributes on user account.",
           };
         }
+      }
+
+      if (options?.checkRevoked && (customClaims.revoked || (payload as { revoked?: boolean }).revoked)) {
+        return {
+          success: false,
+          status: 401,
+          code: "UNAUTHENTICATED",
+          message: "Token has been revoked. Please sign in again.",
+        };
       }
 
       const effectiveRole = customClaims.role || payload.role;
@@ -335,6 +365,82 @@ export async function authenticateFirebaseToken(
   // ---------------------------------------------------------------------------
   // Branch B: Cryptographic Production Verification against Google Public Keys
   // ---------------------------------------------------------------------------
+  if (options?.checkRevoked) {
+    try {
+      const { getAdminAuth, hasServerAdminCredentials } = await import("../server-admin");
+      if (hasServerAdminCredentials()) {
+        const adminAuth = await getAdminAuth();
+        const decoded = await adminAuth.verifyIdToken(token, true); // checkRevoked = true!
+        const effectiveRole = (decoded.role as string) || payload.role;
+        if (effectiveRole !== "superAdmin" && effectiveRole !== "admin") {
+          return {
+            success: false,
+            status: 403,
+            code: "FORBIDDEN",
+            message: "Account requires admin or superAdmin role.",
+          };
+        }
+        const mustChangePassword = Boolean(
+          decoded.mustChangePassword || payload.mustChangePassword
+        );
+        const permissions: AdminPermissions =
+          effectiveRole === "superAdmin"
+            ? DEFAULT_SUPER_ADMIN_PERMISSIONS
+            : {
+                ...DEFAULT_ADMIN_PERMISSIONS,
+                ...(typeof decoded.permissions === "object"
+                  ? (decoded.permissions as Partial<AdminPermissions>)
+                  : typeof payload.permissions === "object"
+                  ? (payload.permissions as Partial<AdminPermissions>)
+                  : {}),
+              };
+
+        return {
+          success: true,
+          principal: {
+            uid: decoded.uid,
+            email: decoded.email || payload.email || null,
+            role: effectiveRole as "superAdmin" | "admin",
+            mustChangePassword,
+            permissions,
+          },
+        };
+      }
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code;
+      if (code === "auth/id-token-revoked") {
+        return {
+          success: false,
+          status: 401,
+          code: "UNAUTHENTICATED",
+          message: "Token has been revoked. Please sign in again.",
+        };
+      }
+      if (code === "auth/user-disabled") {
+        return {
+          success: false,
+          status: 401,
+          code: "UNAUTHENTICATED",
+          message: "User account is disabled.",
+        };
+      }
+      if (code === "auth/id-token-expired") {
+        return {
+          success: false,
+          status: 401,
+          code: "UNAUTHENTICATED",
+          message: "Token has expired.",
+        };
+      }
+      return {
+        success: false,
+        status: 401,
+        code: "UNAUTHENTICATED",
+        message: err instanceof Error ? err.message : "Token verification failed.",
+      };
+    }
+  }
+
   // 1. Strict algorithm check: MUST be RS256
   if (header.alg !== "RS256" || !header.kid) {
     return {

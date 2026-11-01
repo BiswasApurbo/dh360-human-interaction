@@ -148,7 +148,7 @@ class VideoFileFrameSource(FrameSource):
         frame = Frame(
             image=image,
             frame_id=self._frame_id,
-            timestamp=time.monotonic(),
+            timestamp=time.time(),
             source_info=str(self.file_path.name),
         )
         self._frame_id += 1
@@ -304,7 +304,7 @@ class WebcamFrameSource(FrameSource):
         frame = Frame(
             image=image,
             frame_id=self._frame_id,
-            timestamp=now,
+            timestamp=time.time(),
             source_info=f"webcam:{self.camera_index}",
         )
         self._frame_id += 1
@@ -389,7 +389,7 @@ class SyntheticFrameSource(FrameSource):
         frame = Frame(
             image=image,
             frame_id=self._frame_id,
-            timestamp=time.monotonic(),
+            timestamp=time.time(),
             source_info="synthetic_source",
         )
         self._frame_id += 1

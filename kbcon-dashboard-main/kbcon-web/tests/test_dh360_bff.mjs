@@ -19,6 +19,7 @@
 import http from "node:http";
 import assert from "node:assert";
 import { handleDh360ProxyRequest, resetConfigCacheForTesting } from "../src/lib/dh360/proxy.ts";
+import { authenticateFirebaseToken } from "../src/lib/dh360/auth.ts";
 
 function createMockJwt(payloadObj) {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
@@ -83,6 +84,15 @@ const ADMIN_NO_PEOPLE_TOKEN = createMockJwt({
   email: "admin-np@kbcon.local",
   role: "admin",
   exp: nowSec + 3600,
+});
+
+const REVOKED_TOKEN = createMockJwt({
+  sub: "revoked-456",
+  email: "revoked@kbcon.local",
+  role: "admin",
+  auth_time: nowSec - 500,
+  exp: nowSec + 3600,
+  revoked: true,
 });
 
 const TEST_OPERATOR_TOKEN = "test-secret-operator-token-xyz-987";
@@ -154,6 +164,24 @@ async function startMockServer() {
                       email: "disabled@kbcon.local",
                       disabled: true, // Account disabled
                       customAttributes: JSON.stringify({ role: "admin" }),
+                    },
+                  ],
+                })
+              );
+              return;
+            }
+
+            if (token === REVOKED_TOKEN) {
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(
+                JSON.stringify({
+                  users: [
+                    {
+                      localId: "revoked-456",
+                      email: "revoked@kbcon.local",
+                      disabled: false,
+                      validSince: String(nowSec - 100), // validSince after auth_time
+                      customAttributes: JSON.stringify({ role: "admin", revoked: true }),
                     },
                   ],
                 })
@@ -382,6 +410,28 @@ async function runTests() {
     const res = await handleDh360ProxyRequest(req, ["health"]);
     assert.strictEqual(res.status, 401); // Rejects emulator lookup when NEXT_PUBLIC_USE_EMULATOR is false
     process.env.NEXT_PUBLIC_USE_EMULATOR = "true";
+  });
+
+  await test("1.9 Revoked token with checkRevoked=true is rejected fail-closed with HTTP 401", async () => {
+    const authResult = await authenticateFirebaseToken(`Bearer ${REVOKED_TOKEN}`, { checkRevoked: true });
+    assert.strictEqual(authResult.success, false);
+    assert.strictEqual(authResult.status, 401);
+    assert.strictEqual(authResult.code, "UNAUTHENTICATED");
+    assert.ok(authResult.message.includes("revoked"));
+  });
+
+  await test("1.10 Disabled user account with checkRevoked=true is rejected with HTTP 401", async () => {
+    const authResult = await authenticateFirebaseToken(`Bearer ${DISABLED_USER_TOKEN}`, { checkRevoked: true });
+    assert.strictEqual(authResult.success, false);
+    assert.strictEqual(authResult.status, 401);
+    assert.strictEqual(authResult.code, "UNAUTHENTICATED");
+    assert.ok(authResult.message.includes("disabled"));
+  });
+
+  await test("1.11 Valid active token with checkRevoked=true succeeds", async () => {
+    const authResult = await authenticateFirebaseToken(`Bearer ${SUPER_ADMIN_TOKEN}`, { checkRevoked: true });
+    assert.strictEqual(authResult.success, true);
+    assert.strictEqual(authResult.principal.role, "superAdmin");
   });
 
   // ---------------------------------------------------------------------------

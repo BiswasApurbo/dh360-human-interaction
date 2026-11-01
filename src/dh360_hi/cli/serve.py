@@ -129,13 +129,28 @@ def handle_serve(args: argparse.Namespace) -> int:
             field="detector_model_path",
         )
 
-    frame_source = _build_frame_source(args)
-    service = create_interaction_service(
-        config=config, frame_source=frame_source, enable_perception=True
-    )
+    try:
+        frame_source = _build_frame_source(args)
+        service = create_interaction_service(
+            config=config, frame_source=frame_source, enable_perception=True
+        )
+        # Start live perception pipeline
+        service.start(async_thread=True)
+    except Exception as exc:
+        if getattr(args, "source", "") == "webcam":
+            logger.warning(
+                "Failed to open webcam (%s). Falling back to synthetic frame source to maintain daemon API, health, and dialogue uptime.",
+                exc,
+            )
+            from dh360_hi.vision.frame import SyntheticFrameSource
 
-    # Start live perception pipeline
-    service.start(async_thread=True)
+            frame_source = SyntheticFrameSource(fps=30.0, num_frames=1000000)
+            service = create_interaction_service(
+                config=config, frame_source=frame_source, enable_perception=True
+            )
+            service.start(async_thread=True)
+        else:
+            raise
 
     # Instantiate single AuthorizationController bound to live session manager
     assert service.runtime is not None

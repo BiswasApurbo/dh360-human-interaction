@@ -50,11 +50,15 @@ def test_transport_layer_exposes_m31_contract(
         assert latest_summary.status_code == 200
         assert latest_summary.json() is None
 
-        runtime_state = client.get("/runtime/state")
+        # Unauthenticated calls to runtime internals are rejected
+        assert client.get("/runtime/state").status_code == 401
+        assert client.get("/runtime/metrics").status_code == 401
+
+        runtime_state = client.get("/runtime/state", headers=headers)
         assert runtime_state.status_code == 200
         assert runtime_state.json() in {"stopped", "running", "paused", "error"}
 
-        metrics = client.get("/runtime/metrics")
+        metrics = client.get("/runtime/metrics", headers=headers)
         assert metrics.status_code == 503
 
         sessions = client.get("/sessions", headers=headers)

@@ -199,7 +199,7 @@ class FaceTracker(BaseFaceTracker):
             det_list = list(detections)
             current_frame_id = frame_id
 
-        current_timestamp = timestamp or time.monotonic()
+        current_timestamp = timestamp if timestamp is not None else time.time()
 
         # Update track ages
         for track in self._tracks.values():

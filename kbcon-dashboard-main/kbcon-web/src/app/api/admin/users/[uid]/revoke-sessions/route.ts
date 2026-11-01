@@ -13,7 +13,7 @@ interface RouteParams {
 export async function POST(request: Request, context: RouteParams) {
   const { uid } = await Promise.resolve(context.params);
   const authHeader = request.headers.get("authorization");
-  const authResult = await authenticateFirebaseToken(authHeader);
+  const authResult = await authenticateFirebaseToken(authHeader, { checkRevoked: true });
 
   if (!authResult.success) {
     return NextResponse.json(
