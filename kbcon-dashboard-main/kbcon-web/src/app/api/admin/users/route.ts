@@ -50,8 +50,8 @@ export async function GET(request: Request) {
   }
 
   try {
-    const adminAuth = getAdminAuth();
-    const adminDb = getAdminFirestore();
+    const adminAuth = await getAdminAuth();
+    const adminDb = await getAdminFirestore();
 
     // 1. Fetch users from Firebase Authentication
     const listUsersResult = await adminAuth.listUsers(100);
@@ -175,8 +175,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    const adminAuth = getAdminAuth();
-    const adminDb = getAdminFirestore();
+    const adminAuth = await getAdminAuth();
+    const adminDb = await getAdminFirestore();
 
     // 1. Create user in Firebase Authentication
     const newUser = await adminAuth.createUser({

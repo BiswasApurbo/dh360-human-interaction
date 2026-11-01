@@ -8,9 +8,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { getApps, initializeApp, cert, type App } from "firebase-admin/app";
-import { getAuth, type Auth } from "firebase-admin/auth";
-import { getFirestore, type Firestore } from "firebase-admin/firestore";
+import type { App } from "firebase-admin/app";
+import type { Auth } from "firebase-admin/auth";
+import type { Firestore } from "firebase-admin/firestore";
 import { getDh360Config } from "./dh360/config";
 
 let adminApp: App | null = null;
@@ -60,8 +60,10 @@ export function hasServerAdminCredentials(): boolean {
   return resolveServiceAccount() !== null;
 }
 
-export function getServerAdminApp(): App {
+export async function getServerAdminApp(): Promise<App> {
   if (adminApp) return adminApp;
+
+  const { getApps, initializeApp, cert } = await import("firebase-admin/app");
 
   const existingApps = getApps();
   if (existingApps.length > 0) {
@@ -81,7 +83,6 @@ export function getServerAdminApp(): App {
       projectId,
     });
   } else {
-    // Emulator or Application Default Credentials
     adminApp = initializeApp({
       projectId,
     });
@@ -90,12 +91,16 @@ export function getServerAdminApp(): App {
   return adminApp;
 }
 
-export function getAdminAuth(): Auth {
-  return getAuth(getServerAdminApp());
+export async function getAdminAuth(): Promise<Auth> {
+  const app = await getServerAdminApp();
+  const { getAuth } = await import("firebase-admin/auth");
+  return getAuth(app);
 }
 
-export function getAdminFirestore(): Firestore {
-  return getFirestore(getServerAdminApp());
+export async function getAdminFirestore(): Promise<Firestore> {
+  const app = await getServerAdminApp();
+  const { getFirestore } = await import("firebase-admin/firestore");
+  return getFirestore(app);
 }
 
 export async function forwardAdminRequestToBackend(

@@ -43,7 +43,7 @@ export async function POST(request: Request, context: RouteParams) {
   }
 
   try {
-    const adminAuth = getAdminAuth();
+    const adminAuth = await getAdminAuth();
     const user = await adminAuth.getUser(uid);
 
     if (!user.email) {

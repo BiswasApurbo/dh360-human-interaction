@@ -51,8 +51,8 @@ export async function PATCH(request: Request, context: RouteParams) {
   }
 
   try {
-    const adminAuth = getAdminAuth();
-    const adminDb = getAdminFirestore();
+    const adminAuth = await getAdminAuth();
+    const adminDb = await getAdminFirestore();
 
     const targetUser = await adminAuth.getUser(uid);
     const targetClaims = (targetUser.customClaims as Record<string, unknown>) || {};
@@ -150,8 +150,8 @@ export async function DELETE(request: Request, context: RouteParams) {
   }
 
   try {
-    const adminAuth = getAdminAuth();
-    const adminDb = getAdminFirestore();
+    const adminAuth = await getAdminAuth();
+    const adminDb = await getAdminFirestore();
 
     const targetUser = await adminAuth.getUser(uid);
     const targetClaims = (targetUser.customClaims as Record<string, unknown>) || {};

@@ -23,8 +23,8 @@ export async function POST(request: Request) {
   // 1. Direct execution if server credentials are local
   if (hasServerAdminCredentials()) {
     try {
-      const adminAuth = getAdminAuth();
-      const adminDb = getAdminFirestore();
+      const adminAuth = await getAdminAuth();
+      const adminDb = await getAdminFirestore();
 
       const user = await adminAuth.getUser(uid);
       const existingClaims = (user.customClaims as Record<string, unknown>) || {};
