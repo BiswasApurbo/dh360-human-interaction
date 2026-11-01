@@ -117,15 +117,21 @@ def test_knowledge_items_crud_end_to_end(
     with TestClient(app) as client:
         headers = {"Authorization": f"Bearer {token}"}
 
-        # 1. List items
+        # 1. List items (migrated with persistent UUID)
         resp = client.get("/knowledge/items", headers=headers)
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 1
-        assert data["items"][0]["id"] == "kb-1"
+        item_1_id = data["items"][0]["id"]
+        assert item_1_id and len(item_1_id) >= 16  # Stable UUID
         assert data["items"][0]["question_en"] == "Initial Q"
 
-        # 2. Create item
+        # Backward compatibility check: legacy kb-1 fetches item 1
+        legacy_resp = client.get("/knowledge/items/kb-1", headers=headers)
+        assert legacy_resp.status_code == 200
+        assert legacy_resp.json()["id"] == item_1_id
+
+        # 2. Create item (receives a persistent UUID)
         new_payload = {
             "question_en": "Where is the pharmacy?",
             "answer_en": "Ground floor next to emergency.",
@@ -136,12 +142,14 @@ def test_knowledge_items_crud_end_to_end(
         create_resp = client.post("/knowledge/items", json=new_payload, headers=headers)
         assert create_resp.status_code == 201
         created = create_resp.json()
-        assert created["id"] == "kb-2"
+        created_id = created["id"]
+        assert created_id and len(created_id) >= 16
+        assert created_id != item_1_id
         assert created["question_en"] == "Where is the pharmacy?"
         assert created["institution_type"] == "clinic"
 
-        # 3. Retrieve item by ID
-        get_resp = client.get("/knowledge/items/kb-2", headers=headers)
+        # 3. Retrieve item by stable UUID ID
+        get_resp = client.get(f"/knowledge/items/{created_id}", headers=headers)
         assert get_resp.status_code == 200
         assert get_resp.json()["answer_bn"] == "নিচতলায় জরুরি বিভাগের পাশে।"
 
@@ -149,26 +157,29 @@ def test_knowledge_items_crud_end_to_end(
         search_resp = client.get("/knowledge/items?query=emergency", headers=headers)
         assert search_resp.status_code == 200
         assert search_resp.json()["total"] == 1
-        assert search_resp.json()["items"][0]["id"] == "kb-2"
+        assert search_resp.json()["items"][0]["id"] == created_id
 
-        # 5. Update item
+        # 5. Update item using stable UUID
         update_payload = {
             "answer_en": "Ground floor, open 24/7.",
         }
-        update_resp = client.put("/knowledge/items/kb-2", json=update_payload, headers=headers)
+        update_resp = client.put(
+            f"/knowledge/items/{created_id}", json=update_payload, headers=headers
+        )
         assert update_resp.status_code == 200
         assert update_resp.json()["answer_en"] == "Ground floor, open 24/7."
         assert update_resp.json()["question_en"] == "Where is the pharmacy?"
+        assert update_resp.json()["id"] == created_id
 
-        # 6. Delete item
-        del_resp = client.delete("/knowledge/items/kb-2", headers=headers)
+        # 6. Delete item using stable UUID
+        del_resp = client.delete(f"/knowledge/items/{created_id}", headers=headers)
         assert del_resp.status_code == 200
         assert del_resp.json()["status"] == "deleted"
 
         # 7. Verify deletion
         list_after = client.get("/knowledge/items", headers=headers)
         assert list_after.json()["total"] == 1
-        assert list_after.json()["items"][0]["id"] == "kb-1"
+        assert list_after.json()["items"][0]["id"] == item_1_id
 
         # 8. Check backup file was created
         backup_file = csv_file.with_suffix(".csv.bak")

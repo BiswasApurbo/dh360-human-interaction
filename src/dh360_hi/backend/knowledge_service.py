@@ -19,11 +19,14 @@ Invariants:
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import logging
 import os
 import shutil
 import string
+import threading
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -36,7 +39,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Default explicit path to the packaged knowledge.csv file
+# Default explicit path to the packaged knowledge.csv file (tracked seed)
 DEFAULT_KNOWLEDGE_CSV_PATH = (
     Path(__file__).resolve().parent.parent
     / "integrations"
@@ -45,8 +48,18 @@ DEFAULT_KNOWLEDGE_CSV_PATH = (
     / "knowledge.csv"
 )
 
-# Persistent knowledge CSV path: lives in persistent data/ directory so code deployments never overwrite it
-PERSISTENT_KNOWLEDGE_CSV_PATH = Path("data") / "knowledge.csv"
+# Persistent runtime knowledge CSV path: lives in persistent directory outside Git
+RUNTIME_KNOWLEDGE_CSV_PATH = (
+    Path("/home/eliva/.config/dh360/knowledge.csv")
+    if Path("/home/eliva").exists()
+    else (Path.home() / ".config" / "dh360" / "knowledge.csv")
+)
+
+# Legacy persistent knowledge CSV path: lives in data/ directory inside repository
+LEGACY_PERSISTENT_KNOWLEDGE_CSV_PATH = Path("data") / "knowledge.csv"
+
+# Backward compatibility alias
+PERSISTENT_KNOWLEDGE_CSV_PATH = RUNTIME_KNOWLEDGE_CSV_PATH
 
 # Common grammatical stop words in English and Bangla
 STOP_WORDS: frozenset[str] = frozenset(
@@ -438,6 +451,7 @@ class KnowledgeService:
         institution_name: str | None = None,
     ) -> None:
         self._person_service = person_service
+        self._io_lock = threading.Lock()
 
         if csv_path is not None:
             self._csv_path = Path(csv_path)
@@ -445,10 +459,34 @@ class KnowledgeService:
             env_path = os.getenv("DH360_KNOWLEDGE_CSV_PATH")
             if env_path:
                 self._csv_path = Path(env_path)
-            elif PERSISTENT_KNOWLEDGE_CSV_PATH.exists():
-                self._csv_path = PERSISTENT_KNOWLEDGE_CSV_PATH
             else:
-                self._csv_path = DEFAULT_KNOWLEDGE_CSV_PATH
+                self._csv_path = RUNTIME_KNOWLEDGE_CSV_PATH
+                if not self._csv_path.exists():
+                    if LEGACY_PERSISTENT_KNOWLEDGE_CSV_PATH.exists():
+                        try:
+                            self._csv_path.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(LEGACY_PERSISTENT_KNOWLEDGE_CSV_PATH, self._csv_path)
+                            with contextlib.suppress(OSError):
+                                self._csv_path.chmod(0o600)
+                            logger.info(
+                                "Migrated legacy knowledge CSV from %s to %s",
+                                LEGACY_PERSISTENT_KNOWLEDGE_CSV_PATH,
+                                self._csv_path,
+                            )
+                        except Exception:
+                            logger.warning("Failed to migrate legacy knowledge CSV")
+                    elif DEFAULT_KNOWLEDGE_CSV_PATH.exists():
+                        try:
+                            self._csv_path.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(DEFAULT_KNOWLEDGE_CSV_PATH, self._csv_path)
+                            with contextlib.suppress(OSError):
+                                self._csv_path.chmod(0o600)
+                            logger.info(
+                                "Initialized persistent knowledge CSV at %s from template",
+                                self._csv_path,
+                            )
+                        except Exception:
+                            logger.warning("Failed to initialize persistent knowledge template")
 
         self._public_facts: list[PublicFact] = []
 
@@ -472,10 +510,9 @@ class KnowledgeService:
         self._institution_type = self._normalize_institution_type(
             resolved_type if isinstance(resolved_type, str) else "university"
         )
-        self._institution_name = (
-            resolved_name.strip() if isinstance(resolved_name, str) else ""
-        )
-        self._load_public_facts()
+        self._institution_name = resolved_name.strip() if isinstance(resolved_name, str) else ""
+        with self._io_lock:
+            self._load_public_facts_unlocked()
 
     @staticmethod
     def _normalize_institution_type(inst_type: str | None) -> str:
@@ -512,21 +549,23 @@ class KnowledgeService:
         if self._csv_path.exists():
             return
 
-        if for_write or self._csv_path == PERSISTENT_KNOWLEDGE_CSV_PATH:
-            if DEFAULT_KNOWLEDGE_CSV_PATH.exists():
-                try:
-                    self._csv_path.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(DEFAULT_KNOWLEDGE_CSV_PATH, self._csv_path)
-                    logger.info("Initialized persistent knowledge CSV at %s from template", self._csv_path)
-                except Exception:
-                    logger.warning("Failed to copy packaged knowledge template to %s", self._csv_path)
+        if (
+            for_write
+            or self._csv_path in (RUNTIME_KNOWLEDGE_CSV_PATH, LEGACY_PERSISTENT_KNOWLEDGE_CSV_PATH)
+        ) and DEFAULT_KNOWLEDGE_CSV_PATH.exists():
+            try:
+                self._csv_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(DEFAULT_KNOWLEDGE_CSV_PATH, self._csv_path)
+                with contextlib.suppress(OSError):
+                    self._csv_path.chmod(0o600)
+                logger.info(
+                    "Initialized persistent knowledge CSV at %s from template", self._csv_path
+                )
+            except Exception:
+                logger.warning("Failed to copy packaged knowledge template to %s", self._csv_path)
 
-    def _load_public_facts(self) -> None:
-        """Load public institutional facts from the CSV file.
-
-        Filters facts strictly based on the active institution configuration,
-        preventing cross-contamination between university and clinic domains.
-        """
+    def _load_public_facts_unlocked(self) -> None:
+        """Load public institutional facts from the CSV file (must hold _io_lock)."""
         self._public_facts.clear()
         self._ensure_storage_ready(for_write=False)
         if not self._csv_path.exists():
@@ -553,18 +592,20 @@ class KnowledgeService:
                         row_type = "university"
 
                     # Only include rows that have at least one valid question and answer
-                    if (q_en and a_en) or (q_bn and a_bn):
-                        # Filter strictly by active institution type and general facts
-                        if row_type in ("general", self._institution_type):
-                            self._public_facts.append(
-                                PublicFact(
-                                    question_en=q_en,
-                                    answer_en=a_en,
-                                    question_bn=q_bn,
-                                    answer_bn=a_bn,
-                                    institution_type=row_type,
-                                )
+                    # and match active institution type or general facts
+                    if ((q_en and a_en) or (q_bn and a_bn)) and row_type in (
+                        "general",
+                        self._institution_type,
+                    ):
+                        self._public_facts.append(
+                            PublicFact(
+                                question_en=q_en,
+                                answer_en=a_en,
+                                question_bn=q_bn,
+                                answer_bn=a_bn,
+                                institution_type=row_type,
                             )
+                        )
             logger.info(
                 "Loaded %d public facts for mode '%s' from %s",
                 len(self._public_facts),
@@ -574,10 +615,16 @@ class KnowledgeService:
         except Exception:
             logger.exception("Failed to load knowledge CSV from %s", self._csv_path)
 
+    def _load_public_facts(self) -> None:
+        """Thread-safe public facts loader."""
+        with self._io_lock:
+            self._load_public_facts_unlocked()
+
     def reload(self) -> int:
         """Reload public institutional facts from the CSV file and return the count."""
-        self._load_public_facts()
-        return len(self._public_facts)
+        with self._io_lock:
+            self._load_public_facts_unlocked()
+            return len(self._public_facts)
 
     @property
     def csv_path(self) -> Path:
@@ -596,33 +643,48 @@ class KnowledgeService:
         except ValueError:
             return None
 
-    def _read_all_raw_rows(self) -> list[dict[str, str]]:
-        """Read all rows from the active CSV file in original order."""
+    def _read_all_raw_rows_unlocked(self) -> tuple[list[dict[str, str]], bool]:
+        """Read all rows from the active CSV file in original order (must hold _io_lock)."""
         self._ensure_storage_ready(for_write=False)
         if not self._csv_path.exists():
-            return []
+            return [], False
 
         rows: list[dict[str, str]] = []
+        needs_migration = False
+
         with open(self._csv_path, encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 if not row:
                     continue
-                rows.append({
-                    "Question (English)": (row.get("Question (English)") or "").strip(),
-                    "Answer (English)": (row.get("Answer (English)") or "").strip(),
-                    "প্রশ্ন (বাংলা)": (row.get("প্রশ্ন (বাংলা)") or "").strip(),
-                    "উত্তর (বাংলা)": (row.get("উত্তর (বাংলা)") or "").strip(),
-                    "Institution Type": (row.get("Institution Type") or "general").strip().lower(),
-                })
-        return rows
+                row_id = (row.get("id") or row.get("ID") or row.get("Id") or "").strip()
+                if not row_id:
+                    row_id = str(uuid.uuid4())
+                    needs_migration = True
 
-    def _atomic_write_rows(self, rows: list[dict[str, str]]) -> None:
-        """Write rows atomically using a temp file and backup to prevent data loss."""
-        # If currently pointing to packaged resource, switch to persistent data/ path on first write
-        if self._csv_path == DEFAULT_KNOWLEDGE_CSV_PATH and not os.getenv("DH360_KNOWLEDGE_CSV_PATH"):
-            PERSISTENT_KNOWLEDGE_CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
-            self._csv_path = PERSISTENT_KNOWLEDGE_CSV_PATH
+                rows.append(
+                    {
+                        "id": row_id,
+                        "Question (English)": (row.get("Question (English)") or "").strip(),
+                        "Answer (English)": (row.get("Answer (English)") or "").strip(),
+                        "প্রশ্ন (বাংলা)": (row.get("প্রশ্ন (বাংলা)") or "").strip(),
+                        "উত্তর (বাংলা)": (row.get("উত্তর (বাংলা)") or "").strip(),
+                        "Institution Type": (row.get("Institution Type") or "general")
+                        .strip()
+                        .lower(),
+                    }
+                )
+
+        return rows, needs_migration
+
+    def _atomic_write_rows_unlocked(self, rows: list[dict[str, str]]) -> None:
+        """Write rows atomically using a temp file and backup (must hold _io_lock)."""
+        # Switch to persistent runtime path on first write if pointing to packaged resource
+        if self._csv_path == DEFAULT_KNOWLEDGE_CSV_PATH and not os.getenv(
+            "DH360_KNOWLEDGE_CSV_PATH"
+        ):
+            RUNTIME_KNOWLEDGE_CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
+            self._csv_path = RUNTIME_KNOWLEDGE_CSV_PATH
 
         target_path = self._csv_path
         target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -632,12 +694,15 @@ class KnowledgeService:
             backup_path = target_path.with_suffix(".csv.bak")
             try:
                 shutil.copy2(target_path, backup_path)
+                with contextlib.suppress(OSError):
+                    backup_path.chmod(0o600)
             except Exception:
                 logger.warning("Could not create backup of knowledge CSV at %s", backup_path)
 
         # 2. Write to temporary file
         temp_path = target_path.with_suffix(".csv.tmp")
         fieldnames = [
+            "id",
             "Question (English)",
             "Answer (English)",
             "প্রশ্ন (বাংলা)",
@@ -649,9 +714,34 @@ class KnowledgeService:
             writer.writeheader()
             for r in rows:
                 writer.writerow(r)
+            f.flush()
+            os.fsync(f.fileno())
 
-        # 3. Atomic replacement
+        # 3. Secure file permissions and atomic replacement
+        try:
+            temp_path.chmod(0o600)
+        except OSError:
+            pass
         os.replace(temp_path, target_path)
+        try:
+            target_path.chmod(0o600)
+        except OSError:
+            pass
+
+    def _find_row_index(self, rows: list[dict[str, str]], item_id: str) -> int | None:
+        """Find row index matching stable UUID id, with legacy index fallback."""
+        cleaned_id = (item_id or "").strip()
+        if not cleaned_id:
+            return None
+        # 1. Match stable UUID
+        for idx, r in enumerate(rows):
+            if r.get("id") == cleaned_id:
+                return idx
+        # 2. Backward compatibility fallback for legacy 'kb-X' or integer strings
+        idx = self._parse_item_index(cleaned_id)
+        if idx is not None and 0 <= idx < len(rows):
+            return idx
+        return None
 
     def get_all_facts(
         self,
@@ -659,67 +749,97 @@ class KnowledgeService:
         institution_type: str | None = None,
     ) -> list[dict[str, Any]]:
         """Return all raw knowledge facts with stable IDs and optional filtering."""
-        rows = self._read_all_raw_rows()
-        cleaned_query = (query or "").strip().lower()
-        target_type = (institution_type or "").strip().lower()
-        if target_type in ("all", "*", ""):
-            target_type = None
+        with self._io_lock:
+            rows, needs_migration = self._read_all_raw_rows_unlocked()
+            if (
+                needs_migration
+                and rows
+                and (
+                    self._csv_path != DEFAULT_KNOWLEDGE_CSV_PATH or os.getenv("DH360_MIGRATE_SEED")
+                )
+            ):
+                try:
+                    self._atomic_write_rows_unlocked(rows)
+                except Exception:
+                    logger.warning("Could not persist migrated UUIDs back to %s", self._csv_path)
 
-        facts: list[dict[str, Any]] = []
-        for idx, row in enumerate(rows):
-            q_en = row.get("Question (English)", "")
-            a_en = row.get("Answer (English)", "")
-            q_bn = row.get("প্রশ্ন (বাংলা)", "")
-            a_bn = row.get("উত্তর (বাংলা)", "")
-            itype = row.get("Institution Type", "general")
-            if itype not in ("university", "clinic", "general"):
-                if itype in ("hospital", "healthcare"):
-                    itype = "clinic"
-                elif itype in ("academic", "campus"):
-                    itype = "university"
-                else:
-                    itype = "general"
+            cleaned_query = (query or "").strip().lower()
+            target_type = (institution_type or "").strip().lower()
+            if target_type in ("all", "*", ""):
+                target_type = None
 
-            if target_type and itype != target_type:
-                continue
+            facts: list[dict[str, Any]] = []
+            for idx, row in enumerate(rows):
+                q_en = row.get("Question (English)", "")
+                a_en = row.get("Answer (English)", "")
+                q_bn = row.get("প্রশ্ন (বাংলা)", "")
+                a_bn = row.get("উত্তর (বাংলা)", "")
+                itype = row.get("Institution Type", "general")
+                if itype not in ("university", "clinic", "general"):
+                    if itype in ("hospital", "healthcare"):
+                        itype = "clinic"
+                    elif itype in ("academic", "campus"):
+                        itype = "university"
+                    else:
+                        itype = "general"
 
-            if cleaned_query:
-                searchable = f"{q_en} {a_en} {q_bn} {a_bn}".lower()
-                if cleaned_query not in searchable:
+                if target_type and itype != target_type:
                     continue
 
-            facts.append({
-                "id": f"kb-{idx + 1}",
-                "index": idx,
-                "question_en": q_en,
-                "answer_en": a_en,
-                "question_bn": q_bn,
-                "answer_bn": a_bn,
-                "institution_type": itype,
-            })
-        return facts
+                if cleaned_query:
+                    searchable = f"{q_en} {a_en} {q_bn} {a_bn}".lower()
+                    if cleaned_query not in searchable:
+                        continue
+
+                facts.append(
+                    {
+                        "id": row.get("id") or str(uuid.uuid4()),
+                        "index": idx,
+                        "question_en": q_en,
+                        "answer_en": a_en,
+                        "question_bn": q_bn,
+                        "answer_bn": a_bn,
+                        "institution_type": itype,
+                    }
+                )
+            return facts
 
     def get_fact_by_id(self, item_id: str) -> dict[str, Any] | None:
-        """Fetch a single knowledge entry by ID."""
-        idx = self._parse_item_index(item_id)
-        if idx is None:
-            return None
-        rows = self._read_all_raw_rows()
-        if idx < 0 or idx >= len(rows):
-            return None
-        r = rows[idx]
-        itype = r.get("Institution Type", "general")
-        if itype not in ("university", "clinic", "general"):
-            itype = "clinic" if itype in ("hospital", "healthcare") else ("university" if itype in ("academic", "campus") else "general")
-        return {
-            "id": f"kb-{idx + 1}",
-            "index": idx,
-            "question_en": r.get("Question (English)", ""),
-            "answer_en": r.get("Answer (English)", ""),
-            "question_bn": r.get("প্রশ্ন (বাংলা)", ""),
-            "answer_bn": r.get("উত্তর (বাংলা)", ""),
-            "institution_type": itype,
-        }
+        """Fetch a single knowledge entry by stable UUID ID or legacy index."""
+        with self._io_lock:
+            rows, needs_migration = self._read_all_raw_rows_unlocked()
+            if (
+                needs_migration
+                and rows
+                and (
+                    self._csv_path != DEFAULT_KNOWLEDGE_CSV_PATH or os.getenv("DH360_MIGRATE_SEED")
+                )
+            ):
+                try:
+                    self._atomic_write_rows_unlocked(rows)
+                except Exception:
+                    pass
+
+            target_idx = self._find_row_index(rows, item_id)
+            if target_idx is None:
+                return None
+            r = rows[target_idx]
+            itype = r.get("Institution Type", "general")
+            if itype not in ("university", "clinic", "general"):
+                itype = (
+                    "clinic"
+                    if itype in ("hospital", "healthcare")
+                    else ("university" if itype in ("academic", "campus") else "general")
+                )
+            return {
+                "id": r.get("id") or str(uuid.uuid4()),
+                "index": target_idx,
+                "question_en": r.get("Question (English)", ""),
+                "answer_en": r.get("Answer (English)", ""),
+                "question_bn": r.get("প্রশ্ন (বাংলা)", ""),
+                "answer_bn": r.get("উত্তর (বাংলা)", ""),
+                "institution_type": itype,
+            }
 
     def add_fact(
         self,
@@ -729,7 +849,7 @@ class KnowledgeService:
         answer_bn: str = "",
         institution_type: str = "general",
     ) -> dict[str, Any]:
-        """Add a new institutional fact, persist to CSV, and reload knowledge in memory."""
+        """Add a new institutional fact with persistent UUID, persist to CSV, and reload memory."""
         q_en = (question_en or "").strip()
         a_en = (answer_en or "").strip()
         q_bn = (question_bn or "").strip()
@@ -742,30 +862,37 @@ class KnowledgeService:
 
         itype = (institution_type or "general").strip().lower()
         if itype not in ("university", "clinic", "general"):
-            itype = "clinic" if itype in ("hospital", "healthcare") else ("university" if itype in ("academic", "campus") else "general")
+            itype = (
+                "clinic"
+                if itype in ("hospital", "healthcare")
+                else ("university" if itype in ("academic", "campus") else "general")
+            )
 
-        rows = self._read_all_raw_rows()
-        new_row = {
-            "Question (English)": q_en,
-            "Answer (English)": a_en,
-            "প্রশ্ন (বাংলা)": q_bn,
-            "উত্তর (বাংলা)": a_bn,
-            "Institution Type": itype,
-        }
-        rows.append(new_row)
-        self._atomic_write_rows(rows)
-        self.reload()
+        with self._io_lock:
+            rows, _ = self._read_all_raw_rows_unlocked()
+            new_id = str(uuid.uuid4())
+            new_row = {
+                "id": new_id,
+                "Question (English)": q_en,
+                "Answer (English)": a_en,
+                "প্রশ্ন (বাংলা)": q_bn,
+                "উত্তর (বাংলা)": a_bn,
+                "Institution Type": itype,
+            }
+            rows.append(new_row)
+            self._atomic_write_rows_unlocked(rows)
+            self._load_public_facts_unlocked()
 
-        new_idx = len(rows) - 1
-        return {
-            "id": f"kb-{new_idx + 1}",
-            "index": new_idx,
-            "question_en": q_en,
-            "answer_en": a_en,
-            "question_bn": q_bn,
-            "answer_bn": a_bn,
-            "institution_type": itype,
-        }
+            new_idx = len(rows) - 1
+            return {
+                "id": new_id,
+                "index": new_idx,
+                "question_en": q_en,
+                "answer_en": a_en,
+                "question_bn": q_bn,
+                "answer_bn": a_bn,
+                "institution_type": itype,
+            }
 
     def update_fact(
         self,
@@ -776,67 +903,73 @@ class KnowledgeService:
         answer_bn: str | None = None,
         institution_type: str | None = None,
     ) -> dict[str, Any]:
-        """Update an existing knowledge entry, persist to CSV, and reload knowledge in memory."""
-        idx = self._parse_item_index(item_id)
-        if idx is None:
-            raise KeyError(f"Invalid knowledge item id: {item_id}")
+        """Update an existing knowledge entry by stable UUID ID, persist to CSV, and reload memory."""
+        with self._io_lock:
+            rows, _ = self._read_all_raw_rows_unlocked()
+            idx = self._find_row_index(rows, item_id)
+            if idx is None:
+                raise KeyError(f"Knowledge item '{item_id}' not found.")
 
-        rows = self._read_all_raw_rows()
-        if idx < 0 or idx >= len(rows):
-            raise KeyError(f"Knowledge item '{item_id}' not found.")
-
-        current = rows[idx]
-        q_en = current.get("Question (English)", "") if question_en is None else question_en.strip()
-        a_en = current.get("Answer (English)", "") if answer_en is None else answer_en.strip()
-        q_bn = current.get("প্রশ্ন (বাংলা)", "") if question_bn is None else question_bn.strip()
-        a_bn = current.get("উত্তর (বাংলা)", "") if answer_bn is None else answer_bn.strip()
-
-        if not ((q_en and a_en) or (q_bn and a_bn)):
-            raise ValueError(
-                "Knowledge entry must have at least one complete Question and Answer pair in English or Bangla."
+            current = rows[idx]
+            q_en = (
+                current.get("Question (English)", "")
+                if question_en is None
+                else question_en.strip()
             )
+            a_en = current.get("Answer (English)", "") if answer_en is None else answer_en.strip()
+            q_bn = current.get("প্রশ্ন (বাংলা)", "") if question_bn is None else question_bn.strip()
+            a_bn = current.get("উত্তর (বাংলা)", "") if answer_bn is None else answer_bn.strip()
 
-        if institution_type is not None:
-            itype = institution_type.strip().lower()
-            if itype not in ("university", "clinic", "general"):
-                itype = "clinic" if itype in ("hospital", "healthcare") else ("university" if itype in ("academic", "campus") else "general")
-        else:
-            itype = current.get("Institution Type", "general")
+            if not ((q_en and a_en) or (q_bn and a_bn)):
+                raise ValueError(
+                    "Knowledge entry must have at least one complete Question and Answer pair in English or Bangla."
+                )
 
-        rows[idx] = {
-            "Question (English)": q_en,
-            "Answer (English)": a_en,
-            "প্রশ্ন (বাংলা)": q_bn,
-            "উত্তর (বাংলা)": a_bn,
-            "Institution Type": itype,
-        }
-        self._atomic_write_rows(rows)
-        self.reload()
+            if institution_type is not None:
+                itype = institution_type.strip().lower()
+                if itype not in ("university", "clinic", "general"):
+                    itype = (
+                        "clinic"
+                        if itype in ("hospital", "healthcare")
+                        else ("university" if itype in ("academic", "campus") else "general")
+                    )
+            else:
+                itype = current.get("Institution Type", "general")
 
-        return {
-            "id": f"kb-{idx + 1}",
-            "index": idx,
-            "question_en": q_en,
-            "answer_en": a_en,
-            "question_bn": q_bn,
-            "answer_bn": a_bn,
-            "institution_type": itype,
-        }
+            current_id = current.get("id") or str(uuid.uuid4())
+            rows[idx] = {
+                "id": current_id,
+                "Question (English)": q_en,
+                "Answer (English)": a_en,
+                "প্রশ্ন (বাংলা)": q_bn,
+                "উত্তর (বাংলা)": a_bn,
+                "Institution Type": itype,
+            }
+            self._atomic_write_rows_unlocked(rows)
+            self._load_public_facts_unlocked()
+
+            return {
+                "id": current_id,
+                "index": idx,
+                "question_en": q_en,
+                "answer_en": a_en,
+                "question_bn": q_bn,
+                "answer_bn": a_bn,
+                "institution_type": itype,
+            }
 
     def delete_fact(self, item_id: str) -> bool:
-        """Delete an existing knowledge entry from CSV and reload knowledge in memory."""
-        idx = self._parse_item_index(item_id)
-        if idx is None:
-            raise KeyError(f"Invalid knowledge item id: {item_id}")
+        """Delete an existing knowledge entry by stable UUID ID from CSV and reload memory."""
+        with self._io_lock:
+            rows, _ = self._read_all_raw_rows_unlocked()
+            idx = self._find_row_index(rows, item_id)
+            if idx is None:
+                raise KeyError(f"Knowledge item '{item_id}' not found.")
 
-        rows = self._read_all_raw_rows()
-        if idx < 0 or idx >= len(rows):
-            raise KeyError(f"Knowledge item '{item_id}' not found.")
-
-        rows.pop(idx)
-        self._atomic_write_rows(rows)
-        self.reload()
-        return True
+            rows.pop(idx)
+            self._atomic_write_rows_unlocked(rows)
+            self._load_public_facts_unlocked()
+            return True
 
     @property
     def public_facts_count(self) -> int:
@@ -1003,7 +1136,9 @@ class KnowledgeService:
         elif asked_role or is_identity_query:
             include_name = True
             label = "পদবি" if language == "bn" else "Role"
-            not_rec = "প্রোফাইলে কোনো পদবি উল্লেখ নেই" if language == "bn" else "Not recorded in profile"
+            not_rec = (
+                "প্রোফাইলে কোনো পদবি উল্লেখ নেই" if language == "bn" else "Not recorded in profile"
+            )
             facts.append(f"{label}: {not_rec}")
 
         # Check department
@@ -1017,47 +1152,47 @@ class KnowledgeService:
         elif asked_dept or is_identity_query:
             include_name = True
             label = "বিভাগ" if language == "bn" else "Department"
-            not_rec = "প্রোফাইলে কোনো বিভাগ উল্লেখ নেই" if language == "bn" else "Not recorded in profile"
+            not_rec = (
+                "প্রোফাইলে কোনো বিভাগ উল্লেখ নেই" if language == "bn" else "Not recorded in profile"
+            )
             facts.append(f"{label}: {not_rec}")
 
         # Check office_room
         asked_room = self._matches_field_keywords("office_room", query_text, raw_query_tokens)
         if context.office_room:
             room_tokens = _tokenize(context.office_room, filter_stop_words=True)
-            if (
-                asked_room
-                or bool(meaningful_query_tokens & room_tokens)
-                or is_identity_query
-            ):
+            if asked_room or bool(meaningful_query_tokens & room_tokens) or is_identity_query:
                 include_name = True
                 label = "অফিস রুম" if language == "bn" else "Office Room"
                 facts.append(f"{label}: {context.office_room}")
         elif asked_room or is_identity_query:
             include_name = True
             label = "অফিস রুম" if language == "bn" else "Office Room"
-            not_rec = "প্রোফাইলে কোনো অফিস রুম উল্লেখ নেই" if language == "bn" else "Not recorded in profile"
+            not_rec = (
+                "প্রোফাইলে কোনো অফিস রুম উল্লেখ নেই" if language == "bn" else "Not recorded in profile"
+            )
             facts.append(f"{label}: {not_rec}")
 
         # Check working_hours
         asked_hours = self._matches_field_keywords("working_hours", query_text, raw_query_tokens)
         if context.working_hours:
             hours_tokens = _tokenize(context.working_hours, filter_stop_words=True)
-            if (
-                asked_hours
-                or bool(meaningful_query_tokens & hours_tokens)
-                or is_identity_query
-            ):
+            if asked_hours or bool(meaningful_query_tokens & hours_tokens) or is_identity_query:
                 include_name = True
                 label = "কর্মঘণ্টা" if language == "bn" else "Working Hours"
                 facts.append(f"{label}: {context.working_hours}")
         elif asked_hours or is_identity_query:
             include_name = True
             label = "কর্মঘণ্টা" if language == "bn" else "Working Hours"
-            not_rec = "প্রোফাইলে কোনো সময়সূচি উল্লেখ নেই" if language == "bn" else "Not recorded in profile"
+            not_rec = (
+                "প্রোফাইলে কোনো সময়সূচি উল্লেখ নেই" if language == "bn" else "Not recorded in profile"
+            )
             facts.append(f"{label}: {not_rec}")
 
         # Check profile_description
-        asked_desc = self._matches_field_keywords("profile_description", query_text, raw_query_tokens)
+        asked_desc = self._matches_field_keywords(
+            "profile_description", query_text, raw_query_tokens
+        )
         if context.profile_description:
             desc_tokens = _tokenize(context.profile_description, filter_stop_words=True)
             if asked_desc or bool(meaningful_query_tokens & desc_tokens) or is_identity_query:
@@ -1067,7 +1202,9 @@ class KnowledgeService:
         elif asked_desc or is_identity_query:
             include_name = True
             label = "বিবরণ" if language == "bn" else "Description"
-            not_rec = "প্রোফাইলে কোনো বিবরণ উল্লেখ নেই" if language == "bn" else "Not recorded in profile"
+            not_rec = (
+                "প্রোফাইলে কোনো বিবরণ উল্লেখ নেই" if language == "bn" else "Not recorded in profile"
+            )
             facts.append(f"{label}: {not_rec}")
 
         # 4. Filter personal Q&A pairs with meaningful token overlap (stop words excluded)
@@ -1237,8 +1374,12 @@ class KnowledgeService:
                 lines.append(f"• নাম: {name}")
                 lines.append(f"• পদবি: {context.role or 'প্রোফাইলে কোনো পদবি উল্লেখ নেই'}")
                 lines.append(f"• বিভাগ: {context.department or 'প্রোফাইলে কোনো বিভাগ উল্লেখ নেই'}")
-                lines.append(f"• অফিস রুম: {context.office_room or 'প্রোফাইলে কোনো অফিস রুম উল্লেখ নেই'}")
-                lines.append(f"• কর্মঘণ্টা: {context.working_hours or 'প্রোফাইলে কোনো সময়সূচি উল্লেখ নেই'}")
+                lines.append(
+                    f"• অফিস রুম: {context.office_room or 'প্রোফাইলে কোনো অফিস রুম উল্লেখ নেই'}"
+                )
+                lines.append(
+                    f"• কর্মঘণ্টা: {context.working_hours or 'প্রোফাইলে কোনো সময়সূচি উল্লেখ নেই'}"
+                )
                 if context.profile_description:
                     lines.append(f"• বিবরণ: {context.profile_description}")
                 return "\n".join(lines)
@@ -1248,7 +1389,9 @@ class KnowledgeService:
                 lines.append(f"• Role: {context.role or 'Not recorded in profile'}")
                 lines.append(f"• Department: {context.department or 'Not recorded in profile'}")
                 lines.append(f"• Office/Room: {context.office_room or 'Not recorded in profile'}")
-                lines.append(f"• Working Hours: {context.working_hours or 'Not recorded in profile'}")
+                lines.append(
+                    f"• Working Hours: {context.working_hours or 'Not recorded in profile'}"
+                )
                 if context.profile_description:
                     lines.append(f"• Description: {context.profile_description}")
                 return "\n".join(lines)
@@ -1269,7 +1412,9 @@ class KnowledgeService:
             )
 
         # Department inquiry (e.g. "আমার বিভাগ কি?", "what is my department?", "আমি কোন ডিপার্টমেন্টে?")
-        if is_target_match and self._matches_field_keywords("department", query_text, raw_query_tokens):
+        if is_target_match and self._matches_field_keywords(
+            "department", query_text, raw_query_tokens
+        ):
             if context.department:
                 return (
                     f"আপনার বিভাগ হলো {context.department}।"
@@ -1283,7 +1428,9 @@ class KnowledgeService:
             )
 
         # Office/Room inquiry (e.g. "আমার রুম কত?", "where is my office?", "আমার অফিস কোথায়?", "আমার ফ্লোর কত?")
-        if is_target_match and self._matches_field_keywords("office_room", query_text, raw_query_tokens):
+        if is_target_match and self._matches_field_keywords(
+            "office_room", query_text, raw_query_tokens
+        ):
             if context.office_room:
                 return (
                     f"আপনার অফিস রুম হলো {context.office_room}।"
@@ -1297,7 +1444,9 @@ class KnowledgeService:
             )
 
         # Working Hours inquiry (e.g. "আমার কাজের সময় কি?", "what are my working hours?")
-        if is_target_match and self._matches_field_keywords("working_hours", query_text, raw_query_tokens):
+        if is_target_match and self._matches_field_keywords(
+            "working_hours", query_text, raw_query_tokens
+        ):
             if context.working_hours:
                 return (
                     f"আপনার কাজের সময়সূচি হলো {context.working_hours}।"
@@ -1315,7 +1464,9 @@ class KnowledgeService:
             return f"আপনার নাম {name}।" if language == "bn" else f"Your name is {name}."
 
         # Description inquiry
-        if is_target_match and self._matches_field_keywords("profile_description", query_text, raw_query_tokens):
+        if is_target_match and self._matches_field_keywords(
+            "profile_description", query_text, raw_query_tokens
+        ):
             if context.profile_description:
                 return (
                     f"আপনার প্রোফাইলের বিবরণ: {context.profile_description}"
@@ -1333,7 +1484,9 @@ class KnowledgeService:
         if meaningful_tokens and (is_self or is_named):
             for qa in context.qa_pairs:
                 qa_q_tokens = _tokenize(qa.question, filter_stop_words=True)
-                if qa_q_tokens and (meaningful_tokens == qa_q_tokens or qa_q_tokens.issubset(meaningful_tokens)):
+                if qa_q_tokens and (
+                    meaningful_tokens == qa_q_tokens or qa_q_tokens.issubset(meaningful_tokens)
+                ):
                     return qa.answer
 
         return None
@@ -1352,7 +1505,8 @@ class KnowledgeService:
         tokens = {t.strip(string.punctuation) for t in q_clean.split()}
 
         is_identity = (
-            q_clean in (
+            q_clean
+            in (
                 "who are you",
                 "who are you?",
                 "who r u",
@@ -1382,7 +1536,8 @@ class KnowledgeService:
         )
 
         is_purpose = (
-            q_clean in (
+            q_clean
+            in (
                 "what is your purpose",
                 "what is your purpose?",
                 "your purpose",

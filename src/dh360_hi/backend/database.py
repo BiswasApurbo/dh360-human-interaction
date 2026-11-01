@@ -68,7 +68,7 @@ class DatabaseManager:
                     self._conn = sqlite3.connect(
                         self._db_path,
                         check_same_thread=False,
-                        timeout=5.0,
+                        timeout=30.0,
                     )
                 finally:
                     if old_umask is not None:
@@ -77,7 +77,7 @@ class DatabaseManager:
                 self._conn.row_factory = sqlite3.Row
                 # Configure critical PRAGMAs
                 self._conn.execute("PRAGMA foreign_keys = ON;")
-                self._conn.execute("PRAGMA busy_timeout = 5000;")
+                self._conn.execute("PRAGMA busy_timeout = 30000;")
                 if not self._is_memory:
                     self._conn.execute("PRAGMA journal_mode = WAL;")
                 self._secure_file_permissions()
@@ -102,13 +102,14 @@ class DatabaseManager:
 
     @contextmanager
     def readonly_cursor(self) -> Generator[sqlite3.Cursor, None, None]:
-        """Context manager for read-only database queries."""
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        try:
-            yield cursor
-        finally:
-            cursor.close()
+        """Context manager for read-only database queries with consistent locking."""
+        with self._lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            try:
+                yield cursor
+            finally:
+                cursor.close()
 
     def get_schema_version(self) -> int:
         """Query currently applied schema version from database."""
