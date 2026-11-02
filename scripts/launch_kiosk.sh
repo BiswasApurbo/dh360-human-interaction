@@ -60,6 +60,21 @@ if [ -z "$CHROMIUM_BIN" ]; then
     exit 1
 fi
 
+apply_portrait_orientation() {
+    echo "[Kiosk] Enforcing portrait display rotation (left)..."
+    if command -v xrandr > /dev/null 2>&1; then
+        for out in $(xrandr 2>/dev/null | grep ' connected' | awk '{print $1}'); do
+            xrandr --output "$out" --rotate left 2>/dev/null || true
+        done
+    fi
+    if command -v xinput > /dev/null 2>&1; then
+        xinput set-prop 'QDtech MPI7003' 'Coordinate Transformation Matrix' 0 -1 1 1 0 0 0 0 1 2>/dev/null || true
+    fi
+}
+
+# Apply portrait orientation before launching Chromium
+apply_portrait_orientation
+
 echo "[Kiosk] Starting Chromium fullscreen display at ${KIOSK_URL}..."
 
 # Clean up any stale Chromium singleton lock or crashed profile flags
@@ -67,6 +82,9 @@ rm -f "${HOME}/.config/chromium/SingletonLock" || true
 
 # Continuous supervisor loop: automatically restart if browser is closed or crashes
 while true; do
+    # Re-verify portrait orientation prior to each browser invocation
+    apply_portrait_orientation
+
     "$CHROMIUM_BIN" \
         --kiosk \
         --noerrdialogs \
