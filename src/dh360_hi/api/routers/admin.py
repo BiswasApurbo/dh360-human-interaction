@@ -85,6 +85,25 @@ class CreateAdminRequest(BaseModel):
     name: str = Field(default="")
     role: str = Field(default="admin")
     permissions: dict[str, bool] = Field(default_factory=dict)
+    assignedRobots: list[str] = Field(default_factory=list)
+
+
+class UpdateAdminRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = None
+    active: bool | None = None
+    role: str | None = None
+    permissions: dict[str, bool] | None = None
+    assignedRobots: list[str] | None = None
+
+
+class CreateRobotRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    robotId: str = Field(..., min_length=3, max_length=32)
+    name: str = Field(..., min_length=2, max_length=80)
+    language: str = Field(default="bn")
+    mode: str = Field(default="education")
+    type: str = Field(default="Humanoid")
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +177,7 @@ async def list_admin_users(
                     "active": data.get("active", True),
                     "mustChangePassword": data.get("mustChangePassword", False),
                     "permissions": data.get("permissions", {}),
+                    "assignedRobots": data.get("assignedRobots", []),
                     "createdAt": data.get("createdAt"),
                     "updatedAt": data.get("updatedAt"),
                 }
@@ -204,10 +224,23 @@ async def create_admin_user(
             "active": True,
             "mustChangePassword": True,
             "permissions": payload.permissions,
+            "assignedRobots": payload.assignedRobots,
             "createdAt": now_str,
             "updatedAt": now_str,
         }
         db.collection("users").document(user.uid).set(user_record)
+
+        for robot_id in payload.assignedRobots:
+            try:
+                db.collection("robots").document(robot_id).set(
+                    {
+                        "assignedAdminId": user.uid,
+                        "assignedAdminName": payload.name or payload.email,
+                    },
+                    merge=True,
+                )
+            except Exception:
+                pass
 
         logger.info("Created admin user %s (%s)", payload.email, user.uid)
         return {"success": True, "user": user_record}
@@ -217,6 +250,122 @@ async def create_admin_user(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create admin user: {exc}",
         ) from exc
+
+
+@router.patch("/admin/users/{uid}")
+async def update_admin_user(
+    uid: str,
+    payload: UpdateAdminRequest,
+    _auth: OperatorPrincipal = _operator_manage,
+) -> dict[str, Any]:
+    """Update administrative user profile, active state, permissions, and assigned robots."""
+    auth_module = get_firebase_auth()
+    db = get_firebase_firestore()
+
+    try:
+        user = auth_module.get_user(uid)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User {uid} not found: {exc}",
+        ) from exc
+
+    try:
+        claims = dict(user.custom_claims or {})
+        updates: dict[str, Any] = {"updatedAt": datetime.now(UTC).isoformat()}
+
+        if payload.active is not None:
+            auth_module.update_user(uid, disabled=not payload.active)
+            if not payload.active:
+                auth_module.revoke_refresh_tokens(uid)
+            updates["active"] = payload.active
+
+        if payload.permissions is not None:
+            claims["permissions"] = payload.permissions
+            updates["permissions"] = payload.permissions
+
+        if payload.name is not None:
+            auth_module.update_user(uid, display_name=payload.name or None)
+            updates["name"] = payload.name
+
+        auth_module.set_custom_user_claims(uid, claims)
+
+        if payload.assignedRobots is not None:
+            updates["assignedRobots"] = payload.assignedRobots
+            user_doc = db.collection("users").document(uid).get()
+            old_robots = (
+                (user_doc.to_dict() or {}).get("assignedRobots", []) if user_doc.exists else []
+            )
+
+            # Unassign removed robots
+            removed = set(old_robots) - set(payload.assignedRobots)
+            for r_id in removed:
+                try:
+                    db.collection("robots").document(r_id).update(
+                        {
+                            "assignedAdminId": None,
+                            "assignedAdminName": None,
+                        }
+                    )
+                except Exception:
+                    pass
+
+            # Assign new robots
+            for r_id in payload.assignedRobots:
+                try:
+                    db.collection("robots").document(r_id).set(
+                        {
+                            "assignedAdminId": uid,
+                            "assignedAdminName": payload.name or user.display_name or user.email,
+                        },
+                        merge=True,
+                    )
+                except Exception:
+                    pass
+
+        db.collection("users").document(uid).set(updates, merge=True)
+        return {"success": True, "updates": updates}
+    except Exception as exc:
+        logger.exception("Failed to update user uid=%s", uid)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update user: {exc}",
+        ) from exc
+
+
+@router.post("/admin/robots")
+async def create_robot(
+    payload: CreateRobotRequest,
+    _auth: OperatorPrincipal = _operator_manage,
+) -> dict[str, Any]:
+    """Create a new robot entity in Firestore."""
+    import secrets
+
+    db = get_firebase_firestore()
+    now_str = datetime.now(UTC).isoformat()
+    robot_ref = db.collection("robots").document(payload.robotId)
+
+    if robot_ref.get().exists:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Robot '{payload.robotId}' already exists.",
+        )
+
+    secret = secrets.token_hex(24)
+    robot_data = {
+        "id": payload.robotId,
+        "name": payload.name,
+        "type": payload.type,
+        "language": payload.language,
+        "mode": payload.mode,
+        "status": "online",
+        "assignedAdminId": None,
+        "assignedAdminName": None,
+        "createdAt": now_str,
+        "updatedAt": now_str,
+    }
+    robot_ref.set(robot_data)
+    return {"success": True, "robotId": payload.robotId, "secret": secret}
 
 
 @router.delete("/admin/users/{uid}")

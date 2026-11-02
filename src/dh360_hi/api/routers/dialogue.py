@@ -115,17 +115,20 @@ async def handle_dialogue_turn(
     without blocking the FastAPI event loop.
     """
     coordinator = get_dialogue_coordinator(request)
+    tenant_id = request.headers.get("X-Tenant-ID")
 
     try:
         turn = await coordinator.handle_turn_async(
             user_text=payload.text,
             language=payload.language,
             speak_response=payload.speak_response,
+            tenant_id=tenant_id,
         )
     except TypeError:
         turn = await coordinator.handle_turn_async(
             user_text=payload.text,
             language=payload.language,
+            tenant_id=tenant_id,
         )
 
     return DialogueTurnResponse(
@@ -154,17 +157,20 @@ async def handle_dialogue_voice_turn(
     and speaks the answer via TTSProvider (Google Cloud TTS).
     """
     coordinator = get_dialogue_coordinator(request)
+    tenant_id = request.headers.get("X-Tenant-ID")
 
     try:
         turn = await coordinator.handle_turn_async(
             user_text=None,
             language=payload.language,
             speak_response=payload.speak_response,
+            tenant_id=tenant_id,
         )
     except TypeError:
         turn = await coordinator.handle_turn_async(
             user_text=None,
             language=payload.language,
+            tenant_id=tenant_id,
         )
 
     user_text = str(turn.metadata.get("user_text", "")).strip()

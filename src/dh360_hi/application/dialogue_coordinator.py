@@ -335,6 +335,7 @@ class DialogueCoordinator:
         speak_response: bool = True,
         blocking_tts: bool = False,
         now: float | None = None,
+        tenant_id: str | None = None,
     ) -> DialogueTurn:
         """Execute a full dialogue exchange turn synchronously.
 
@@ -522,6 +523,7 @@ class DialogueCoordinator:
                 language=target_lang,
                 auth_session=active_auth,
                 requested_person_id=requested_person_id,
+                tenant_id=tenant_id,
             )
 
             # Direct deterministic resolution (identity/purpose and direct profile queries)
@@ -780,6 +782,7 @@ class DialogueCoordinator:
         speak_response: bool = True,
         blocking_tts: bool = False,
         now: float | None = None,
+        tenant_id: str | None = None,
     ) -> DialogueTurn:
         """Asynchronously execute a dialogue turn, offloading synchronous providers to a thread.
 
@@ -793,4 +796,5 @@ class DialogueCoordinator:
             speak_response=speak_response,
             blocking_tts=blocking_tts,
             now=now,
+            tenant_id=tenant_id,
         )

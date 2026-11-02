@@ -397,6 +397,7 @@ class PublicFact:
     question_bn: str
     answer_bn: str
     institution_type: str = "general"
+    tenant_id: str | None = None
 
     def get_question(self, language: SupportedLanguage) -> str:
         """Return question in requested language with fallback."""
@@ -591,6 +592,8 @@ class KnowledgeService:
                     elif row_type in ("university", "campus", "academic"):
                         row_type = "university"
 
+                    row_tenant = (row.get("tenant_id") or "").strip() or None
+
                     # Only include rows that have at least one valid question and answer
                     # and match active institution type or general facts
                     if ((q_en and a_en) or (q_bn and a_bn)) and row_type in (
@@ -604,6 +607,7 @@ class KnowledgeService:
                                 question_bn=q_bn,
                                 answer_bn=a_bn,
                                 institution_type=row_type,
+                                tenant_id=row_tenant,
                             )
                         )
             logger.info(
@@ -1010,6 +1014,7 @@ class KnowledgeService:
         query: str,
         language: SupportedLanguage = "bn",
         max_results: int = 3,
+        tenant_id: str | None = None,
     ) -> list[str]:
         """Search and format relevant public institutional facts for the given query.
 
@@ -1017,6 +1022,7 @@ class KnowledgeService:
             query: User utterance or inquiry text.
             language: Target language ('bn' or 'en').
             max_results: Maximum number of matched facts to return.
+            tenant_id: Optional tenant UUID for multi-tenant scoping.
 
         Returns:
             List of formatted fact strings. Empty if no query or no matches found.
@@ -1027,6 +1033,8 @@ class KnowledgeService:
 
         scored_matches: list[tuple[int, PublicFact]] = []
         for fact in self._public_facts:
+            if tenant_id and fact.tenant_id and fact.tenant_id != tenant_id:
+                continue
             # Tokenize meaningful text fields of the fact
             fact_tokens = (
                 _tokenize(fact.question_en, filter_stop_words=True)
@@ -1269,6 +1277,7 @@ class KnowledgeService:
         language: SupportedLanguage = "bn",
         auth_session: AuthorizationSession | None = None,
         requested_person_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> str:
         """Construct unified filtered context string for language model prompt assembly.
 
@@ -1278,8 +1287,8 @@ class KnowledgeService:
         """
         context_blocks: list[str] = []
 
-        # 1. Public institutional facts (accessible to all)
-        public_facts = self.get_public_facts(query, language=language)
+        # 1. Public institutional facts (accessible to all, filtered by tenant)
+        public_facts = self.get_public_facts(query, language=language, tenant_id=tenant_id)
         if public_facts:
             header = "প্রাতিষ্ঠানিক তথ্য:" if language == "bn" else "Institutional Facts:"
             context_blocks.append(f"{header}\n" + "\n---\n".join(public_facts))

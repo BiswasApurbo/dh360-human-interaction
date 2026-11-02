@@ -505,6 +505,8 @@ class PersonService(BasePersonService):
             working_hours=new_hours,
             profile_description=new_profile_desc,
             ai_qa_pairs_json=new_qa_json,
+            tenant_id=existing.tenant_id,
+            robot_id=existing.robot_id,
             created_at=existing.created_at,
             updated_at=now_str,
         )

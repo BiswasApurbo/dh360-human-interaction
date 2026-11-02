@@ -10,7 +10,7 @@ import { httpsCallable } from "firebase/functions";
 import { Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { functions } from "@/lib/firebase";
+import { auth, functions } from "@/lib/firebase";
 
 export function CreateRobotForm({
   onDone,
@@ -45,6 +45,29 @@ export function CreateRobotForm({
   async function onSubmit(values: Values) {
     setError(null);
     try {
+      const token = await auth.currentUser?.getIdToken();
+      if (token) {
+        const res = await fetch("/api/admin/robots", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(values),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          onDone(data.secret, data.robotId);
+          return;
+        }
+
+        if (res.status === 409) {
+          setError(t("idExists"));
+          return;
+        }
+      }
+
       const fn = httpsCallable<Values & { type: string }, { robotId: string; secret: string }>(
         functions,
         "createRobot",
