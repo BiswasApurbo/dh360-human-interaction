@@ -6,8 +6,13 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from setuptools.config.pyprojecttoml import apply_configuration
-from setuptools.dist import Distribution
+
+try:
+    from setuptools.config.pyprojecttoml import apply_configuration
+    from setuptools.dist import Distribution
+except ImportError:
+    apply_configuration = None  # type: ignore[assignment]
+    Distribution = None  # type: ignore[assignment]
 
 from dh360_hi.api.app import create_app
 from dh360_hi.api.routers import demo as demo_router
@@ -28,6 +33,8 @@ def test_demo_static_asset_is_packaged_and_servable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Verify setuptools package-data includes demo.html and GET /demo serves the packaged copy."""
+    if apply_configuration is None or Distribution is None:
+        pytest.skip("setuptools is not installed")
     repo_root = Path(__file__).resolve().parents[2]
     site_packages = tmp_path / "site-packages"
 
