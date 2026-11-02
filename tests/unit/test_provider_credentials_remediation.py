@@ -10,8 +10,8 @@ Ensures that:
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
+
 import pytest
 
 from dh360_hi.contracts.errors import LLMProviderError, STTProviderError, TTSProviderError
@@ -22,8 +22,9 @@ from dh360_hi.integrations.eliva.adapters import (
     ElivaSonioxAdapter,
 )
 
-
-ELIVA_DIR = Path(__file__).resolve().parent.parent.parent / "src" / "dh360_hi" / "integrations" / "eliva"
+ELIVA_DIR = (
+    Path(__file__).resolve().parent.parent.parent / "src" / "dh360_hi" / "integrations" / "eliva"
+)
 
 
 def test_gemini_source_contains_no_hardcoded_secrets() -> None:
@@ -33,7 +34,7 @@ def test_gemini_source_contains_no_hardcoded_secrets() -> None:
     content = source_file.read_text(encoding="utf-8")
 
     assert "AIzaSy" not in content, "Found hardcoded Google/Gemini API key prefix in gemini.py"
-    assert "GEMINI_API_KEY = os.getenv(\"GEMINI_API_KEY\"" in content
+    assert 'GEMINI_API_KEY = os.getenv("GEMINI_API_KEY"' in content
 
 
 def test_gemini_missing_credentials_raises_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -50,7 +51,9 @@ def test_gemini_missing_credentials_raises_value_error(monkeypatch: pytest.Monke
     assert "AIza" not in str(exc_info.value)
 
 
-def test_gemini_adapter_missing_credentials_raises_typed_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_gemini_adapter_missing_credentials_raises_typed_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Verify ElivaGeminiAdapter raises LLMProviderError when no key is configured."""
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     adapter = ElivaGeminiAdapter(api_key=None)
@@ -58,7 +61,10 @@ def test_gemini_adapter_missing_credentials_raises_typed_error(monkeypatch: pyte
     with pytest.raises(LLMProviderError) as exc_info:
         adapter.generate_response(prompt="Hello Eliva", filtered_context="", language="en")
 
-    assert "GEMINI_API_KEY" in exc_info.value.message or exc_info.value.details.get("reason") == "MISSING_API_KEY"
+    assert (
+        "GEMINI_API_KEY" in exc_info.value.message
+        or exc_info.value.details.get("reason") == "MISSING_API_KEY"
+    )
 
 
 def test_soniox_source_contains_no_hardcoded_secrets() -> None:
@@ -67,8 +73,10 @@ def test_soniox_source_contains_no_hardcoded_secrets() -> None:
     assert source_file.exists(), f"Missing file: {source_file}"
     content = source_file.read_text(encoding="utf-8")
 
-    assert "e4569dcb012aa3c5f471d62fdd3c93b7" not in content, "Found hardcoded Soniox key in soniox.py"
-    assert "SONIOX_API_KEY      = os.getenv(\"SONIOX_API_KEY\"" in content
+    assert "e4569dcb012aa3c5f471d62fdd3c93b7" not in content, (
+        "Found hardcoded Soniox key in soniox.py"
+    )
+    assert 'SONIOX_API_KEY      = os.getenv("SONIOX_API_KEY"' in content
 
 
 def test_soniox_missing_credentials_raises_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -82,7 +90,9 @@ def test_soniox_missing_credentials_raises_value_error(monkeypatch: pytest.Monke
     assert "SONIOX_API_KEY environment variable is required" in str(exc_info.value)
 
 
-def test_soniox_adapter_missing_credentials_raises_typed_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_soniox_adapter_missing_credentials_raises_typed_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Verify ElivaSonioxAdapter raises STTProviderError when no key is configured."""
     monkeypatch.delenv("SONIOX_API_KEY", raising=False)
     adapter = ElivaSonioxAdapter(api_key=None)
@@ -90,7 +100,10 @@ def test_soniox_adapter_missing_credentials_raises_typed_error(monkeypatch: pyte
     with pytest.raises(STTProviderError) as exc_info:
         adapter.listen_utterance(language_hint="bn")
 
-    assert "SONIOX_API_KEY" in exc_info.value.message or exc_info.value.details.get("reason") == "MISSING_API_KEY"
+    assert (
+        "SONIOX_API_KEY" in exc_info.value.message
+        or exc_info.value.details.get("reason") == "MISSING_API_KEY"
+    )
 
 
 def test_gtts_source_contains_no_hardcoded_secrets() -> None:
@@ -101,7 +114,7 @@ def test_gtts_source_contains_no_hardcoded_secrets() -> None:
 
     assert "BEGIN PRIVATE KEY" not in content, "Found hardcoded private key in gtts.py"
     assert "gen-lang-client" not in content, "Found hardcoded project ID in gtts.py"
-    assert "SERVICE_ACCOUNT_JSON = os.getenv(\"GOOGLE_SERVICE_ACCOUNT_JSON\"" in content
+    assert 'SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON"' in content
 
 
 def test_gtts_missing_credentials_raises_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -119,7 +132,9 @@ def test_gtts_missing_credentials_raises_value_error(monkeypatch: pytest.MonkeyP
     assert "Google Cloud Text-to-Speech credentials not configured" in str(exc_info.value)
 
 
-def test_gtts_adapter_missing_credentials_raises_typed_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_gtts_adapter_missing_credentials_raises_typed_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Verify ElivaGoogleTTSAdapter raises TTSProviderError when no credentials configured."""
     monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
     monkeypatch.delenv("GOOGLE_SERVICE_ACCOUNT_JSON", raising=False)

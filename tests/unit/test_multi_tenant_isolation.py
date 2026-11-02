@@ -8,10 +8,8 @@ from fastapi.testclient import TestClient
 from dh360_hi.api.app import create_app
 from dh360_hi.backend.database import DatabaseManager
 from dh360_hi.backend.knowledge_service import KnowledgeService
-from dh360_hi.backend.models import PersonStatus
 from dh360_hi.backend.person_service import PersonService
 from dh360_hi.backend.repository import SQLitePersonRepository
-from dh360_hi.contracts.dto import CreatePersonCommand
 
 
 def _configure_operator(monkeypatch: pytest.MonkeyPatch, scopes: str) -> str:
@@ -42,19 +40,19 @@ def test_person_service_tenant_isolation(memory_db_manager: DatabaseManager) -> 
     service = PersonService(repo)
 
     # Create person for Tenant A
-    p_a = service.create_person(
+    service.create_person(
         display_name="User Admin A",
         tenant_id="tenant-a",
         robot_id="robot-1",
     )
     # Create person for Tenant B
-    p_b = service.create_person(
+    service.create_person(
         display_name="User Admin B",
         tenant_id="tenant-b",
         robot_id="robot-2",
     )
     # Create legacy person (unassigned tenant_id=None)
-    p_legacy = service.create_person(
+    service.create_person(
         display_name="Legacy User",
     )
 

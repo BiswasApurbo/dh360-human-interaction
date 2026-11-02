@@ -91,7 +91,7 @@ def build_kbcon_system_instruction(
             'In English reply: "I\'m KBCON, a humanoid robot assistant designed to help patients, visitors, and healthcare staff at this healthcare facility."'
         )
         purpose_rule = (
-            'STRICT PURPOSE RULE: If asked about your purpose or what you do, '
+            "STRICT PURPOSE RULE: If asked about your purpose or what you do, "
             'in Bangla reply: "আমার উদ্দেশ্য হলো স্বাস্থ্যসেবা কেন্দ্রে রোগী ও দর্শনার্থীদের সঠিক তথ্য প্রদান, বহির্বিভাগ ও জরুরি বিভাগের দিকনির্দেশনা দেওয়া এবং কর্মীদের সহায়তা করা।" '
             'In English reply: "My purpose is to guide patients and visitors, provide information about outpatient, emergency, and diagnostic services, and assist healthcare staff."'
         )
@@ -115,7 +115,7 @@ def build_kbcon_system_instruction(
             'In English reply: "I\'m KBCON, a humanoid robot assistant designed to support students, faculty, and visitors at this university."'
         )
         purpose_rule = (
-            'STRICT PURPOSE RULE: If asked about your purpose or what you do, '
+            "STRICT PURPOSE RULE: If asked about your purpose or what you do, "
             'in Bangla reply: "আমার উদ্দেশ্য হলো বিশ্ববিদ্যালয়ের বিভিন্ন বিভাগ, ভর্তি তথ্য, ল্যাব ও লাইব্রেরি সম্পর্কে দিকনির্দেশনা দেওয়া এবং শিক্ষার্থী ও শিক্ষকদের প্রয়োজনীয় তথ্য দিয়ে সহায়তা করা।" '
             'In English reply: "My purpose is to assist with university information, guide visitors across departments and facilities, and support students and faculty."'
         )
@@ -220,8 +220,8 @@ class ElivaGeminiAdapter(LLMProvider):
         self._client = None
 
     def _get_api_key(self) -> str:
-        key = self._api_key or os.getenv("GEMINI_API_KEY", "")
-        return key.strip()
+        key = (self._api_key or os.getenv("GEMINI_API_KEY") or "").strip()
+        return key
 
     def generate_response(
         self,
@@ -460,8 +460,8 @@ class ElivaSonioxAdapter(STTProvider):
         self._stt_module: Any | None = None
 
     def _get_api_key(self) -> str:
-        key = self._api_key or os.getenv("SONIOX_API_KEY", "")
-        return key.strip()
+        key = (self._api_key or os.getenv("SONIOX_API_KEY") or "").strip()
+        return key
 
     def hold(self) -> None:
         """Mute or hold speech input processing."""

@@ -114,7 +114,10 @@ class AuthorizationController:
                     try:
                         self._session = self._session.complete(expire_status)
                         session_to_notify = self._session
-                        _logger.debug("AuthorizationController session completed prior to start (%s)", expire_status)
+                        _logger.debug(
+                            "AuthorizationController session completed prior to start (%s)",
+                            expire_status,
+                        )
                     except Exception as exc:
                         _logger.exception("Failed to complete session on start: %s", exc)
 
@@ -204,9 +207,8 @@ class AuthorizationController:
             if self._session is not None and self._session.is_active:
                 if self._session.is_authorized:
                     # 1. Staleness check: camera stopped or disconnected
-                    if (
-                        self._last_frame_timestamp > 0
-                        and (now - self._last_frame_timestamp > self._max_frame_staleness)
+                    if self._last_frame_timestamp > 0 and (
+                        now - self._last_frame_timestamp > self._max_frame_staleness
                     ):
                         _logger.warning(
                             "AuthorizationController: frame staleness exceeded (%.2fs); revoking authorization as LOST",
@@ -215,9 +217,8 @@ class AuthorizationController:
                         self._session = self._session.complete(AuthorizationStatus.LOST)
                         session_to_notify = self._session
                     # 2. Absence check: authorized face is no longer in camera view
-                    elif (
-                        self._last_presence_timestamp > 0
-                        and (now - self._last_presence_timestamp > self._max_absence_seconds)
+                    elif self._last_presence_timestamp > 0 and (
+                        now - self._last_presence_timestamp > self._max_absence_seconds
                     ):
                         _logger.warning(
                             "AuthorizationController: presence absence exceeded (%.2fs); revoking authorization as LOST",
@@ -226,10 +227,7 @@ class AuthorizationController:
                         self._session = self._session.complete(AuthorizationStatus.LOST)
                         session_to_notify = self._session
                 else:
-                    if (
-                        self._deadline is not None
-                        and now >= self._deadline
-                    ):
+                    if self._deadline is not None and now >= self._deadline:
                         try:
                             self._session = self._session.complete(AuthorizationStatus.TIMEOUT)
                             session_to_notify = self._session
@@ -362,10 +360,7 @@ class AuthorizationController:
                         elif (
                             new_status is AuthorizationStatus.ACTIVE
                             and prior_status is not AuthorizationStatus.ACTIVE
-                        ):
-                            self._session = self._session.transition(AuthorizationStatus.ACTIVE)
-                            session_to_notify = self._session
-                        elif (
+                        ) or (
                             new_status is AuthorizationStatus.ACTIVE
                             and prior_status is not AuthorizationStatus.ACTIVE
                         ):

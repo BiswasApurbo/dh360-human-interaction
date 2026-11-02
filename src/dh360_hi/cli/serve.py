@@ -13,7 +13,12 @@ from dh360_hi.application.factory import create_interaction_service
 from dh360_hi.application.loader import load_config, resolve_cli_db_path
 from dh360_hi.backend.knowledge_service import KnowledgeService
 from dh360_hi.cli.run import _build_frame_source
-from dh360_hi.contracts.dialogue import MockLLMProvider
+from dh360_hi.contracts.dialogue import (
+    LLMProvider,
+    MockLLMProvider,
+    STTProvider,
+    TTSProvider,
+)
 from dh360_hi.contracts.errors import ValidationAppError
 from dh360_hi.edge.authorization_controller import AuthorizationController
 from dh360_hi.integrations.eliva import (
@@ -173,10 +178,12 @@ def handle_serve(args: argparse.Namespace) -> int:
         knowledge_svc = KnowledgeService(person_service=service.person_service)
         has_gemini_key = bool(os.getenv("GEMINI_API_KEY", "").strip())
 
+        llm_provider: LLMProvider
+        stt_provider: STTProvider | None = None
+        tts_provider: TTSProvider | None = None
+
         if raw_mode == "mock" or (raw_mode == "auto" and not has_gemini_key):
             llm_provider = MockLLMProvider()
-            stt_provider = None
-            tts_provider = None
             effective_mode = "mock"
         else:
             # Live Eliva adapters (lazy SDK imports; no hardware accessed on init)
@@ -198,9 +205,7 @@ def handle_serve(args: argparse.Namespace) -> int:
                     institution_name=knowledge_svc.institution_name,
                 ),
             )
-            stt_provider = ElivaSonioxAdapter(
-                api_key=soniox_key or os.getenv("SONIOX_API_KEY")
-            )
+            stt_provider = ElivaSonioxAdapter(api_key=soniox_key or os.getenv("SONIOX_API_KEY"))
             tts_provider = ElivaGoogleTTSAdapter(
                 credentials_json=gtts_json or os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON"),
                 credentials_file=os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),

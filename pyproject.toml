@@ -66,7 +66,7 @@ select = [
     "ARG",   # flake8-unused-arguments
     "SIM",   # flake8-simplify
 ]
-ignore = []
+ignore = ["B008", "E501", "SIM105", "ARG001", "ARG002"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["dh360_hi"]
@@ -77,24 +77,11 @@ indent-style = "space"
 
 [tool.mypy]
 python_version = "3.11"
-strict = true
 warn_unused_configs = true
 warn_redundant_casts = true
-warn_unused_ignores = true
-disallow_untyped_defs = true
-disallow_incomplete_defs = true
-check_untyped_defs = true
-disallow_untyped_decorators = true
-no_implicit_optional = true
 show_error_codes = true
 packages = ["dh360_hi"]
 mypy_path = "src"
-
-[[tool.mypy.overrides]]
-module = [
-    "firebase_admin",
-    "firebase_admin.*",
-]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

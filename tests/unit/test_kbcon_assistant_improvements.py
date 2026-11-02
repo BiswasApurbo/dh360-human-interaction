@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import unittest.mock as mock
-from typing import Any
 
 import pytest
 
@@ -17,7 +16,6 @@ from dh360_hi.contracts.authorization import (
 from dh360_hi.contracts.dialogue import DialogueTurn, LLMProvider, SupportedLanguage
 from dh360_hi.edge.event_bus import EventBus
 from dh360_hi.integrations.eliva.adapters import (
-    ElivaGeminiAdapter,
     build_kbcon_system_instruction,
 )
 
@@ -79,52 +77,144 @@ def test_structured_profile_variations_and_inflections(apurbo_context: PersonCon
     ks = KnowledgeService()
 
     # Department variations
-    assert ks.resolve_structured_profile_inquiry("আমার ডিপার্টমেন্ট কোনটা?", apurbo_context, "bn") == "আপনার বিভাগ হলো Surgery।"
-    assert ks.resolve_structured_profile_inquiry("আমি কোন ডিপার্টমেন্টে?", apurbo_context, "bn") == "আপনার বিভাগ হলো Surgery।"
-    assert ks.resolve_structured_profile_inquiry("আমি কোন বিভাগে?", apurbo_context, "bn") == "আপনার বিভাগ হলো Surgery।"
-    assert ks.resolve_structured_profile_inquiry("আমার বিভাগ কি?", apurbo_context, "bn") == "আপনার বিভাগ হলো Surgery।"
-    assert ks.resolve_structured_profile_inquiry("what is my department?", apurbo_context, "en") == "Your department is Surgery."
-    assert ks.resolve_structured_profile_inquiry("which department do i belong to?", apurbo_context, "en") == "Your department is Surgery."
+    assert (
+        ks.resolve_structured_profile_inquiry("আমার ডিপার্টমেন্ট কোনটা?", apurbo_context, "bn")
+        == "আপনার বিভাগ হলো Surgery।"
+    )
+    assert (
+        ks.resolve_structured_profile_inquiry("আমি কোন ডিপার্টমেন্টে?", apurbo_context, "bn")
+        == "আপনার বিভাগ হলো Surgery।"
+    )
+    assert (
+        ks.resolve_structured_profile_inquiry("আমি কোন বিভাগে?", apurbo_context, "bn")
+        == "আপনার বিভাগ হলো Surgery।"
+    )
+    assert (
+        ks.resolve_structured_profile_inquiry("আমার বিভাগ কি?", apurbo_context, "bn")
+        == "আপনার বিভাগ হলো Surgery।"
+    )
+    assert (
+        ks.resolve_structured_profile_inquiry("what is my department?", apurbo_context, "en")
+        == "Your department is Surgery."
+    )
+    assert (
+        ks.resolve_structured_profile_inquiry(
+            "which department do i belong to?", apurbo_context, "en"
+        )
+        == "Your department is Surgery."
+    )
 
     # Office Room and Floor variations
-    assert ks.resolve_structured_profile_inquiry("আমার অফিস কোথায়?", apurbo_context, "bn") == "আপনার অফিস রুম হলো Room 201, Floor 2।"
-    assert ks.resolve_structured_profile_inquiry("আমার রুম কত?", apurbo_context, "bn") == "আপনার অফিস রুম হলো Room 201, Floor 2।"
-    assert ks.resolve_structured_profile_inquiry("আমার রুম নম্বর কত?", apurbo_context, "bn") == "আপনার অফিস রুম হলো Room 201, Floor 2।"
-    assert ks.resolve_structured_profile_inquiry("আমার অফিস কোন ফ্লোরে?", apurbo_context, "bn") == "আপনার অফিস রুম হলো Room 201, Floor 2।"
-    assert ks.resolve_structured_profile_inquiry("what floor is my office on?", apurbo_context, "en") == "Your office room is Room 201, Floor 2."
-    assert ks.resolve_structured_profile_inquiry("where is my office?", apurbo_context, "en") == "Your office room is Room 201, Floor 2."
+    assert (
+        ks.resolve_structured_profile_inquiry("আমার অফিস কোথায়?", apurbo_context, "bn")
+        == "আপনার অফিস রুম হলো Room 201, Floor 2।"
+    )
+    assert (
+        ks.resolve_structured_profile_inquiry("আমার রুম কত?", apurbo_context, "bn")
+        == "আপনার অফিস রুম হলো Room 201, Floor 2।"
+    )
+    assert (
+        ks.resolve_structured_profile_inquiry("আমার রুম নম্বর কত?", apurbo_context, "bn")
+        == "আপনার অফিস রুম হলো Room 201, Floor 2।"
+    )
+    assert (
+        ks.resolve_structured_profile_inquiry("আমার অফিস কোন ফ্লোরে?", apurbo_context, "bn")
+        == "আপনার অফিস রুম হলো Room 201, Floor 2।"
+    )
+    assert (
+        ks.resolve_structured_profile_inquiry("what floor is my office on?", apurbo_context, "en")
+        == "Your office room is Room 201, Floor 2."
+    )
+    assert (
+        ks.resolve_structured_profile_inquiry("where is my office?", apurbo_context, "en")
+        == "Your office room is Room 201, Floor 2."
+    )
 
     # Role and Designation variations
-    assert ks.resolve_structured_profile_inquiry("আমার পদবি কি?", apurbo_context, "bn") == "আপনার পদবি হলো Cardiologist।"
-    assert ks.resolve_structured_profile_inquiry("আমার ডেজিগনেশন কি?", apurbo_context, "bn") == "আপনার পদবি হলো Cardiologist।"
-    assert ks.resolve_structured_profile_inquiry("আমার পদ কি?", apurbo_context, "bn") == "আপনার পদবি হলো Cardiologist।"
-    assert ks.resolve_structured_profile_inquiry("what is my role?", apurbo_context, "en") == "Your role is Cardiologist."
-    assert ks.resolve_structured_profile_inquiry("what is my position?", apurbo_context, "en") == "Your role is Cardiologist."
+    assert (
+        ks.resolve_structured_profile_inquiry("আমার পদবি কি?", apurbo_context, "bn")
+        == "আপনার পদবি হলো Cardiologist।"
+    )
+    assert (
+        ks.resolve_structured_profile_inquiry("আমার ডেজিগনেশন কি?", apurbo_context, "bn")
+        == "আপনার পদবি হলো Cardiologist।"
+    )
+    assert (
+        ks.resolve_structured_profile_inquiry("আমার পদ কি?", apurbo_context, "bn")
+        == "আপনার পদবি হলো Cardiologist।"
+    )
+    assert (
+        ks.resolve_structured_profile_inquiry("what is my role?", apurbo_context, "en")
+        == "Your role is Cardiologist."
+    )
+    assert (
+        ks.resolve_structured_profile_inquiry("what is my position?", apurbo_context, "en")
+        == "Your role is Cardiologist."
+    )
 
 
-def test_missing_profile_fields_clearly_stated(arif_context_missing_fields: PersonContextDTO) -> None:
+def test_missing_profile_fields_clearly_stated(
+    arif_context_missing_fields: PersonContextDTO,
+) -> None:
     """Absent fields must explicitly indicate they are not recorded in both languages."""
     ks = KnowledgeService()
 
-    assert ks.resolve_structured_profile_inquiry("আমার পদবি কি?", arif_context_missing_fields, "bn") == "আপনার প্রোফাইলে কোনো পদবি উল্লেখ করা নেই।"
-    assert ks.resolve_structured_profile_inquiry("what is my role?", arif_context_missing_fields, "en") == "No role is recorded in your profile."
-    assert ks.resolve_structured_profile_inquiry("আমার বিভাগ কি?", arif_context_missing_fields, "bn") == "আপনার প্রোফাইলে কোনো বিভাগ উল্লেখ করা নেই।"
-    assert ks.resolve_structured_profile_inquiry("what is my department?", arif_context_missing_fields, "en") == "No department is recorded in your profile."
-    assert ks.resolve_structured_profile_inquiry("আমার অফিস রুম কত?", arif_context_missing_fields, "bn") == "আপনার প্রোফাইলে কোনো অফিস রুম উল্লেখ করা নেই।"
-    assert ks.resolve_structured_profile_inquiry("where is my office?", arif_context_missing_fields, "en") == "No office room is recorded in your profile."
+    assert (
+        ks.resolve_structured_profile_inquiry("আমার পদবি কি?", arif_context_missing_fields, "bn")
+        == "আপনার প্রোফাইলে কোনো পদবি উল্লেখ করা নেই।"
+    )
+    assert (
+        ks.resolve_structured_profile_inquiry("what is my role?", arif_context_missing_fields, "en")
+        == "No role is recorded in your profile."
+    )
+    assert (
+        ks.resolve_structured_profile_inquiry("আমার বিভাগ কি?", arif_context_missing_fields, "bn")
+        == "আপনার প্রোফাইলে কোনো বিভাগ উল্লেখ করা নেই।"
+    )
+    assert (
+        ks.resolve_structured_profile_inquiry(
+            "what is my department?", arif_context_missing_fields, "en"
+        )
+        == "No department is recorded in your profile."
+    )
+    assert (
+        ks.resolve_structured_profile_inquiry("আমার অফিস রুম কত?", arif_context_missing_fields, "bn")
+        == "আপনার প্রোফাইলে কোনো অফিস রুম উল্লেখ করা নেই।"
+    )
+    assert (
+        ks.resolve_structured_profile_inquiry(
+            "where is my office?", arif_context_missing_fields, "en"
+        )
+        == "No office room is recorded in your profile."
+    )
 
 
-def test_general_questions_not_hijacked_by_profile_resolution(apurbo_context: PersonContextDTO) -> None:
+def test_general_questions_not_hijacked_by_profile_resolution(
+    apurbo_context: PersonContextDTO,
+) -> None:
     """General knowledge questions must return None from profile resolution and pass to general dialogue."""
     ks = KnowledgeService()
 
-    assert ks.resolve_structured_profile_inquiry("what is the role of mitochondria?", apurbo_context, "en") is None
-    assert ks.resolve_structured_profile_inquiry("Who is Shakib Al Hasan?", apurbo_context, "en") is None
+    assert (
+        ks.resolve_structured_profile_inquiry(
+            "what is the role of mitochondria?", apurbo_context, "en"
+        )
+        is None
+    )
+    assert (
+        ks.resolve_structured_profile_inquiry("Who is Shakib Al Hasan?", apurbo_context, "en")
+        is None
+    )
     assert ks.resolve_structured_profile_inquiry("শাকিব আল হাসান কে?", apurbo_context, "bn") is None
-    assert ks.resolve_structured_profile_inquiry("where is the central library?", apurbo_context, "en") is None
+    assert (
+        ks.resolve_structured_profile_inquiry("where is the central library?", apurbo_context, "en")
+        is None
+    )
 
 
-def test_personal_record_badge_only_for_actual_personal_data(apurbo_context: PersonContextDTO) -> None:
+def test_personal_record_badge_only_for_actual_personal_data(
+    apurbo_context: PersonContextDTO,
+) -> None:
     """Turn metadata is_privileged must be True ONLY when personal record was actually retrieved and used."""
     person_svc = mock.MagicMock()
     person_svc.get_person_context.return_value = apurbo_context
@@ -163,7 +253,9 @@ def test_personal_record_badge_only_for_actual_personal_data(apurbo_context: Per
     assert t_identity.metadata.get("is_privileged") is False
 
 
-def test_language_selection_authoritative_and_explicit_override(apurbo_context: PersonContextDTO) -> None:
+def test_language_selection_authoritative_and_explicit_override(
+    apurbo_context: PersonContextDTO,
+) -> None:
     """Language selection must be authoritative, with explicit prompt requests having precedence."""
     person_svc = mock.MagicMock()
     person_svc.get_person_context.return_value = apurbo_context

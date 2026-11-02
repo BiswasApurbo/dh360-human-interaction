@@ -288,14 +288,17 @@ class WebcamFrameSource(FrameSource):
         success, image = self._cap.read()
         if not success or image is None:
             self._consecutive_read_failures += 1
-            if self.auto_discover and self._consecutive_read_failures >= 5:
-                if now - self._last_reopen_attempt >= 1.0:
-                    self._last_reopen_attempt = now
-                    try:
-                        self.release()
-                        self.open()
-                    except Exception:
-                        pass
+            if (
+                self.auto_discover
+                and self._consecutive_read_failures >= 5
+                and (now - self._last_reopen_attempt >= 1.0)
+            ):
+                self._last_reopen_attempt = now
+                try:
+                    self.release()
+                    self.open()
+                except Exception:
+                    pass
             return None
 
         self._consecutive_read_failures = 0

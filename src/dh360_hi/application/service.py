@@ -334,7 +334,11 @@ class HumanInteractionService:
             office_room=command.office_room,
             working_hours=command.working_hours,
             profile_description=command.profile_description,
-            qa_pairs=command.qa_pairs,
+            qa_pairs=(
+                [q.to_dict() if hasattr(q, "to_dict") else q for q in command.qa_pairs]
+                if command.qa_pairs is not None
+                else None
+            ),
             tenant_id=command.tenant_id,
             robot_id=command.robot_id,
         )
@@ -374,7 +378,11 @@ class HumanInteractionService:
                         office_room=command.office_room,
                         working_hours=command.working_hours,
                         profile_description=command.profile_description,
-                        qa_pairs=command.qa_pairs,
+                        qa_pairs=(
+                            [q.to_dict() if hasattr(q, "to_dict") else q for q in command.qa_pairs]
+                            if command.qa_pairs is not None
+                            else None
+                        ),
                     )
                 except (BackendValidationError, PersonNotFoundError):
                     raise

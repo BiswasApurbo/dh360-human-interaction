@@ -10,7 +10,6 @@ Verifies:
 
 from __future__ import annotations
 
-import os
 import secrets
 import stat
 from pathlib import Path
@@ -20,7 +19,6 @@ from fastapi.testclient import TestClient
 
 from dh360_hi.api.app import create_app
 from dh360_hi.backend.database import DatabaseManager
-from dh360_hi.backend.models import SessionRecord
 
 
 def _configure_operator(monkeypatch: pytest.MonkeyPatch, scopes: str) -> str:
@@ -120,7 +118,7 @@ def test_authenticated_interaction_read_succeeds(
 def test_database_manager_enforces_0600_permissions(tmp_path: Path) -> None:
     """DatabaseManager enforces strict 0600 permissions on database file and auxiliary files."""
     db_file = tmp_path / "test_secure.db"
-    
+
     # Initialize database
     mgr = DatabaseManager(db_path=db_file, auto_init=True)
     assert db_file.exists()

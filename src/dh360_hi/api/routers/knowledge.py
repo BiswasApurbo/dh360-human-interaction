@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -110,8 +109,12 @@ class KnowledgeReloadResponse(BaseModel):
 )
 async def list_knowledge_items(
     request: Request,
-    query: str | None = Query(default=None, description="Search keyword matching across all Q&A fields"),
-    institution_type: str | None = Query(default=None, description="Filter by mode: university, clinic, general, or all"),
+    query: str | None = Query(
+        default=None, description="Search keyword matching across all Q&A fields"
+    ),
+    institution_type: str | None = Query(
+        default=None, description="Filter by mode: university, clinic, general, or all"
+    ),
     knowledge_service: KnowledgeService = Depends(get_knowledge_service),
     _principal: OperatorPrincipal = _knowledge_manage,
 ) -> KnowledgeListResponse:

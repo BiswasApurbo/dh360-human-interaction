@@ -376,6 +376,7 @@ def load_config(
         )
         if not fallback_token and "PYTEST_CURRENT_TEST" not in os.environ:
             from pathlib import Path
+
             candidate_paths = [
                 Path("kbcon-dashboard-main/kbcon-web/.env.local"),
                 Path("kbcon-web/.env.local"),
@@ -401,11 +402,11 @@ def load_config(
     active_token = env_dict["api"].get("operator_token")
     if active_token:
         has_scopes = "operator_scopes" in env_dict["api"] or (
-            isinstance(merged_dict.get("api"), dict)
-            and merged_dict["api"].get("operator_scopes")
+            isinstance(merged_dict.get("api"), dict) and merged_dict["api"].get("operator_scopes")
         )
         if not has_scopes:
             from dh360_hi.api.security import OperatorScope
+
             env_dict["api"]["operator_scopes"] = tuple(s.value for s in OperatorScope)
 
     if env_dict:

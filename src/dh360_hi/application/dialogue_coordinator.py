@@ -531,15 +531,15 @@ class DialogueCoordinator:
                 direct_response = self._knowledge_service.resolve_direct_kbcon_inquiry(
                     prompt_text, language=target_lang
                 )
+                ps = getattr(self._knowledge_service, "_person_service", None)
                 if (
                     direct_response is None
                     and requested_person_id is not None
                     and active_auth is not None
-                    and getattr(self._knowledge_service, "_person_service", None) is not None
+                    and ps is not None
+                    and hasattr(ps, "get_person_context")
                 ):
-                    person_ctx = self._knowledge_service._person_service.get_person_context(
-                        requested_person_id
-                    )
+                    person_ctx = ps.get_person_context(requested_person_id)
                     if person_ctx is not None:
                         direct_response = (
                             self._knowledge_service.resolve_structured_profile_inquiry(
@@ -555,11 +555,11 @@ class DialogueCoordinator:
             error_code: str | None = None
             response_text: str
 
-            is_mock_llm = (
-                getattr(self._llm_provider, "__class__", None).__name__ == "MockLLMProvider"
-            )
+            provider_cls = getattr(self._llm_provider, "__class__", None)
+            cls_name = provider_cls.__name__ if provider_cls is not None else ""
+            is_mock_llm = cls_name == "MockLLMProvider"
             is_test_double = (
-                getattr(self._llm_provider, "__class__", None).__name__ == "SpyLLMProvider"
+                cls_name == "SpyLLMProvider"
                 or getattr(self._llm_provider, "_generator_fn", None) is not None
             )
 
@@ -739,7 +739,9 @@ class DialogueCoordinator:
                         self._stt_provider.hold()
 
                 try:
-                    self._tts_provider.speak(response_text, language=target_lang, blocking=blocking_tts)
+                    self._tts_provider.speak(
+                        response_text, language=target_lang, blocking=blocking_tts
+                    )
                 except (TTSProviderError, ProviderError) as exc:
                     logger.warning("DialogueCoordinator: TTS playback failed: %s", exc)
                     metadata["tts_error"] = True

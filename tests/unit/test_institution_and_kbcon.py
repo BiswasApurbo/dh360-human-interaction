@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import sqlite3
 import secrets
-from unittest import mock
+
 import pytest
 from fastapi.testclient import TestClient
 
 from dh360_hi.api.app import create_app
-from dh360_hi.api.security import OperatorScope
 from dh360_hi.backend.database import DatabaseManager
 from dh360_hi.backend.knowledge_service import KnowledgeService
-from dh360_hi.backend.person_service import PersonContextDTO, PersonService, QAPair
+from dh360_hi.backend.person_service import PersonContextDTO, PersonService
 from dh360_hi.backend.repository import SQLitePersonRepository
 from dh360_hi.contracts.authorization import AuthorizationSession, AuthorizationStatus
 from dh360_hi.integrations.eliva.adapters import (
@@ -185,11 +183,15 @@ def test_structured_profile_resolution_populated_vs_missing_fields(
     assert room_res == "আপনার অফিস রুম হলো Room 201, Floor 2।"
 
     # Schedule query
-    sched_res = ks.resolve_structured_profile_inquiry("আমার কাজের সময় কি?", apurbo_context, language="bn")
+    sched_res = ks.resolve_structured_profile_inquiry(
+        "আমার কাজের সময় কি?", apurbo_context, language="bn"
+    )
     assert sched_res == "আপনার কাজের সময়সূচি হলো Satarday to Thursday, 10 to 6।"
 
     # Full profile query
-    prof_res = ks.resolve_structured_profile_inquiry("আমার প্রোফাইলের তথ্য বলো", apurbo_context, language="bn")
+    prof_res = ks.resolve_structured_profile_inquiry(
+        "আমার প্রোফাইলের তথ্য বলো", apurbo_context, language="bn"
+    )
     assert prof_res is not None
     assert "Cardiologist" in prof_res
     assert "Surgery" in prof_res
@@ -198,7 +200,9 @@ def test_structured_profile_resolution_populated_vs_missing_fields(
 
     # --- Test Arif (Missing Fields Explicit Handling) ---
     # Role query: Clearly indicates not recorded
-    arif_role_res = ks.resolve_structured_profile_inquiry("আমার পদবি কি?", arif_context, language="bn")
+    arif_role_res = ks.resolve_structured_profile_inquiry(
+        "আমার পদবি কি?", arif_context, language="bn"
+    )
     assert arif_role_res == "আপনার প্রোফাইলে কোনো পদবি উল্লেখ করা নেই।"
 
     # Room query: Clearly indicates not recorded
@@ -206,11 +210,15 @@ def test_structured_profile_resolution_populated_vs_missing_fields(
     assert arif_room_res == "আপনার প্রোফাইলে কোনো অফিস রুম উল্লেখ করা নেই।"
 
     # Schedule query: Clearly indicates not recorded
-    arif_sched_res = ks.resolve_structured_profile_inquiry("আমার কাজের সময় কি?", arif_context, language="bn")
+    arif_sched_res = ks.resolve_structured_profile_inquiry(
+        "আমার কাজের সময় কি?", arif_context, language="bn"
+    )
     assert arif_sched_res == "আপনার প্রোফাইলে কোনো কাজের সময়সূচি উল্লেখ করা নেই।"
 
     # Full profile query: Explicitly shows unrecorded status for missing fields
-    arif_prof_res = ks.resolve_structured_profile_inquiry("আমার প্রোফাইলের তথ্য বলো", arif_context, language="bn")
+    arif_prof_res = ks.resolve_structured_profile_inquiry(
+        "আমার প্রোফাইলের তথ্য বলো", arif_context, language="bn"
+    )
     assert arif_prof_res is not None
     assert "Arif" in arif_prof_res
     assert "প্রোফাইলে কোনো পদবি উল্লেখ নেই" in arif_prof_res
@@ -259,7 +267,9 @@ def test_privileged_context_includes_all_fields_on_identity_inquiry(
 def test_system_prompt_generator_kbcon_rules() -> None:
     """Verify build_kbcon_system_instruction strictly builds KBCON identity and domain boundaries."""
     # University prompt
-    univ_prompt = build_kbcon_system_instruction(institution_type="university", institution_name="BUBT")
+    univ_prompt = build_kbcon_system_instruction(
+        institution_type="university", institution_name="BUBT"
+    )
     assert "You are KBCON" in univ_prompt
     assert "BUBT" in univ_prompt
     assert "Eliva" not in univ_prompt
@@ -267,7 +277,9 @@ def test_system_prompt_generator_kbcon_rules() -> None:
     assert "UNIVERSITY GUIDELINES" in univ_prompt
 
     # Clinic prompt
-    clinic_prompt = build_kbcon_system_instruction(institution_type="clinic", institution_name="City Hospital")
+    clinic_prompt = build_kbcon_system_instruction(
+        institution_type="clinic", institution_name="City Hospital"
+    )
     assert "You are KBCON" in clinic_prompt
     assert "City Hospital" in clinic_prompt
     assert "HEALTHCARE CLINIC GUIDELINES" in clinic_prompt

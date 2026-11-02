@@ -9,16 +9,14 @@ Refactor notes:
 - Deterministic lifecycle
 """
 
-import os
-import sys
-import time
 import json
-import threading
-from typing import Optional, Callable
-
-import subprocess
-import re
+import os
 import platform
+import re
+import subprocess
+import threading
+import time
+from collections.abc import Callable
 
 try:
     import numpy as np
@@ -36,8 +34,8 @@ except ImportError:
     pysoxr = None  # type: ignore
 
 try:
-    from websockets.sync.client import connect
     from websockets.exceptions import WebSocketException
+    from websockets.sync.client import connect
 except ImportError:
     connect = None  # type: ignore
     WebSocketException = Exception  # type: ignore
@@ -45,25 +43,25 @@ except ImportError:
 # -----------------------
 # Config
 # -----------------------
-SONIOX_WS_URL       = "wss://stt-rt.soniox.com/transcribe-websocket"
-SONIOX_API_KEY      = os.getenv("SONIOX_API_KEY", "").strip()
+SONIOX_WS_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
+SONIOX_API_KEY = os.getenv("SONIOX_API_KEY", "").strip()
 
-MIC_SAMPLE_RATE     = 48000
-TARGET_SAMPLE_RATE  = 16000
-MIC_CHANNELS        = 1
+MIC_SAMPLE_RATE = 48000
+TARGET_SAMPLE_RATE = 16000
+MIC_CHANNELS = 1
 
-CHUNK_MS            = 30
-MIC_CHUNK_SAMPLES   = int(MIC_SAMPLE_RATE * CHUNK_MS / 1000)
-OUT_CHUNK_SAMPLES   = int(TARGET_SAMPLE_RATE * CHUNK_MS / 1000)
+CHUNK_MS = 30
+MIC_CHUNK_SAMPLES = int(MIC_SAMPLE_RATE * CHUNK_MS / 1000)
+OUT_CHUNK_SAMPLES = int(TARGET_SAMPLE_RATE * CHUNK_MS / 1000)
 
-SONIOX_MODEL                 = "stt-rt-v3"
-LANGUAGE_HINTS               = ["bn"]
-ENABLE_ENDPOINT_DETECTION    = True
+SONIOX_MODEL = "stt-rt-v3"
+LANGUAGE_HINTS = ["bn"]
+ENABLE_ENDPOINT_DETECTION = True
 
 # -----------------------
 # Callbacks
 # -----------------------
-_live_callback: Optional[Callable[[str], None]] = None
+_live_callback: Callable[[str], None] | None = None
 
 # -----------------------
 # Thread control
@@ -73,10 +71,11 @@ _dispatch_event = threading.Event()
 _hold_event = threading.Event()
 _hold_event.set()
 
+
 # -----------------------
 # Soniox config
 # -----------------------
-def make_soniox_config(api_key: Optional[str] = None):
+def make_soniox_config(api_key: str | None = None):
     resolved_key = (api_key or os.getenv("SONIOX_API_KEY", "") or SONIOX_API_KEY).strip()
     if not resolved_key:
         raise ValueError("SONIOX_API_KEY environment variable is required.")
@@ -89,6 +88,7 @@ def make_soniox_config(api_key: Optional[str] = None):
         "enable_endpoint_detection": ENABLE_ENDPOINT_DETECTION,
         "language_hints": LANGUAGE_HINTS,
     }
+
 
 # -----------------------
 # Device helpers
@@ -110,14 +110,13 @@ def make_soniox_config(api_key: Optional[str] = None):
 #     return None
 
 
-def get_wordforum_usb_index() -> Optional[int]:
+def get_wordforum_usb_index() -> int | None:
     if platform.system() != "Linux":
         return None
     try:
         result = subprocess.run(["arecord", "-l"], capture_output=True, text=True, check=True)
 
         for line in result.stdout.splitlines():
-
             # Match card number if USB Audio appears anywhere in line
             match = re.search(r"card (\d+):.*USB Audio", line, re.IGNORECASE)
 
@@ -133,16 +132,18 @@ def get_wordforum_usb_index() -> Optional[int]:
 
     return None
 
-def alsa_card_to_sounddevice_index(alsa_card: int) -> Optional[int]:
+
+def alsa_card_to_sounddevice_index(alsa_card: int) -> int | None:
     try:
         devices = sd.query_devices()
         for i, dev in enumerate(devices):
-            name = dev.get('name', '')
+            name = dev.get("name", "")
             if f"hw:{alsa_card}," in name:
                 return i
     except Exception:
         pass
     return None
+
 
 # -----------------------
 # Resampling
@@ -159,11 +160,13 @@ def resample_chunk(in_int16: np.ndarray) -> np.ndarray:
             out = np.pad(out, (0, OUT_CHUNK_SAMPLES - out.size))
     return out
 
+
 # -----------------------
 # Token rendering
 # -----------------------
 def render_tokens(final_tokens, non_final_tokens) -> str:
     return "".join(t["text"] for t in final_tokens + non_final_tokens if t.get("text"))
+
 
 # -----------------------
 # WebSocket receiver
@@ -189,7 +192,7 @@ def ws_receiver(ws, result_container):
                     non_final.append(t)
 
             text = render_tokens(final_tokens, non_final)
-            
+
             # Update live callback if set (optional, for UI/Printing)
             if _live_callback:
                 _live_callback(text)
@@ -209,6 +212,7 @@ def ws_receiver(ws, result_container):
     except Exception:
         pass
 
+
 # -----------------------
 # Blocking mic loop
 # -----------------------
@@ -218,7 +222,7 @@ def mic_producer_loop(ws, device_index):
         channels=MIC_CHANNELS,
         dtype="int16",
         blocksize=MIC_CHUNK_SAMPLES,
-        device=device_index
+        device=device_index,
     )
 
     stream.start()
@@ -226,7 +230,7 @@ def mic_producer_loop(ws, device_index):
         while not _stop_event.is_set() and not _dispatch_event.is_set():
             # Always read to keep buffer clear and timing correct
             audio, _ = stream.read(MIC_CHUNK_SAMPLES)
-            
+
             # Check hold state
             if not _hold_event.is_set():
                 # Send silence to keep connection alive but ignore input
@@ -240,24 +244,28 @@ def mic_producer_loop(ws, device_index):
         stream.stop()
         stream.close()
 
+
 # -----------------------
 # Public API
 # -----------------------
 def hold_stt():
     _hold_event.clear()
 
+
 def release_stt():
     _hold_event.set()
 
+
 def get_stt_hold():
     return not _hold_event.is_set()
+
 
 def listen_once(live_callback=None) -> str:
     """
     Connects to Soniox, listens for one utterance, and returns the final text.
     Blocks until the utterance is complete.
     """
-    
+
     # def validate_device():
     #     try:
     #         return open("/proc/device-tree/serial-number").read().strip('\x00') == "10000000656f322e"
@@ -266,12 +274,12 @@ def listen_once(live_callback=None) -> str:
     # if not validate_device():
     #     print("DRM validation failed: unauthorized!")
     #     return
-    
+
     _stop_event.clear()
     _hold_event.wait()
     global _live_callback
     _live_callback = live_callback
-    
+
     _dispatch_event.clear()
 
     alsa = get_wordforum_usb_index()
@@ -284,17 +292,20 @@ def listen_once(live_callback=None) -> str:
             ws.send(json.dumps(make_soniox_config()))
             print("Listening...")
 
-            recv_thread = threading.Thread(target=ws_receiver, args=(ws, result_container), daemon=True)
+            recv_thread = threading.Thread(
+                target=ws_receiver, args=(ws, result_container), daemon=True
+            )
             recv_thread.start()
 
             mic_producer_loop(ws, device_index)
 
             recv_thread.join(timeout=1.0)
-            
+
     except WebSocketException as e:
         print("WS error:", e)
-    
+
     return result_container["text"].replace("<end>", "").strip()
+
 
 # -----------------------
 # Example usage
@@ -315,6 +326,6 @@ if __name__ == "__main__":
     finally:
         _stop_event.set()
 
+
 def stop_stt():
     _stop_event.set()
-

@@ -1,6 +1,4 @@
-import re
-
-with open("tests/frontend/test_demo_logic.js", "r") as f:
+with open("tests/frontend/test_demo_logic.js") as f:
     content = f.read()
 
 test_old = """    global.fetchArgs = [];

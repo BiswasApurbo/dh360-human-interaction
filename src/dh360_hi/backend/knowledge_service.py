@@ -740,9 +740,9 @@ class KnowledgeService:
             if r.get("id") == cleaned_id:
                 return idx
         # 2. Backward compatibility fallback for legacy 'kb-X' or integer strings
-        idx = self._parse_item_index(cleaned_id)
-        if idx is not None and 0 <= idx < len(rows):
-            return idx
+        fallback_idx = self._parse_item_index(cleaned_id)
+        if fallback_idx is not None and 0 <= fallback_idx < len(rows):
+            return fallback_idx
         return None
 
     def get_all_facts(
@@ -767,7 +767,7 @@ class KnowledgeService:
                     logger.warning("Could not persist migrated UUIDs back to %s", self._csv_path)
 
             cleaned_query = (query or "").strip().lower()
-            target_type = (institution_type or "").strip().lower()
+            target_type: str | None = (institution_type or "").strip().lower()
             if target_type in ("all", "*", ""):
                 target_type = None
 

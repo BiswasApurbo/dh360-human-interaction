@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
+from typing import Any
 
 from dh360_hi.backend.database import DatabaseManager
 from dh360_hi.backend.exceptions import (

@@ -1,9 +1,10 @@
-import os
-import platform
 import asyncio
 import datetime
 import json
+import os
+import platform
 import threading
+from typing import Any
 
 try:
     import numpy as np
@@ -21,6 +22,8 @@ try:
 except ImportError:
     texttospeech = None  # type: ignore
     service_account = None  # type: ignore
+
+streaming_start_time: datetime.datetime | None = None
 
 
 # ============================================================
@@ -87,6 +90,7 @@ def resolve_tts_credentials(credentials_path_or_json: str | None = None):
 # AUDIO STREAMER
 # ============================================================
 
+
 class AudioStreamer:
     """
     Non-blocking audio playback.
@@ -116,10 +120,7 @@ class AudioStreamer:
         for i, device in enumerate(devices):
             name = str(device["name"]).strip().lower()
 
-            if (
-                name == "pipewire"
-                and device["max_output_channels"] > 0
-            ):
+            if name == "pipewire" and device["max_output_channels"] > 0:
                 return i
 
         if platform.system() != "Linux":
@@ -139,11 +140,7 @@ class AudioStreamer:
         )
 
         def callback(outdata, frames, time_info, status):
-            bytes_needed = (
-                frames
-                * self.channels
-                * np.dtype(np.int16).itemsize
-            )
+            bytes_needed = frames * self.channels * np.dtype(np.int16).itemsize
 
             if self._interrupted:
                 outdata[:] = b"\x00" * bytes_needed
@@ -153,9 +150,7 @@ class AudioStreamer:
                 available = len(self.audio_buffer)
 
                 if available >= bytes_needed:
-                    data = bytes(
-                        self.audio_buffer[:bytes_needed]
-                    )
+                    data = bytes(self.audio_buffer[:bytes_needed])
                     del self.audio_buffer[:bytes_needed]
 
                 else:
@@ -163,9 +158,7 @@ class AudioStreamer:
                     self.audio_buffer.clear()
 
             if len(data) < bytes_needed:
-                data += b"\x00" * (
-                    bytes_needed - len(data)
-                )
+                data += b"\x00" * (bytes_needed - len(data))
 
             outdata[:] = data
 
@@ -250,22 +243,20 @@ class AudioStreamer:
 # GOOGLE TTS
 # ============================================================
 
-class GoogleTTS:
 
+class GoogleTTS:
     def __init__(self, credentials_path_or_json: str | None = None):
         if texttospeech is None:
             raise RuntimeError("google-cloud-texttospeech package is not installed.")
 
         credentials = resolve_tts_credentials(credentials_path_or_json)
 
-        self.client = texttospeech.TextToSpeechClient(
-            credentials=credentials
-        )
+        self.client = texttospeech.TextToSpeechClient(credentials=credentials)
 
         self.audio_streamer = AudioStreamer()
 
         self.is_interrupted = False
-        self.current_queue = None
+        self.current_queue: asyncio.Queue[Any] | None = None
 
     # --------------------------------------------------------
     # INTERRUPT
@@ -312,7 +303,6 @@ class GoogleTTS:
 
         try:
             while True:
-
                 if self.is_interrupted:
                     break
 
@@ -322,7 +312,7 @@ class GoogleTTS:
                         timeout=0.01,
                     )
 
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue
 
                 except asyncio.CancelledError:
@@ -365,10 +355,7 @@ class GoogleTTS:
                 await asyncio.sleep(0)
 
         finally:
-            print(
-                f"Audio player finished. "
-                f"Played {chunks_played} chunks."
-            )
+            print(f"Audio player finished. Played {chunks_played} chunks.")
 
     # --------------------------------------------------------
     # STREAM TTS
@@ -392,69 +379,43 @@ class GoogleTTS:
         # Recreate/restart audio if the previous turn stopped it.
         self.audio_streamer.ensure_started()
 
-        audio_queue = asyncio.Queue(
-            maxsize=512
-        )
+        audio_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=512)
 
         self.current_queue = audio_queue
 
-        player_task = asyncio.create_task(
-            self._audio_player_worker(
-                audio_queue
-            )
-        )
+        player_task = asyncio.create_task(self._audio_player_worker(audio_queue))
 
-        print(
-            "Starting Google Cloud TTS streaming"
-        )
+        print("Starting Google Cloud TTS streaming")
 
-        print(
-            f"Voice: {voice_name}, "
-            f"Language: {language_code}"
-        )
+        print(f"Voice: {voice_name}, Language: {language_code}")
 
-        print(
-            f"Text length: {len(text)} characters"
-        )
+        print(f"Text length: {len(text)} characters")
 
         if len(text) > 100:
-            print(
-                f"Streaming text: {text[:100]}..."
-            )
+            print(f"Streaming text: {text[:100]}...")
         else:
-            print(
-                f"Streaming text: {text}"
-            )
+            print(f"Streaming text: {text}")
 
         print()
 
-        streaming_start_time = (
-            datetime.datetime.now()
-        )
+        streaming_start_time = datetime.datetime.now()
 
-        request_start_time = (
-            streaming_start_time
-        )
+        request_start_time = streaming_start_time
 
         try:
-
             # ------------------------------------------------
             # GOOGLE TTS CONFIG
             # ------------------------------------------------
 
-            streaming_config = (
-                texttospeech.StreamingSynthesizeConfig(
-                    voice=texttospeech.VoiceSelectionParams(
-                        name=voice_name,
-                        language_code=language_code,
-                    )
+            streaming_config = texttospeech.StreamingSynthesizeConfig(
+                voice=texttospeech.VoiceSelectionParams(
+                    name=voice_name,
+                    language_code=language_code,
                 )
             )
 
-            config_request = (
-                texttospeech.StreamingSynthesizeRequest(
-                    streaming_config=streaming_config
-                )
+            config_request = texttospeech.StreamingSynthesizeRequest(
+                streaming_config=streaming_config
             )
 
             # ------------------------------------------------
@@ -466,109 +427,68 @@ class GoogleTTS:
 
                 yield (
                     texttospeech.StreamingSynthesizeRequest(
-                        input=(
-                            texttospeech.StreamingSynthesisInput(
-                                text=text
-                            )
-                        )
+                        input=(texttospeech.StreamingSynthesisInput(text=text))
                     )
                 )
 
-            print(
-                "Text sent to Google Cloud TTS - "
-                "waiting for audio..."
-            )
+            print("Text sent to Google Cloud TTS - waiting for audio...")
 
             # ------------------------------------------------
             # GOOGLE STREAM
             # ------------------------------------------------
 
-            streaming_responses = (
-                self.client.streaming_synthesize(
-                    request_generator()
-                )
-            )
+            streaming_responses = self.client.streaming_synthesize(request_generator())
 
             first_audio_received = False
             chunks_received = 0
 
             for response in streaming_responses:
-
                 if self.is_interrupted:
-                    print(
-                        "TTS Streaming interrupted "
-                        "during receiving loop."
-                    )
+                    print("TTS Streaming interrupted during receiving loop.")
                     break
 
                 if not response.audio_content:
                     continue
 
                 if not first_audio_received:
-
                     first_audio_received = True
 
-                    first_audio_time = (
-                        datetime.datetime.now()
-                    )
+                    first_audio_time = datetime.datetime.now()
 
-                    time_to_first_audio = (
-                        first_audio_time
-                        - request_start_time
-                    )
+                    time_to_first_audio = first_audio_time - request_start_time
 
-                    print(
-                        "Time to first audio: "
-                        f"{time_to_first_audio.total_seconds()} "
-                        "seconds"
-                    )
+                    print(f"Time to first audio: {time_to_first_audio.total_seconds()} seconds")
 
                 if self.is_interrupted:
                     break
 
                 chunks_received += 1
 
-                await audio_queue.put(
-                    response.audio_content
-                )
+                await audio_queue.put(response.audio_content)
 
                 # Give audio worker immediate CPU time.
                 await asyncio.sleep(0)
 
             if self.is_interrupted:
-
-                print(
-                    "Audio synthesis interrupted. "
-                    f"Received {chunks_received} chunks."
-                )
+                print(f"Audio synthesis interrupted. Received {chunks_received} chunks.")
 
             else:
-
-                print(
-                    "Audio synthesis complete. "
-                    f"Received {chunks_received} chunks."
-                )
+                print(f"Audio synthesis complete. Received {chunks_received} chunks.")
 
         except asyncio.CancelledError:
             self.is_interrupted = True
             raise
 
         except Exception as e:
-
             if not self.is_interrupted:
-                print(
-                    "Error in Google Cloud TTS streaming: "
-                    f"{e}"
-                )
+                print(f"Error in Google Cloud TTS streaming: {e}")
 
         finally:
-
             # ------------------------------------------------
             # INTERRUPTED
             # ------------------------------------------------
 
             if self.is_interrupted:
-
                 if not player_task.done():
                     player_task.cancel()
 
@@ -582,7 +502,6 @@ class GoogleTTS:
             # ------------------------------------------------
 
             else:
-
                 await audio_queue.put(None)
 
                 try:
@@ -592,24 +511,17 @@ class GoogleTTS:
 
             self.current_queue = None
 
-            completion_time = (
-                datetime.datetime.now()
-            )
+            completion_time = datetime.datetime.now()
 
-            total_time = (
-                completion_time
-                - request_start_time
-            )
+            total_time = completion_time - request_start_time
 
-            print(
-                "Total streaming time: "
-                f"{total_time.total_seconds()} seconds"
-            )
+            print(f"Total streaming time: {total_time.total_seconds()} seconds")
 
 
 # ============================================================
 # MAIN
 # ============================================================
+
 
 async def main():
 
@@ -623,17 +535,11 @@ centered on its status as a ruminant, possessing a complex,
 four-chambered stomach—the rumen, reticulum, omasum, and abomasum.
 """
 
-    large_text = " ".join(
-        large_text.split()
-    )
+    large_text = " ".join(large_text.split())
 
-    print(
-        "=== Google Cloud TTS Real-Time Streaming Test ==="
-    )
+    print("=== Google Cloud TTS Real-Time Streaming Test ===")
 
-    print(
-        "This should be much faster than Gemini Live API"
-    )
+    print("This should be much faster than Gemini Live API")
 
     print()
 
@@ -649,17 +555,13 @@ four-chambered stomach—the rumen, reticulum, omasum, and abomasum.
     # Change to 2 for a 2-second interrupt test.
     await asyncio.sleep(10)
 
-    print(
-        "\n!!! Simulating Interrupt !!!\n"
-    )
+    print("\n!!! Simulating Interrupt !!!\n")
 
     tts.interrupt()
 
     await task
 
-    print(
-        "\nGoogle Cloud TTS streaming completed!"
-    )
+    print("\nGoogle Cloud TTS streaming completed!")
 
 
 # ============================================================
@@ -667,11 +569,8 @@ four-chambered stomach—the rumen, reticulum, omasum, and abomasum.
 # ============================================================
 
 if __name__ == "__main__":
-
     try:
         asyncio.run(main())
 
     except KeyboardInterrupt:
-        print(
-            "\nProgram interrupted by user."
-        )
+        print("\nProgram interrupted by user.")

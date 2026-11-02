@@ -43,16 +43,13 @@ async def get_health(
     snapshot = service.get_health_snapshot()
 
     operator = await get_optional_operator_principal(request, credentials)
-    has_privileged_scope = (
-        operator is not None
-        and bool(
-            operator.scopes.intersection(
-                {
-                    OperatorScope.INTERACTION_READ,
-                    OperatorScope.SETTINGS_READ,
-                    OperatorScope.SETTINGS_MANAGE,
-                }
-            )
+    has_privileged_scope = operator is not None and bool(
+        operator.scopes.intersection(
+            {
+                OperatorScope.INTERACTION_READ,
+                OperatorScope.SETTINGS_READ,
+                OperatorScope.SETTINGS_MANAGE,
+            }
         )
     )
 

@@ -1,8 +1,7 @@
-from pathlib import Path
-import json
-import time
 import csv
 import os
+from pathlib import Path
+
 try:
     from google import genai
     from google.genai import types
@@ -18,14 +17,15 @@ FACTS_FILE = os.getenv("ELIVA_FACTS_FILE", DEFAULT_FACTS_FILE)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
 # GLOBAL STATE
-_initialized    = False
-chat_session    = None
-gemini_client   = None
+_initialized = False
+chat_session = None
+gemini_client = None
 
 
 # =========================================================
 #                 HELPER FUNCTIONS
 # =========================================================
+
 
 def load_facts():
     """Loads CSV rows to build chat history pre-training."""
@@ -34,13 +34,13 @@ def load_facts():
         print("⚠️ No facts file found.")
         return facts
     try:
-        with open(FACTS_FILE, "r", encoding="utf-8") as f:
+        with open(FACTS_FILE, encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 bangla_q = row.get("প্রশ্ন (বাংলা)", "").strip()
                 bangla_a = row.get("উত্তর (বাংলা)", "").strip()
-                eng_q    = row.get("Question (English)", "").strip()
-                eng_a    = row.get("Answer (English)", "").strip()
+                eng_q = row.get("Question (English)", "").strip()
+                eng_a = row.get("Answer (English)", "").strip()
                 if bangla_q and bangla_a:
                     facts.append(f"{bangla_q}\n{bangla_a} (Fact)")
                 if eng_q and eng_a:
@@ -54,7 +54,7 @@ def find_relevant_fact(user_query: str, facts_file: str) -> str:
     """Matches user query against CSV facts using case-insensitive token overlap."""
     if not os.path.exists(facts_file):
         return ""
-    
+
     # Extract query tokens (ignoring short words under 3 characters)
     query_tokens = [token.lower() for token in user_query.strip().split() if len(token) >= 3]
     if not query_tokens:
@@ -63,7 +63,7 @@ def find_relevant_fact(user_query: str, facts_file: str) -> str:
     matches = []
 
     try:
-        with open(facts_file, "r", encoding="utf-8") as f:
+        with open(facts_file, encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 bq = row.get("প্রশ্ন (বাংলা)", "").strip()
@@ -88,6 +88,7 @@ def find_relevant_fact(user_query: str, facts_file: str) -> str:
 # =========================================================
 #                 INTERNAL INITIALIZATION
 # =========================================================
+
 
 def _init():
     """Initialize client and chat session once."""
@@ -163,8 +164,7 @@ def _init():
     # 2. Configure tool and system instruction
     google_search_tool = types.Tool(google_search=types.GoogleSearch())
     config_with_tools = types.GenerateContentConfig(
-        tools=[google_search_tool],
-        system_instruction=system_instruction
+        tools=[google_search_tool], system_instruction=system_instruction
     )
 
     # 3. Pre-load fact history
@@ -173,13 +173,13 @@ def _init():
     if bilingual_facts:
         for fact in bilingual_facts:
             history.append(types.UserContent(parts=[types.Part(text=fact)]))
-            history.append(types.ModelContent(parts=[types.Part(text="Ok, I will remember that fact.")]))
+            history.append(
+                types.ModelContent(parts=[types.Part(text="Ok, I will remember that fact.")])
+            )
 
     # 4. Create chat session
     chat_session = gemini_client.chats.create(
-        model="gemini-3.5-flash-lite",
-        config=config_with_tools,
-        history=history
+        model="gemini-3.5-flash-lite", config=config_with_tools, history=history
     )
 
     _initialized = True
@@ -188,6 +188,7 @@ def _init():
 # =========================================================
 #                 PUBLIC API
 # =========================================================
+
 
 def ask(user_input: str) -> str:
     _init()  # Initialize on first call
@@ -206,6 +207,8 @@ def ask(user_input: str) -> str:
         prompt = user_input
 
     try:
+        if chat_session is None:
+            return "Error: chat session not initialized"
         # Pass 'prompt' (with local context) instead of raw 'user_input'
         response = chat_session.send_message(prompt)
         reply = response.text.strip()
