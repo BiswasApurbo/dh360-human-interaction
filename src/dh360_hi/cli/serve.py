@@ -286,7 +286,7 @@ def handle_serve(args: argparse.Namespace) -> int:
             print("  Dialogue     : DISABLED")
         print("Starting unified API & perception server...")
 
-        uvicorn.run(app, host=host, port=port, log_level="warning")
+        uvicorn.run(app, host=host, port=port, log_level="warning", timeout_graceful_shutdown=1)
         return 0
     finally:
         # Graceful shutdown of service, dialogue coordinator, and controller
