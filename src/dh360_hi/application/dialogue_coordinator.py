@@ -92,6 +92,8 @@ class DialogueCoordinator:
         tts_provider: TTSProvider | None = None,
         default_language: SupportedLanguage = "bn",
         grace_period_seconds: float = 60.0,
+        shared_capture: Any | None = None,
+        inactivity_timeout_seconds: float = 60.0,
     ) -> None:
         self._event_bus = event_bus
         self._knowledge_service = knowledge_service
@@ -101,6 +103,8 @@ class DialogueCoordinator:
         self._tts_provider = tts_provider
         self._default_language: SupportedLanguage = default_language
         self._grace_period_seconds = grace_period_seconds
+        self._shared_capture = shared_capture
+        self._inactivity_timeout_seconds = inactivity_timeout_seconds
 
         # Lock hierarchy:
         # 1. _turn_lock: serializes turn execution pipeline (STT -> LLM -> TTS -> commit)
@@ -119,6 +123,13 @@ class DialogueCoordinator:
         self._last_user_query: str = ""
         self._last_robot_response: str = ""
         self._state_callbacks: list[Callable[[str, dict[str, Any]], None]] = []
+
+        # Inactivity timer for transitioning LISTENING -> IDLE
+        self._inactivity_timer: threading.Timer | None = None
+        self._inactivity_lock = threading.Lock()
+
+        if self._shared_capture is not None:
+            self._shared_capture.on_wake_word = self.on_wake_word_detected
 
         self._subscribe_events()
 
@@ -166,19 +177,84 @@ class DialogueCoordinator:
 
     def _set_state(self, state: str, **metadata: Any) -> None:
         """Update current interaction state and notify registered listeners."""
+        normalized = state.lower()
         with self._state_lock:
-            self._current_state = state
+            self._current_state = normalized
             callbacks = list(self._state_callbacks)
         for cb in callbacks:
             try:
-                cb(state, metadata)
+                cb(normalized, metadata)
             except Exception as exc:
                 logger.debug("DialogueCoordinator: state callback error: %s", exc)
 
+    def _arm_inactivity_timer(self) -> None:
+        """Arm or reset the 60-second inactivity timer in LISTENING mode."""
+        with self._inactivity_lock:
+            if self._inactivity_timer is not None:
+                self._inactivity_timer.cancel()
+            self._inactivity_timer = threading.Timer(
+                self._inactivity_timeout_seconds,
+                self._on_inactivity_timeout,
+            )
+            self._inactivity_timer.daemon = True
+            self._inactivity_timer.start()
+
+    def _cancel_inactivity_timer(self) -> None:
+        """Cancel active inactivity timer."""
+        with self._inactivity_lock:
+            if self._inactivity_timer is not None:
+                self._inactivity_timer.cancel()
+                self._inactivity_timer = None
+
+    def _on_inactivity_timeout(self) -> None:
+        """Invoked when 60 seconds have elapsed in listening state without interaction."""
+        with self._state_lock:
+            if self._current_state != "listening":
+                return
+            logger.info("DialogueCoordinator: 60s inactivity reached in LISTENING; returning to IDLE")
+            if self._stt_provider is not None:
+                with contextlib.suppress(Exception):
+                    self._stt_provider.hold()
+            if self._shared_capture is not None:
+                self._shared_capture.end_active_session()
+            self._set_state("idle")
+
+    def on_wake_word_detected(self, event: Any) -> None:
+        """Invoked when local WakeWordDetector detects 'Hey KB'."""
+        with self._state_lock:
+            if self._is_microphone_muted:
+                logger.debug("DialogueCoordinator: wake word detected but microphone is muted")
+                return
+            if self._current_state in ("thinking", "answering", "speaking"):
+                logger.debug("DialogueCoordinator: wake word detected during active %s; ignoring", self._current_state)
+                return
+
+            logger.info("DialogueCoordinator: 'Hey KB' detected! Transitioning from %s to LISTENING", self._current_state)
+            self._set_state("listening", wake_phrase=getattr(event, "phrase", "hey kb"))
+            self._arm_inactivity_timer()
+
+        # Trigger voice conversation turn asynchronously
+        threading.Thread(
+            target=self._run_wake_turn_worker,
+            daemon=True,
+            name="KBCON-WakeTurnWorker",
+        ).start()
+
+    def _run_wake_turn_worker(self) -> None:
+        """Worker thread to execute spoken turn after 'Hey KB' wake trigger."""
+        try:
+            self.handle_turn(user_text=None, target_language=self._default_language)
+        except Exception as exc:
+            logger.warning("DialogueCoordinator: error executing wake turn: %s", exc)
+
     def mute_microphone(self) -> bool:
         """Mute microphone input and update state."""
+        self._cancel_inactivity_timer()
         with self._state_lock:
             self._is_microphone_muted = True
+        if self._shared_capture is not None:
+            with contextlib.suppress(Exception):
+                self._shared_capture.mute()
         if self._stt_provider is not None:
             with contextlib.suppress(Exception):
                 self._stt_provider.hold()
@@ -188,13 +264,17 @@ class DialogueCoordinator:
 
     def unmute_microphone(self) -> bool:
         """Unmute microphone input and restore idle state."""
+        self._cancel_inactivity_timer()
         with self._state_lock:
             self._is_microphone_muted = False
+        if self._shared_capture is not None:
+            with contextlib.suppress(Exception):
+                self._shared_capture.unmute()
         if self._stt_provider is not None:
             with contextlib.suppress(Exception):
                 self._stt_provider.release()
         self._set_state("idle")
-        logger.info("DialogueCoordinator: microphone unmuted")
+        logger.info("DialogueCoordinator: microphone unmuted; resumed wake detection")
         return False
 
     def toggle_microphone_mute(self) -> bool:
@@ -275,6 +355,11 @@ class DialogueCoordinator:
 
     def close(self) -> None:
         """Unsubscribe from EventBus and release active session state. Idempotent."""
+        self._cancel_inactivity_timer()
+        if self._shared_capture is not None:
+            with contextlib.suppress(Exception):
+                self._shared_capture.stop()
+
         with self._state_lock:
             for sub_id in self._subscription_ids:
                 try:
@@ -399,6 +484,7 @@ class DialogueCoordinator:
 
     def interrupt(self) -> None:
         """Abort active speech synthesis playback and microphone listening immediately."""
+        self._cancel_inactivity_timer()
         self._set_state("interrupted")
         if self._tts_provider is not None:
             with contextlib.suppress(Exception):
@@ -410,10 +496,12 @@ class DialogueCoordinator:
                 self._stt_provider.release()
 
         def _reset_interrupted_state() -> None:
-            time.sleep(1.2)
+            time.sleep(1.0)
             with self._state_lock:
-                target_state = "muted" if self._is_microphone_muted else "idle"
+                target_state = "muted" if self._is_microphone_muted else "listening"
             self._set_state(target_state)
+            if target_state == "listening":
+                self._arm_inactivity_timer()
 
         threading.Thread(target=_reset_interrupted_state, daemon=True).start()
 
@@ -571,7 +659,11 @@ class DialogueCoordinator:
 
             if not prompt_text:
                 fallback = get_fallback_message("stt_error", target_lang)
-                self._set_state("idle")
+                with self._state_lock:
+                    target_state = "muted" if self._is_microphone_muted else "idle"
+                self._set_state(target_state)
+                if self._shared_capture is not None:
+                    self._shared_capture.end_active_session()
                 return DialogueTurn(
                     role="model",
                     text=fallback,
@@ -882,7 +974,7 @@ class DialogueCoordinator:
             metadata["speak_response"] = bool(should_speak)
 
             if should_speak and self._tts_provider is not None:
-                self._set_state("speaking", response_text=response_text)
+                self._set_state("answering", response_text=response_text)
                 if self._stt_provider is not None:
                     with contextlib.suppress(Exception):
                         self._stt_provider.hold()
@@ -921,9 +1013,11 @@ class DialogueCoordinator:
                 ):
                     self._session_state.add_turn(model_turn, now=now)
                 final_state = (
-                    "muted" if self._is_microphone_muted else ("error" if error_code else "idle")
+                    "muted" if self._is_microphone_muted else ("error" if error_code else "listening")
                 )
             self._set_state(final_state)
+            if final_state == "listening":
+                self._arm_inactivity_timer()
 
             return model_turn
 

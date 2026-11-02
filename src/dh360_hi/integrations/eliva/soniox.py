@@ -216,7 +216,30 @@ def ws_receiver(ws, result_container):
 # -----------------------
 # Blocking mic loop
 # -----------------------
-def mic_producer_loop(ws, device_index):
+def mic_producer_loop(ws, device_index=None, audio_queue=None):
+    if audio_queue is not None:
+        try:
+            while not _stop_event.is_set() and not _dispatch_event.is_set():
+                try:
+                    chunk = audio_queue.get(timeout=0.2)
+                except Exception:
+                    continue
+                if chunk is None:
+                    break
+
+                if not _hold_event.is_set():
+                    silent = np.zeros(OUT_CHUNK_SAMPLES, dtype=np.int16)
+                    ws.send(silent.tobytes())
+                    continue
+
+                if isinstance(chunk, (bytes, bytearray)):
+                    ws.send(chunk)
+                elif np is not None and isinstance(chunk, np.ndarray):
+                    ws.send(chunk.astype(np.int16).tobytes())
+        finally:
+            pass
+        return
+
     stream = sd.InputStream(
         samplerate=MIC_SAMPLE_RATE,
         channels=MIC_CHANNELS,
@@ -260,20 +283,11 @@ def get_stt_hold():
     return not _hold_event.is_set()
 
 
-def listen_once(live_callback=None) -> str:
+def listen_once(live_callback=None, audio_queue=None, api_key: str | None = None) -> str:
     """
     Connects to Soniox, listens for one utterance, and returns the final text.
     Blocks until the utterance is complete.
     """
-
-    # def validate_device():
-    #     try:
-    #         return open("/proc/device-tree/serial-number").read().strip('\x00') == "10000000656f322e"
-    #     except:
-    #         return False
-    # if not validate_device():
-    #     print("DRM validation failed: unauthorized!")
-    #     return
 
     _stop_event.clear()
     _hold_event.wait()
@@ -289,7 +303,7 @@ def listen_once(live_callback=None) -> str:
 
     try:
         with connect(SONIOX_WS_URL, timeout=20) as ws:
-            ws.send(json.dumps(make_soniox_config()))
+            ws.send(json.dumps(make_soniox_config(api_key=api_key)))
             print("Listening...")
 
             recv_thread = threading.Thread(
@@ -297,7 +311,7 @@ def listen_once(live_callback=None) -> str:
             )
             recv_thread.start()
 
-            mic_producer_loop(ws, device_index)
+            mic_producer_loop(ws, device_index=device_index, audio_queue=audio_queue)
 
             recv_thread.join(timeout=1.0)
 

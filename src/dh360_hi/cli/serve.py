@@ -208,6 +208,17 @@ def handle_serve(args: argparse.Namespace) -> int:
             else "bn"
         )
 
+        # Local wake word detector and shared microphone capture pipeline
+        shared_capture = None
+        try:
+            from dh360_hi.integrations.audio import SharedMicrophoneCapture, WakeWordDetector
+
+            wake_detector = WakeWordDetector(wake_phrase="hey kb")
+            shared_capture = SharedMicrophoneCapture(wake_detector=wake_detector)
+            shared_capture.start()
+        except Exception as exc:
+            print(f"  Wake Engine  : DEFERRED ({exc})")
+
         if raw_mode == "mock" or (raw_mode == "auto" and not has_gemini_key):
             llm_provider = MockLLMProvider()
             effective_mode = "mock"
@@ -232,7 +243,10 @@ def handle_serve(args: argparse.Namespace) -> int:
                     target_language=robot_default_lang,
                 ),
             )
-            stt_provider = ElivaSonioxAdapter(api_key=soniox_key or os.getenv("SONIOX_API_KEY"))
+            stt_provider = ElivaSonioxAdapter(
+                api_key=soniox_key or os.getenv("SONIOX_API_KEY"),
+                shared_capture=shared_capture,
+            )
             tts_provider = ElivaGoogleTTSAdapter(
                 credentials_json=gtts_json or os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON"),
                 credentials_file=os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),
@@ -247,7 +261,9 @@ def handle_serve(args: argparse.Namespace) -> int:
             stt_provider=stt_provider,
             tts_provider=tts_provider,
             default_language=robot_default_lang,
+            shared_capture=shared_capture,
         )
+        dialogue_coord._set_state("idle")
 
     app = create_app(
         service=service,

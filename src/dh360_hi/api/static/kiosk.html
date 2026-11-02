@@ -167,6 +167,21 @@
       height: 50%;
     }
 
+    /* Booting */
+    .state-booting .eye {
+      background: #0ea5e9;
+      box-shadow: 
+        0 0 35px #0ea5e9,
+        0 0 70px rgba(14, 165, 233, 0.4),
+        inset 0 0 15px #ffffff;
+      animation: booting-breathe 2.4s infinite ease-in-out;
+    }
+
+    @keyframes booting-breathe {
+      0%, 100% { opacity: 0.5; transform: scale(0.88); }
+      50% { opacity: 0.98; transform: scale(1.02); }
+    }
+
     /* Listening */
     .state-listening .eye {
       background: #38bdf8;
@@ -202,8 +217,9 @@
       50% { transform: translateY(-12px); }
     }
 
-    /* Speaking */
-    .state-speaking .eye {
+    /* Speaking & Answering */
+    .state-speaking .eye,
+    .state-answering .eye {
       background: #00f2fe;
       border-radius: 65px;
       box-shadow: 
@@ -495,10 +511,12 @@
     // State management & Localizations
     const STRINGS = {
       bn: {
+        booting: "শুরু হচ্ছে...",
         idle: "অপেক্ষারত",
         listening: "শুনছি...",
         thinking: "ভাবছি...",
         speaking: "কথা বলছি...",
+        answering: "কথা বলছি...",
         muted: "মিউট করা",
         interrupted: "কথা থামানো হয়েছে",
         error: "ত্রুটি",
@@ -517,10 +535,12 @@
         reconnecting: "পুনরায় সংযোগ..."
       },
       en: {
+        booting: "Booting...",
         idle: "Idle",
         listening: "Listening...",
         thinking: "Thinking...",
         speaking: "Speaking...",
+        answering: "Speaking...",
         muted: "Muted",
         interrupted: "Interrupted",
         error: "Error",
@@ -634,7 +654,7 @@
     function scheduleNextBlink() {
       const delay = Math.random() * 3500 + 2000;
       setTimeout(() => {
-        if (!currentState.is_muted && currentState.state !== "speaking") {
+        if (!currentState.is_muted && currentState.state !== "speaking" && currentState.state !== "answering") {
           const eyeL = document.getElementById("eye-left");
           const eyeR = document.getElementById("eye-right");
           eyeL.classList.add("blink");

@@ -446,6 +446,7 @@ class ElivaSonioxAdapter(STTProvider):
         hold_fn: Callable[[], None] | None = None,
         release_fn: Callable[[], None] | None = None,
         is_held_fn: Callable[[], bool] | None = None,
+        shared_capture: Any | None = None,
     ) -> None:
         """Initialize ElivaSonioxAdapter without opening microphone or network devices."""
         self._api_key = api_key
@@ -455,6 +456,7 @@ class ElivaSonioxAdapter(STTProvider):
         self._hold_fn = hold_fn
         self._release_fn = release_fn
         self._is_held_fn = is_held_fn
+        self._shared_capture = shared_capture
         self._is_held: bool = False
         self._lock = threading.Lock()
         self._stt_module: Any | None = None
@@ -608,7 +610,23 @@ class ElivaSonioxAdapter(STTProvider):
             # Configure language hint and active API key
             soniox.SONIOX_API_KEY = api_key
             soniox.LANGUAGE_HINTS = [language_hint]
-            transcription = soniox.listen_once(live_callback=on_partial_text)
+
+            if self._shared_capture is not None:
+                audio_queue = self._shared_capture.begin_active_session()
+                try:
+                    transcription = soniox.listen_once(
+                        live_callback=on_partial_text,
+                        audio_queue=audio_queue,
+                        api_key=api_key,
+                    )
+                finally:
+                    self._shared_capture.end_active_session()
+            else:
+                transcription = soniox.listen_once(
+                    live_callback=on_partial_text,
+                    api_key=api_key,
+                )
+
             clean_transcription = (transcription or "").replace("<end>", "").strip()
             return clean_transcription
         except (
