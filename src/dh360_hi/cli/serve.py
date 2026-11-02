@@ -182,6 +182,32 @@ def handle_serve(args: argparse.Namespace) -> int:
         stt_provider: STTProvider | None = None
         tts_provider: TTSProvider | None = None
 
+        active_robot = None
+        try:
+            from dh360_hi.backend.robot_registry import RobotRegistry
+
+            active_robot = RobotRegistry.get_instance().get_active_robot()
+            logger.info(
+                "Active physical robot resolved: ID=%s, Name=%s, Mode=%s, Language=%s",
+                active_robot.robot_id,
+                active_robot.name,
+                active_robot.mode,
+                active_robot.language,
+            )
+        except Exception as exc:
+            logger.warning("Could not resolve active robot registry at startup: %s", exc)
+
+        robot_inst_type = (
+            "clinic"
+            if (active_robot and active_robot.mode == "healthcare")
+            else knowledge_svc.institution_type
+        )
+        robot_default_lang = (
+            active_robot.language
+            if (active_robot and active_robot.language in ("bn", "en"))
+            else "bn"
+        )
+
         if raw_mode == "mock" or (raw_mode == "auto" and not has_gemini_key):
             llm_provider = MockLLMProvider()
             effective_mode = "mock"
@@ -201,8 +227,9 @@ def handle_serve(args: argparse.Namespace) -> int:
             llm_provider = ElivaGeminiAdapter(
                 api_key=gemini_key or os.getenv("GEMINI_API_KEY"),
                 system_instruction=build_kbcon_system_instruction(
-                    institution_type=knowledge_svc.institution_type,
+                    institution_type=robot_inst_type,
                     institution_name=knowledge_svc.institution_name,
+                    target_language=robot_default_lang,
                 ),
             )
             stt_provider = ElivaSonioxAdapter(api_key=soniox_key or os.getenv("SONIOX_API_KEY"))
@@ -219,6 +246,7 @@ def handle_serve(args: argparse.Namespace) -> int:
             llm_provider=llm_provider,
             stt_provider=stt_provider,
             tts_provider=tts_provider,
+            default_language=robot_default_lang,
         )
 
     app = create_app(

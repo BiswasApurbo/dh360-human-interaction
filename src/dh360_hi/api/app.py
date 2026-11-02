@@ -19,6 +19,7 @@ from dh360_hi.api.routers.enrollment import router as enrollment_router
 from dh360_hi.api.routers.events import router as events_router
 from dh360_hi.api.routers.health import router as health_router
 from dh360_hi.api.routers.interaction import router as interaction_router
+from dh360_hi.api.routers.kiosk import router as kiosk_router
 from dh360_hi.api.routers.knowledge import router as knowledge_router
 from dh360_hi.api.routers.persons import router as persons_router
 from dh360_hi.api.routers.sessions import router as sessions_router
@@ -247,4 +248,5 @@ def create_app(
     app.include_router(knowledge_router)
     app.include_router(settings_router)
     app.include_router(admin_router)
+    app.include_router(kiosk_router)
     return app

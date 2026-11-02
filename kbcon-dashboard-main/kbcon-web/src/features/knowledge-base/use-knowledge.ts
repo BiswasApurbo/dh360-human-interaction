@@ -204,9 +204,10 @@ export type CanonicalKnowledgeItem = {
   question_bn: string;
   answer_bn: string;
   institution_type: "university" | "clinic" | "general";
+  robot_id?: string | null;
 };
 
-export function useCanonicalKnowledge(initialQuery = "", initialType = "all") {
+export function useCanonicalKnowledge(initialQuery = "", initialType = "all", initialRobotId = "") {
   const { user, loading: authLoading } = useAuth();
   const { role, loading: roleLoading } = useRole();
   const [items, setItems] = useState<CanonicalKnowledgeItem[]>([]);
@@ -229,7 +230,7 @@ export function useCanonicalKnowledge(initialQuery = "", initialType = "all") {
     return headers;
   };
 
-  const loadData = async (queryStr = initialQuery, typeStr = initialType) => {
+  const loadData = async (queryStr = initialQuery, typeStr = initialType, robotIdStr = initialRobotId) => {
     if (authLoading || roleLoading) return;
     if (role === "superAdmin") {
       setItems([]);
@@ -244,6 +245,7 @@ export function useCanonicalKnowledge(initialQuery = "", initialType = "all") {
       const params = new URLSearchParams();
       if (queryStr.trim()) params.set("query", queryStr.trim());
       if (typeStr && typeStr !== "all") params.set("institution_type", typeStr);
+      if (robotIdStr && robotIdStr !== "all") params.set("robot_id", robotIdStr);
 
       const res = await fetch(`/api/dh360/knowledge/items?${params.toString()}`, {
         headers,
@@ -266,9 +268,9 @@ export function useCanonicalKnowledge(initialQuery = "", initialType = "all") {
 
   useEffect(() => {
     if (!authLoading && !roleLoading) {
-      void loadData(initialQuery, initialType);
+      void loadData(initialQuery, initialType, initialRobotId);
     }
-  }, [authLoading, roleLoading, role, initialQuery, initialType]);
+  }, [authLoading, roleLoading, role, initialQuery, initialType, initialRobotId]);
 
   const createItem = async (payload: {
     question_en: string;
@@ -276,8 +278,12 @@ export function useCanonicalKnowledge(initialQuery = "", initialType = "all") {
     question_bn: string;
     answer_bn: string;
     institution_type: string;
+    robot_id?: string | null;
   }) => {
     const headers = await getAuthHeaders();
+    if (payload.robot_id) {
+      headers["X-Robot-ID"] = payload.robot_id;
+    }
     const res = await fetch("/api/dh360/knowledge/items", {
       method: "POST",
       headers,
@@ -300,9 +306,13 @@ export function useCanonicalKnowledge(initialQuery = "", initialType = "all") {
       question_bn?: string;
       answer_bn?: string;
       institution_type?: string;
+      robot_id?: string | null;
     }
   ) => {
     const headers = await getAuthHeaders();
+    if (payload.robot_id) {
+      headers["X-Robot-ID"] = payload.robot_id;
+    }
     const res = await fetch(`/api/dh360/knowledge/items/${id}`, {
       method: "PUT",
       headers,

@@ -19,8 +19,10 @@ import {
   X,
   CheckCircle2,
   AlertCircle,
+  Bot,
 } from "lucide-react";
 import { useRole } from "@/features/auth/use-role";
+import { useRobots } from "@/features/robots/use-robots";
 import {
   useCanonicalKnowledge,
   type CanonicalKnowledgeItem,
@@ -31,9 +33,11 @@ type ModeFilter = "all" | "university" | "clinic" | "general";
 export function KnowledgeBasePageContent() {
   const t = useTranslations("KnowledgeBase");
   const { role, loading: roleLoading } = useRole();
+  const { robots } = useRobots(role);
 
   const [search, setSearch] = useState("");
   const [selectedMode, setSelectedMode] = useState<ModeFilter>("all");
+  const [selectedRobot, setSelectedRobot] = useState("");
 
   const {
     items,
@@ -45,7 +49,7 @@ export function KnowledgeBasePageContent() {
     updateItem,
     deleteItem,
     syncRuntime,
-  } = useCanonicalKnowledge(search, selectedMode);
+  } = useCanonicalKnowledge(search, selectedMode, selectedRobot);
 
   // Form / Dialog state
   const [editingItem, setEditingItem] = useState<CanonicalKnowledgeItem | "new" | null>(null);
@@ -60,6 +64,7 @@ export function KnowledgeBasePageContent() {
   const [formQBn, setFormQBn] = useState("");
   const [formABn, setFormABn] = useState("");
   const [formMode, setFormMode] = useState<"university" | "clinic" | "general">("general");
+  const [formRobotId, setFormRobotId] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   // Open Edit Form
@@ -70,6 +75,7 @@ export function KnowledgeBasePageContent() {
     setFormQBn(item.question_bn);
     setFormABn(item.answer_bn);
     setFormMode(item.institution_type);
+    setFormRobotId(item.robot_id || "");
     setActionError(null);
   };
 
@@ -81,6 +87,7 @@ export function KnowledgeBasePageContent() {
     setFormQBn("");
     setFormABn("");
     setFormMode(selectedMode !== "all" ? selectedMode : "general");
+    setFormRobotId(selectedRobot || "");
     setActionError(null);
   };
 
@@ -110,6 +117,7 @@ export function KnowledgeBasePageContent() {
           question_bn: formQBn.trim(),
           answer_bn: formABn.trim(),
           institution_type: formMode,
+          robot_id: formRobotId || null,
         });
         setActionSuccess(t("itemAdded"));
       } else if (editingItem) {
@@ -119,6 +127,7 @@ export function KnowledgeBasePageContent() {
           question_bn: formQBn.trim(),
           answer_bn: formABn.trim(),
           institution_type: formMode,
+          robot_id: formRobotId || null,
         });
         setActionSuccess(t("itemUpdated"));
       }
@@ -169,14 +178,20 @@ export function KnowledgeBasePageContent() {
       if (selectedMode !== "all" && item.institution_type !== selectedMode) {
         return false;
       }
+      if (selectedRobot) {
+        // If a specific robot is chosen, show items scoped to that robot or shared items
+        if (item.robot_id && item.robot_id !== selectedRobot) {
+          return false;
+        }
+      }
       if (search.trim()) {
         const q = search.trim().toLowerCase();
-        const haystack = `${item.question_en} ${item.answer_en} ${item.question_bn} ${item.answer_bn}`.toLowerCase();
+        const haystack = `${item.question_en} ${item.answer_en} ${item.question_bn} ${item.answer_bn} ${item.robot_id ?? ""}`.toLowerCase();
         if (!haystack.includes(q)) return false;
       }
       return true;
     });
-  }, [items, selectedMode, search]);
+  }, [items, selectedMode, selectedRobot, search]);
 
   if (roleLoading) {
     return (
@@ -317,6 +332,25 @@ export function KnowledgeBasePageContent() {
           )}
         </div>
 
+        {/* Robot Selector for Assigned Robots */}
+        {robots.length > 0 && (
+          <div className="flex items-center gap-1.5 rounded-xl border border-sky-300 bg-white px-2.5 py-1.5 text-xs text-sky-900 shadow-sm">
+            <Bot className="size-3.5 text-sky-600" />
+            <select
+              value={selectedRobot}
+              onChange={(e) => setSelectedRobot(e.target.value)}
+              className="bg-transparent font-medium outline-none cursor-pointer"
+            >
+              <option value="">All Robots (Shared)</option>
+              {robots.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name} ({r.id})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {/* Mode Selector Tabs */}
         <div className="flex flex-wrap items-center gap-1.5 rounded-xl bg-slate-100 p-1 ring-1 ring-slate-200">
           {(["all", "university", "clinic", "general"] as const).map((m) => (
@@ -415,6 +449,16 @@ export function KnowledgeBasePageContent() {
                     {item.id}
                   </span>
                   {renderModeBadge(item.institution_type)}
+                  {item.robot_id ? (
+                    <span className="inline-flex items-center gap-1 rounded-xl bg-cyan-50 px-2 py-0.5 text-[11px] font-bold text-cyan-800 ring-1 ring-cyan-200">
+                      <Bot className="size-3" />
+                      {item.robot_id}
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 rounded-xl bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200">
+                      Shared
+                    </span>
+                  )}
                 </div>
 
                 {(role === "admin" || role === "superAdmin") && (
@@ -536,6 +580,28 @@ export function KnowledgeBasePageContent() {
                     <option value="clinic">{t("clinic")}</option>
                   </select>
                 </div>
+
+                {/* Target Robot Scope Selector */}
+                {robots.length > 0 && (
+                  <div>
+                    <label className="text-xs font-bold text-sky-950 flex items-center gap-1.5">
+                      <Bot className="size-3.5 text-sky-600" />
+                      Target Robot Scope
+                    </label>
+                    <select
+                      value={formRobotId}
+                      onChange={(e) => setFormRobotId(e.target.value)}
+                      className="mt-1 h-10 w-full rounded-xl border border-sky-200 bg-white px-3 text-sm text-sky-950 outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-200"
+                    >
+                      <option value="">All Assigned Robots (Shared Baseline)</option>
+                      {robots.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.name} ({r.id})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
                 {/* English Q&A Section */}
                 <div className="rounded-2xl border border-sky-100 bg-sky-50/40 p-4 space-y-3">

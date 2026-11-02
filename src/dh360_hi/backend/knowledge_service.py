@@ -398,6 +398,7 @@ class PublicFact:
     answer_bn: str
     institution_type: str = "general"
     tenant_id: str | None = None
+    robot_id: str | None = None
 
     def get_question(self, language: SupportedLanguage) -> str:
         """Return question in requested language with fallback."""
@@ -595,6 +596,7 @@ class KnowledgeService:
                         row_type = "university"
 
                     row_tenant = (row.get("tenant_id") or "").strip() or None
+                    row_robot = (row.get("robot_id") or "").strip() or None
 
                     # Only include rows that have at least one valid question and answer
                     # and match active institution type or general facts
@@ -610,6 +612,7 @@ class KnowledgeService:
                                 answer_bn=a_bn,
                                 institution_type=row_type,
                                 tenant_id=row_tenant,
+                                robot_id=row_robot,
                             )
                         )
             logger.info(
@@ -679,6 +682,7 @@ class KnowledgeService:
                         .strip()
                         .lower(),
                         "tenant_id": (row.get("tenant_id") or "").strip(),
+                        "robot_id": (row.get("robot_id") or "").strip(),
                     }
                 )
 
@@ -716,6 +720,7 @@ class KnowledgeService:
             "উত্তর (বাংলা)",
             "Institution Type",
             "tenant_id",
+            "robot_id",
         ]
         with open(temp_path, mode="w", encoding="utf-8-sig", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
@@ -756,6 +761,7 @@ class KnowledgeService:
         query: str | None = None,
         institution_type: str | None = None,
         tenant_id: str | None = None,
+        robot_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Return all raw knowledge facts with stable IDs and optional filtering."""
         with self._io_lock:
@@ -780,8 +786,24 @@ class KnowledgeService:
             facts: list[dict[str, Any]] = []
             for idx, row in enumerate(rows):
                 row_tenant = (row.get("tenant_id") or "").strip()
+                row_robot = (row.get("robot_id") or "").strip()
+
+                # Multi-tenant scoping: exclude other tenants' rows
                 if tenant_id and row_tenant and row_tenant != tenant_id:
                     continue
+
+                # Multi-robot scoping:
+                # If robot_id is provided, only return rows explicitly belonging to that robot,
+                # or shared institutional baseline rows (unassigned to tenant and unassigned to robot).
+                if robot_id:
+                    if row_robot and row_robot != robot_id:
+                        continue
+                    if row_tenant and not row_robot:
+                        # Private tenant fact unassigned to a robot: include if same tenant
+                        pass
+                elif row_robot and not tenant_id:
+                    # System query without tenant: preserve all
+                    pass
 
                 q_en = row.get("Question (English)", "")
                 a_en = row.get("Answer (English)", "")
@@ -814,6 +836,7 @@ class KnowledgeService:
                         "answer_bn": a_bn,
                         "institution_type": itype,
                         "tenant_id": row_tenant,
+                        "robot_id": row_robot,
                     }
                 )
             return facts
@@ -822,6 +845,7 @@ class KnowledgeService:
         self,
         item_id: str,
         tenant_id: str | None = None,
+        robot_id: str | None = None,
     ) -> dict[str, Any] | None:
         """Fetch a single knowledge entry by stable UUID ID or legacy index."""
         with self._io_lock:
@@ -843,14 +867,19 @@ class KnowledgeService:
                 return None
             r = rows[target_idx]
             row_tenant = (r.get("tenant_id") or "").strip()
+            row_robot = (r.get("robot_id") or "").strip()
             if tenant_id and row_tenant and row_tenant != tenant_id:
+                return None
+            if robot_id and row_robot and row_robot != robot_id:
                 return None
             itype = r.get("Institution Type", "general")
             if itype not in ("university", "clinic", "general"):
                 itype = (
                     "clinic"
-                    if itype in ("hospital", "healthcare")
-                    else ("university" if itype in ("academic", "campus") else "general")
+                    if itype in ("hospital", "healthcare", "medical")
+                    else (
+                        "university" if itype in ("academic", "campus", "education") else "general"
+                    )
                 )
             return {
                 "id": r.get("id") or str(uuid.uuid4()),
@@ -860,6 +889,8 @@ class KnowledgeService:
                 "question_bn": r.get("প্রশ্ন (বাংলা)", ""),
                 "answer_bn": r.get("উত্তর (বাংলা)", ""),
                 "institution_type": itype,
+                "tenant_id": row_tenant,
+                "robot_id": row_robot,
             }
 
     def add_fact(
@@ -870,6 +901,7 @@ class KnowledgeService:
         answer_bn: str = "",
         institution_type: str = "general",
         tenant_id: str | None = None,
+        robot_id: str | None = None,
     ) -> dict[str, Any]:
         """Add a new institutional fact with persistent UUID, persist to CSV, and reload memory."""
         q_en = (question_en or "").strip()
@@ -901,6 +933,7 @@ class KnowledgeService:
                 "উত্তর (বাংলা)": a_bn,
                 "Institution Type": itype,
                 "tenant_id": (tenant_id or "").strip(),
+                "robot_id": (robot_id or "").strip(),
             }
             rows.append(new_row)
             self._atomic_write_rows_unlocked(rows)
@@ -916,6 +949,7 @@ class KnowledgeService:
                 "answer_bn": a_bn,
                 "institution_type": itype,
                 "tenant_id": (tenant_id or "").strip(),
+                "robot_id": (robot_id or "").strip(),
             }
 
     def update_fact(
@@ -927,6 +961,7 @@ class KnowledgeService:
         answer_bn: str | None = None,
         institution_type: str | None = None,
         tenant_id: str | None = None,
+        robot_id: str | None = None,
     ) -> dict[str, Any]:
         """Update an existing knowledge entry by stable UUID ID, persist to CSV, and reload memory."""
         with self._io_lock:
@@ -937,6 +972,7 @@ class KnowledgeService:
 
             current = rows[idx]
             row_tenant = (current.get("tenant_id") or "").strip()
+            row_robot = (current.get("robot_id") or "").strip()
             if tenant_id:
                 if not row_tenant:
                     raise PermissionError(
@@ -944,6 +980,8 @@ class KnowledgeService:
                     )
                 if row_tenant != tenant_id:
                     raise KeyError(f"Knowledge item '{item_id}' not found.")
+            if robot_id and row_robot and row_robot != robot_id:
+                raise KeyError(f"Knowledge item '{item_id}' not found.")
 
             q_en = (
                 current.get("Question (English)", "")
@@ -975,6 +1013,7 @@ class KnowledgeService:
                 itype = current.get("Institution Type", "general")
 
             current_id = current.get("id") or str(uuid.uuid4())
+            final_robot = (robot_id if robot_id is not None else row_robot).strip()
             rows[idx] = {
                 "id": current_id,
                 "Question (English)": q_en,
@@ -983,6 +1022,7 @@ class KnowledgeService:
                 "উত্তর (বাংলা)": a_bn,
                 "Institution Type": itype,
                 "tenant_id": row_tenant or (tenant_id or "").strip(),
+                "robot_id": final_robot,
             }
             self._atomic_write_rows_unlocked(rows)
             self._load_public_facts_unlocked()
@@ -996,9 +1036,15 @@ class KnowledgeService:
                 "answer_bn": a_bn,
                 "institution_type": itype,
                 "tenant_id": rows[idx]["tenant_id"],
+                "robot_id": rows[idx]["robot_id"],
             }
 
-    def delete_fact(self, item_id: str, tenant_id: str | None = None) -> bool:
+    def delete_fact(
+        self,
+        item_id: str,
+        tenant_id: str | None = None,
+        robot_id: str | None = None,
+    ) -> bool:
         """Delete an existing knowledge entry by stable UUID ID from CSV and reload memory."""
         with self._io_lock:
             rows, _ = self._read_all_raw_rows_unlocked()
@@ -1007,6 +1053,7 @@ class KnowledgeService:
                 raise KeyError(f"Knowledge item '{item_id}' not found.")
 
             row_tenant = (rows[idx].get("tenant_id") or "").strip()
+            row_robot = (rows[idx].get("robot_id") or "").strip()
             if tenant_id:
                 if not row_tenant:
                     raise PermissionError(
@@ -1014,6 +1061,8 @@ class KnowledgeService:
                     )
                 if row_tenant != tenant_id:
                     raise KeyError(f"Knowledge item '{item_id}' not found.")
+            if robot_id and row_robot and row_robot != robot_id:
+                raise KeyError(f"Knowledge item '{item_id}' not found.")
 
             rows.pop(idx)
             self._atomic_write_rows_unlocked(rows)
@@ -1031,6 +1080,7 @@ class KnowledgeService:
         language: SupportedLanguage = "bn",
         max_results: int = 3,
         tenant_id: str | None = None,
+        robot_id: str | None = None,
     ) -> list[str]:
         """Search and format relevant public institutional facts for the given query.
 
@@ -1039,6 +1089,7 @@ class KnowledgeService:
             language: Target language ('bn' or 'en').
             max_results: Maximum number of matched facts to return.
             tenant_id: Optional tenant UUID for multi-tenant scoping.
+            robot_id: Optional robot ID for robot-specific scoping.
 
         Returns:
             List of formatted fact strings. Empty if no query or no matches found.
@@ -1049,7 +1100,14 @@ class KnowledgeService:
 
         scored_matches: list[tuple[int, PublicFact]] = []
         for fact in self._public_facts:
+            # Multi-tenant and multi-robot isolation:
             if tenant_id and fact.tenant_id and fact.tenant_id != tenant_id:
+                continue
+            if robot_id and fact.robot_id and fact.robot_id != robot_id:
+                continue
+            if fact.robot_id and not robot_id:
+                continue
+            if fact.tenant_id and not tenant_id:
                 continue
             # Tokenize meaningful text fields of the fact
             fact_tokens = (
@@ -1294,6 +1352,7 @@ class KnowledgeService:
         auth_session: AuthorizationSession | None = None,
         requested_person_id: str | None = None,
         tenant_id: str | None = None,
+        robot_id: str | None = None,
     ) -> str:
         """Construct unified filtered context string for language model prompt assembly.
 
@@ -1303,8 +1362,10 @@ class KnowledgeService:
         """
         context_blocks: list[str] = []
 
-        # 1. Public institutional facts (accessible to all, filtered by tenant)
-        public_facts = self.get_public_facts(query, language=language, tenant_id=tenant_id)
+        # 1. Public institutional facts (accessible to all, filtered by tenant & robot)
+        public_facts = self.get_public_facts(
+            query, language=language, tenant_id=tenant_id, robot_id=robot_id
+        )
         if public_facts:
             header = "প্রাতিষ্ঠানিক তথ্য:" if language == "bn" else "Institutional Facts:"
             context_blocks.append(f"{header}\n" + "\n---\n".join(public_facts))

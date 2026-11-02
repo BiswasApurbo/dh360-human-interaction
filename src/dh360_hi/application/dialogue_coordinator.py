@@ -43,6 +43,7 @@ import logging
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from dh360_hi.contracts.dialogue import (
@@ -112,7 +113,98 @@ class DialogueCoordinator:
         self._session_state: DialogueSessionState | None = None
         self._subscription_ids: list[int] = []
 
+        # Kiosk and voice interaction runtime state
+        self._is_microphone_muted: bool = False
+        self._current_state: str = "idle"
+        self._last_user_query: str = ""
+        self._last_robot_response: str = ""
+        self._state_callbacks: list[Callable[[str, dict[str, Any]], None]] = []
+
         self._subscribe_events()
+
+    # ------------------------------------------------------------------
+    # Properties & Kiosk State
+    # ------------------------------------------------------------------
+
+    @property
+    def current_state(self) -> str:
+        """Current interaction state (idle, listening, thinking, speaking, muted, interrupted, error)."""
+        with self._state_lock:
+            if self._is_microphone_muted:
+                return "muted"
+            return self._current_state
+
+    @property
+    def is_microphone_muted(self) -> bool:
+        """Whether microphone audio recording is currently muted."""
+        with self._state_lock:
+            return self._is_microphone_muted
+
+    @property
+    def last_user_query(self) -> str:
+        """Most recent transcribed or received user prompt text."""
+        with self._state_lock:
+            return self._last_user_query
+
+    @property
+    def last_robot_response(self) -> str:
+        """Most recent generated or spoken robot response text."""
+        with self._state_lock:
+            return self._last_robot_response
+
+    def register_state_callback(self, callback: Callable[[str, dict[str, Any]], None]) -> None:
+        """Register a listener invoked when interaction state changes."""
+        with self._state_lock:
+            if callback not in self._state_callbacks:
+                self._state_callbacks.append(callback)
+
+    def unregister_state_callback(self, callback: Callable[[str, dict[str, Any]], None]) -> None:
+        """Unregister a previously registered state listener."""
+        with self._state_lock:
+            if callback in self._state_callbacks:
+                self._state_callbacks.remove(callback)
+
+    def _set_state(self, state: str, **metadata: Any) -> None:
+        """Update current interaction state and notify registered listeners."""
+        with self._state_lock:
+            self._current_state = state
+            callbacks = list(self._state_callbacks)
+        for cb in callbacks:
+            try:
+                cb(state, metadata)
+            except Exception as exc:
+                logger.debug("DialogueCoordinator: state callback error: %s", exc)
+
+    def mute_microphone(self) -> bool:
+        """Mute microphone input and update state."""
+        with self._state_lock:
+            self._is_microphone_muted = True
+        if self._stt_provider is not None:
+            with contextlib.suppress(Exception):
+                self._stt_provider.hold()
+        self._set_state("muted")
+        logger.info("DialogueCoordinator: microphone muted")
+        return True
+
+    def unmute_microphone(self) -> bool:
+        """Unmute microphone input and restore idle state."""
+        with self._state_lock:
+            self._is_microphone_muted = False
+        if self._stt_provider is not None:
+            with contextlib.suppress(Exception):
+                self._stt_provider.release()
+        self._set_state("idle")
+        logger.info("DialogueCoordinator: microphone unmuted")
+        return False
+
+    def toggle_microphone_mute(self) -> bool:
+        """Toggle microphone mute status."""
+        with self._state_lock:
+            currently_muted = self._is_microphone_muted
+        if currently_muted:
+            return self.unmute_microphone()
+        else:
+            return self.mute_microphone()
 
     # ------------------------------------------------------------------
     # Properties
@@ -307,6 +399,7 @@ class DialogueCoordinator:
 
     def interrupt(self) -> None:
         """Abort active speech synthesis playback and microphone listening immediately."""
+        self._set_state("interrupted")
         if self._tts_provider is not None:
             with contextlib.suppress(Exception):
                 self._tts_provider.interrupt()
@@ -315,6 +408,14 @@ class DialogueCoordinator:
                 if hasattr(self._stt_provider, "interrupt"):
                     self._stt_provider.interrupt()
                 self._stt_provider.release()
+
+        def _reset_interrupted_state() -> None:
+            time.sleep(1.2)
+            with self._state_lock:
+                target_state = "muted" if self._is_microphone_muted else "idle"
+            self._set_state(target_state)
+
+        threading.Thread(target=_reset_interrupted_state, daemon=True).start()
 
     def revoke_authorization(self) -> None:
         """Explicitly revoke authorization, clear private history, and abort audio."""
@@ -336,6 +437,7 @@ class DialogueCoordinator:
         blocking_tts: bool = False,
         now: float | None = None,
         tenant_id: str | None = None,
+        robot_id: str | None = None,
     ) -> DialogueTurn:
         """Execute a full dialogue exchange turn synchronously.
 
@@ -348,51 +450,85 @@ class DialogueCoordinator:
         6. Synthesize speech via TTSProvider (preserving text response on failure).
         7. Safely commit model turn to history under lock if session unchanged (Fix F-02).
         """
-        base_lang = language or self._default_language
-        if base_lang not in VALID_LANGUAGES:
-            base_lang = "bn"
+        active_robot = None
+        try:
+            from dh360_hi.backend.robot_registry import RobotRegistry
 
-        # Explicit user language request takes precedence over selector
-        target_lang = base_lang
-        if user_text:
-            text_lower = user_text.lower()
-            if any(
-                p in text_lower
-                for p in (
-                    "in english",
-                    "answer in english",
-                    "speak in english",
-                    "reply in english",
-                    "please answer in english",
-                    "ইংরেজিতে বলো",
-                    "ইংরেজিতে বলুন",
-                    "ইংলিশে বলো",
-                )
-            ):
-                target_lang = "en"
-            elif any(
-                p in text_lower
-                for p in (
-                    "in bangla",
-                    "in bengali",
-                    "answer in bangla",
-                    "speak in bangla",
-                    "please answer in bangla",
-                    "বাংলায় বলো",
-                    "বাংলায় বলুন",
-                    "বাংলায় উত্তর দাও",
-                )
-            ):
-                target_lang = "bn"
+            active_robot = RobotRegistry.get_instance().get_active_robot()
+        except Exception:
+            pass
+
+        effective_robot_id = robot_id or (active_robot.robot_id if active_robot else None)
+        effective_tenant_id = tenant_id or (active_robot.tenant_id if active_robot else None)
+        robot_lang: SupportedLanguage = (
+            active_robot.language
+            if (active_robot and active_robot.language in VALID_LANGUAGES)
+            else self._default_language
+        )
+
+        # Enforce robot's authoritative response language
+        if language is None:
+            target_lang: SupportedLanguage = robot_lang
+        else:
+            base_lang = language or self._default_language
+            if base_lang not in VALID_LANGUAGES:
+                base_lang = "bn"
+            target_lang = base_lang
+            if user_text:
+                text_lower = user_text.lower()
+                if any(
+                    p in text_lower
+                    for p in (
+                        "in english",
+                        "answer in english",
+                        "speak in english",
+                        "reply in english",
+                        "please answer in english",
+                        "ইংরেজিতে বলো",
+                        "ইংরেজিতে বলুন",
+                        "ইংলিশে বলো",
+                    )
+                ):
+                    target_lang = "en"
+                elif any(
+                    p in text_lower
+                    for p in (
+                        "in bangla",
+                        "in bengali",
+                        "answer in bangla",
+                        "speak in bangla",
+                        "please answer in bangla",
+                        "বাংলায় বলো",
+                        "বাংলায় বলুন",
+                        "বাংলায় উত্তর দাও",
+                    )
+                ):
+                    target_lang = "bn"
 
         # Fix F-02: Serialize turn execution to prevent concurrent interleaving
         with self._turn_lock:
-            # 1. Obtain input text (STT transcription or direct text)
+            # 1. Check microphone mute state for voice turns
+            if user_text is None and self.is_microphone_muted:
+                muted_msg = (
+                    "মাইক্রোফোন মিউট করা আছে।"
+                    if target_lang == "bn"
+                    else "Microphone is currently muted."
+                )
+                self._set_state("muted")
+                return DialogueTurn(
+                    role="model",
+                    text=muted_msg,
+                    language=target_lang,
+                    metadata={"error": "MICROPHONE_MUTED"},
+                )
+
+            # 2. Obtain input text (STT transcription or direct text)
             prompt_text = (user_text or "").strip() if user_text is not None else None
 
             if prompt_text is None:
                 if self._stt_provider is None:
                     fallback = get_fallback_message("stt_error", target_lang)
+                    self._set_state("error", error="STT_UNAVAILABLE")
                     return DialogueTurn(
                         role="model",
                         text=fallback,
@@ -400,11 +536,13 @@ class DialogueCoordinator:
                         metadata={"error": "STT_UNAVAILABLE"},
                     )
 
+                self._set_state("listening")
                 try:
                     transcription = self._stt_provider.listen_utterance(language_hint=target_lang)
                     prompt_text = (transcription or "").strip()
                 except ProviderNetworkError as exc:
                     fallback = get_fallback_message("network_error", target_lang)
+                    self._set_state("error", error=exc.code)
                     return DialogueTurn(
                         role="model",
                         text=fallback,
@@ -413,6 +551,7 @@ class DialogueCoordinator:
                     )
                 except (STTProviderError, ProviderError) as exc:
                     fallback = get_fallback_message("stt_error", target_lang)
+                    self._set_state("error", error=exc.code)
                     return DialogueTurn(
                         role="model",
                         text=fallback,
@@ -422,6 +561,7 @@ class DialogueCoordinator:
                 except Exception as exc:
                     logger.exception("DialogueCoordinator: unhandled error in STT: %s", exc)
                     fallback = get_fallback_message("stt_error", target_lang)
+                    self._set_state("error", error="STT_ERROR")
                     return DialogueTurn(
                         role="model",
                         text=fallback,
@@ -431,12 +571,17 @@ class DialogueCoordinator:
 
             if not prompt_text:
                 fallback = get_fallback_message("stt_error", target_lang)
+                self._set_state("idle")
                 return DialogueTurn(
                     role="model",
                     text=fallback,
                     language=target_lang,
                     metadata={"error": "EMPTY_UTTERANCE"},
                 )
+
+            with self._state_lock:
+                self._last_user_query = prompt_text
+            self._set_state("thinking", user_text=prompt_text)
 
             # 2. Check fresh authorization snapshot and obtain isolated session history
             active_auth: AuthorizationSession | None = None
@@ -523,7 +668,8 @@ class DialogueCoordinator:
                 language=target_lang,
                 auth_session=active_auth,
                 requested_person_id=requested_person_id,
-                tenant_id=tenant_id,
+                tenant_id=effective_tenant_id,
+                robot_id=effective_robot_id,
             )
 
             # Direct deterministic resolution (identity/purpose and direct profile queries)
@@ -736,6 +882,7 @@ class DialogueCoordinator:
             metadata["speak_response"] = bool(should_speak)
 
             if should_speak and self._tts_provider is not None:
+                self._set_state("speaking", response_text=response_text)
                 if self._stt_provider is not None:
                     with contextlib.suppress(Exception):
                         self._stt_provider.hold()
@@ -766,12 +913,17 @@ class DialogueCoordinator:
             )
 
             with self._state_lock:
+                self._last_robot_response = response_text
                 if (
                     self._session_state is not None
                     and self._session_state.session_id == originating_session_id
                     and self._session_state.person_id == originating_person_id
                 ):
                     self._session_state.add_turn(model_turn, now=now)
+                final_state = (
+                    "muted" if self._is_microphone_muted else ("error" if error_code else "idle")
+                )
+            self._set_state(final_state)
 
             return model_turn
 
@@ -783,6 +935,7 @@ class DialogueCoordinator:
         blocking_tts: bool = False,
         now: float | None = None,
         tenant_id: str | None = None,
+        robot_id: str | None = None,
     ) -> DialogueTurn:
         """Asynchronously execute a dialogue turn, offloading synchronous providers to a thread.
 
@@ -797,4 +950,5 @@ class DialogueCoordinator:
             blocking_tts=blocking_tts,
             now=now,
             tenant_id=tenant_id,
+            robot_id=robot_id,
         )

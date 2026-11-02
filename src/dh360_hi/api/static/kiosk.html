@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>KBCON Humanoid Display</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+    }
+
+    body {
+      background: radial-gradient(circle at center, #0a0f1d 0%, #030509 100%);
+      color: #e2e8f0;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ==========================================================================
+       UPPER 80%: Robot Face & Touch Zones
+       ========================================================================== */
+    .face-container {
+      flex: 8;
+      height: 80vh;
+      width: 100%;
+      position: relative;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      overflow: hidden;
+    }
+
+    /* Touch Interaction Zones */
+    .touch-zone {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 50%;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      align-items: center;
+      padding-bottom: 2rem;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .touch-zone-left {
+      left: 0;
+      border-right: 1px dashed rgba(255, 255, 255, 0.04);
+    }
+
+    .touch-zone-right {
+      right: 0;
+    }
+
+    .touch-hint-pill {
+      font-size: 0.85rem;
+      font-weight: 500;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      padding: 0.4rem 1rem;
+      border-radius: 9999px;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: rgba(255, 255, 255, 0.4);
+      pointer-events: none;
+      transition: all 0.2s ease;
+    }
+
+    .touch-zone:active .touch-hint-pill {
+      background: rgba(56, 189, 248, 0.2);
+      border-color: rgba(56, 189, 248, 0.5);
+      color: #38bdf8;
+      transform: scale(0.96);
+    }
+
+    /* Ripple Animation on Touch */
+    .ripple-effect {
+      position: absolute;
+      border-radius: 50%;
+      transform: scale(0);
+      animation: ripple 0.6s cubic-bezier(0.1, 0.8, 0.3, 1);
+      pointer-events: none;
+      z-index: 20;
+    }
+
+    @keyframes ripple {
+      to {
+        transform: scale(4);
+        opacity: 0;
+      }
+    }
+
+    /* Animated Robot Eyes */
+    .eyes-wrapper {
+      position: relative;
+      display: flex;
+      gap: 7rem;
+      align-items: center;
+      justify-content: center;
+      z-index: 5;
+      transition: transform 0.3s ease;
+    }
+
+    .eye {
+      position: relative;
+      width: 140px;
+      height: 190px;
+      background: #00e5ff;
+      border-radius: 70px;
+      box-shadow: 
+        0 0 40px #00e5ff,
+        0 0 90px rgba(0, 229, 255, 0.5),
+        inset 0 0 25px rgba(255, 255, 255, 0.8);
+      transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+      overflow: hidden;
+    }
+
+    .eye-glint {
+      position: absolute;
+      top: 25px;
+      right: 30px;
+      width: 34px;
+      height: 34px;
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 50%;
+      filter: blur(1px);
+    }
+
+    .eyelid-upper, .eyelid-lower {
+      position: absolute;
+      left: 0;
+      right: 0;
+      background: #030509;
+      transition: height 0.15s ease-in-out;
+      z-index: 2;
+    }
+
+    .eyelid-upper {
+      top: 0;
+      height: 0%;
+      border-bottom: 2px solid rgba(0, 229, 255, 0.2);
+    }
+
+    .eyelid-lower {
+      bottom: 0;
+      height: 0%;
+      border-top: 2px solid rgba(0, 229, 255, 0.2);
+    }
+
+    /* Eye Expression States */
+    /* Idle Blink */
+    .eye.blink .eyelid-upper,
+    .eye.blink .eyelid-lower {
+      height: 50%;
+    }
+
+    /* Listening */
+    .state-listening .eye {
+      background: #38bdf8;
+      box-shadow: 
+        0 0 60px #38bdf8,
+        0 0 120px rgba(56, 189, 248, 0.7),
+        inset 0 0 30px #ffffff;
+      transform: scale(1.08);
+      animation: listening-pulse 1.8s infinite alternate ease-in-out;
+    }
+
+    @keyframes listening-pulse {
+      0% { transform: scale(1.04); }
+      100% { transform: scale(1.14); }
+    }
+
+    /* Thinking */
+    .state-thinking .eyes-wrapper {
+      transform: translateY(-20px) rotate(-3deg);
+    }
+
+    .state-thinking .eye {
+      background: #a855f7;
+      box-shadow: 
+        0 0 50px #a855f7,
+        0 0 100px rgba(168, 85, 247, 0.6),
+        inset 0 0 30px #ffffff;
+      animation: thinking-glance 2.5s infinite ease-in-out;
+    }
+
+    @keyframes thinking-glance {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-12px); }
+    }
+
+    /* Speaking */
+    .state-speaking .eye {
+      background: #00f2fe;
+      border-radius: 65px;
+      box-shadow: 
+        0 0 55px #00f2fe,
+        0 0 110px rgba(0, 242, 254, 0.7),
+        inset 0 0 30px #ffffff;
+      animation: speaking-bounce 0.6s infinite alternate cubic-bezier(0.4, 0, 0.6, 1);
+    }
+
+    @keyframes speaking-bounce {
+      0% { height: 180px; transform: scaleY(0.95); }
+      100% { height: 210px; transform: scaleY(1.05); }
+    }
+
+    /* Muted */
+    .state-muted .eye {
+      background: #f59e0b;
+      box-shadow: 
+        0 0 35px #f59e0b,
+        0 0 70px rgba(245, 158, 11, 0.4),
+        inset 0 0 20px #ffffff;
+      height: 40px;
+      border-radius: 20px;
+    }
+
+    /* Interrupted */
+    .state-interrupted .eye {
+      background: #ec4899;
+      box-shadow: 
+        0 0 70px #ec4899,
+        0 0 130px rgba(236, 72, 153, 0.8),
+        inset 0 0 35px #ffffff;
+      transform: scale(0.9);
+      animation: interrupt-shake 0.3s ease-in-out 2;
+    }
+
+    @keyframes interrupt-shake {
+      0%, 100% { transform: translateX(0); }
+      25% { transform: translateX(-8px); }
+      75% { transform: translateX(8px); }
+    }
+
+    /* Error */
+    .state-error .eye {
+      background: #ef4444;
+      box-shadow: 
+        0 0 45px #ef4444,
+        0 0 90px rgba(239, 68, 68, 0.5),
+        inset 0 0 25px #ffffff;
+    }
+
+    /* Toast Notification */
+    .toast-pill {
+      position: absolute;
+      top: 2.5rem;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      color: #38bdf8;
+      padding: 0.6rem 1.6rem;
+      border-radius: 9999px;
+      font-size: 1.05rem;
+      font-weight: 600;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      opacity: 0;
+      transform: translateY(-10px);
+      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 100;
+      pointer-events: none;
+    }
+
+    .toast-pill.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* ==========================================================================
+       LOWER 20%: Status Bar, Identity, and Subtitles
+       ========================================================================== */
+    .status-container {
+      flex: 2;
+      height: 20vh;
+      width: 100%;
+      background: rgba(10, 15, 29, 0.95);
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 1rem 2rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      backdrop-filter: blur(12px);
+      z-index: 30;
+    }
+
+    .status-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+    }
+
+    .robot-meta {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.3rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    .badge-robot {
+      background: rgba(30, 41, 59, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #94a3b8;
+    }
+
+    .badge-mode {
+      background: rgba(14, 165, 233, 0.15);
+      border: 1px solid rgba(14, 165, 233, 0.3);
+      color: #38bdf8;
+    }
+
+    .badge-auth-active {
+      background: rgba(34, 197, 94, 0.15);
+      border: 1px solid rgba(34, 197, 94, 0.35);
+      color: #4ade80;
+    }
+
+    .badge-auth-guest {
+      background: rgba(100, 116, 139, 0.15);
+      border: 1px solid rgba(100, 116, 139, 0.25);
+      color: #94a3b8;
+    }
+
+    .state-indicator {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-weight: 700;
+      font-size: 1.05rem;
+      letter-spacing: 0.03em;
+    }
+
+    .state-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #00e5ff;
+      box-shadow: 0 0 10px #00e5ff;
+      animation: pulse-dot 2s infinite ease-in-out;
+    }
+
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.8); }
+    }
+
+    /* Subtitle & Transcript Display */
+    .transcript-box {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      margin: 0.4rem 0;
+      overflow: hidden;
+    }
+
+    .subtitle-text {
+      font-size: 1.15rem;
+      line-height: 1.4;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: #f8fafc;
+      font-weight: 500;
+    }
+
+    .subtitle-text.user-speech {
+      color: #94a3b8;
+      font-size: 0.95rem;
+    }
+
+    .subtitle-text.robot-speech {
+      color: #38bdf8;
+      font-weight: 600;
+    }
+
+    .status-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.8rem;
+      color: #64748b;
+      border-top: 1px solid rgba(255, 255, 255, 0.04);
+      padding-top: 0.4rem;
+    }
+
+    .connection-status {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .connection-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #22c55e;
+    }
+
+    .connection-dot.offline {
+      background: #f59e0b;
+      box-shadow: 0 0 8px #f59e0b;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ==========================================================================
+       UPPER 80%: Robot Face & Touch Controls
+       ========================================================================== -->
+  <div class="face-container" id="face-container">
+    
+    <!-- Toast Feedback -->
+    <div class="toast-pill" id="toast-pill">Microphone Muted</div>
+
+    <!-- Left 50% Touch Area: Mute Toggle -->
+    <div class="touch-zone touch-zone-left" id="touch-left">
+      <div class="touch-hint-pill" id="hint-mute">Mute Microphone</div>
+    </div>
+
+    <!-- Right 50% Touch Area: Interrupt Speech -->
+    <div class="touch-zone touch-zone-right" id="touch-right">
+      <div class="touch-hint-pill" id="hint-interrupt">Interrupt Speech</div>
+    </div>
+
+    <!-- Animated Expressive Robot Eyes -->
+    <div class="eyes-wrapper" id="eyes-wrapper">
+      <div class="eye" id="eye-left">
+        <div class="eyelid-upper"></div>
+        <div class="eyelid-lower"></div>
+        <div class="eye-glint"></div>
+      </div>
+      <div class="eye" id="eye-right">
+        <div class="eyelid-upper"></div>
+        <div class="eyelid-lower"></div>
+        <div class="eye-glint"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==========================================================================
+       LOWER 20%: Status Bar, Authorization, and Transcript
+       ========================================================================== -->
+  <div class="status-container">
+    <div class="status-header">
+      <div class="robot-meta">
+        <span class="badge badge-robot" id="badge-robot-id">KB001</span>
+        <span class="badge badge-mode" id="badge-mode">Education</span>
+        <span class="badge badge-auth-guest" id="badge-auth">👤 Guest</span>
+      </div>
+      <div class="state-indicator">
+        <div class="state-dot" id="state-dot"></div>
+        <span id="state-label">Idle</span>
+      </div>
+    </div>
+
+    <div class="transcript-box">
+      <div class="subtitle-text user-speech" id="subtitle-user"></div>
+      <div class="subtitle-text robot-speech" id="subtitle-robot">Hello, I'm KBCON. How may I help you?</div>
+    </div>
+
+    <div class="status-footer">
+      <span id="footer-instructions">Tap left to Mute/Unmute • Tap right to Interrupt</span>
+      <div class="connection-status">
+        <div class="connection-dot" id="connection-dot"></div>
+        <span id="connection-label">Connected</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // State management & Localizations
+    const STRINGS = {
+      bn: {
+        idle: "অপেক্ষারত",
+        listening: "শুনছি...",
+        thinking: "ভাবছি...",
+        speaking: "কথা বলছি...",
+        muted: "মিউট করা",
+        interrupted: "কথা থামানো হয়েছে",
+        error: "ত্রুটি",
+        connecting: "সংযোগ স্থাপন করা হচ্ছে...",
+        guest: "👤 অতিথি",
+        authorized: "👤 {name} (অনুমোদিত)",
+        muteTap: "মাইক্রোফোন মিউট / চালু",
+        interruptTap: "কথা থামান",
+        mutedToast: "মাইক্রোফোন মিউট করা হয়েছে",
+        unmutedToast: "মাইক্রোফোন চালু করা হয়েছে",
+        interruptedToast: "কথা থামানো হয়েছে",
+        footer: "বাম পাশে স্পর্শ: মিউট • ডান পাশে স্পর্শ: কথা থামান",
+        modeEducation: "শিক্ষা",
+        modeHealthcare: "স্বাস্থ্যসেবা",
+        connected: "সংযুক্ত",
+        reconnecting: "পুনরায় সংযোগ..."
+      },
+      en: {
+        idle: "Idle",
+        listening: "Listening...",
+        thinking: "Thinking...",
+        speaking: "Speaking...",
+        muted: "Muted",
+        interrupted: "Interrupted",
+        error: "Error",
+        connecting: "Connecting...",
+        guest: "👤 Guest",
+        authorized: "👤 {name} (Authorized)",
+        muteTap: "Mute / Unmute",
+        interruptTap: "Interrupt",
+        mutedToast: "Microphone Muted",
+        unmutedToast: "Microphone Active",
+        interruptedToast: "Speech Interrupted",
+        footer: "Tap left to Mute • Tap right to Interrupt",
+        modeEducation: "Education",
+        modeHealthcare: "Healthcare",
+        connected: "Connected",
+        reconnecting: "Reconnecting..."
+      }
+    };
+
+    let currentState = {
+      robot_id: "KB001",
+      name: "KBCON Humanoid",
+      language: "bn",
+      mode: "education",
+      state: "idle",
+      is_authorized: false,
+      display_name: null,
+      is_muted: false,
+      last_user_query: "",
+      last_robot_response: ""
+    };
+
+    let toastTimeout = null;
+
+    function showToast(message) {
+      const toast = document.getElementById("toast-pill");
+      toast.textContent = message;
+      toast.classList.add("visible");
+      if (toastTimeout) clearTimeout(toastTimeout);
+      toastTimeout = setTimeout(() => {
+        toast.classList.remove("visible");
+      }, 1600);
+    }
+
+    function createRipple(event, parent) {
+      const rect = parent.getBoundingClientRect();
+      const x = (event.clientX || (event.touches && event.touches[0].clientX)) - rect.left;
+      const y = (event.clientY || (event.touches && event.touches[0].clientY)) - rect.top;
+
+      const ripple = document.createElement("div");
+      ripple.className = "ripple-effect";
+      ripple.style.left = `${x}px`;
+      ripple.style.top = `${y}px`;
+      ripple.style.width = "50px";
+      ripple.style.height = "50px";
+      ripple.style.background = parent.id === "touch-left" ? "rgba(245, 158, 11, 0.4)" : "rgba(236, 72, 153, 0.4)";
+      parent.appendChild(ripple);
+
+      setTimeout(() => ripple.remove(), 600);
+    }
+
+    function renderUI() {
+      const lang = currentState.language === "en" ? "en" : "bn";
+      const s = STRINGS[lang];
+
+      // Update robot meta
+      document.getElementById("badge-robot-id").textContent = currentState.robot_id;
+      const modeEl = document.getElementById("badge-mode");
+      modeEl.textContent = currentState.mode === "healthcare" ? s.modeHealthcare : s.modeEducation;
+
+      // Update Auth badge
+      const authEl = document.getElementById("badge-auth");
+      if (currentState.is_authorized && currentState.display_name) {
+        authEl.className = "badge badge-auth-active";
+        authEl.textContent = s.authorized.replace("{name}", currentState.display_name);
+      } else {
+        authEl.className = "badge badge-auth-guest";
+        authEl.textContent = s.guest;
+      }
+
+      // Update Hints
+      document.getElementById("hint-mute").textContent = s.muteTap;
+      document.getElementById("hint-interrupt").textContent = s.interruptTap;
+      document.getElementById("footer-instructions").textContent = s.footer;
+
+      // Update State Badge & Face Animation
+      const faceContainer = document.getElementById("face-container");
+      const stateLabel = document.getElementById("state-label");
+      const stateDot = document.getElementById("state-dot");
+
+      // Reset classes
+      faceContainer.className = "face-container";
+
+      const effectiveState = currentState.is_muted ? "muted" : (currentState.state || "idle");
+      faceContainer.classList.add(`state-${effectiveState}`);
+      stateLabel.textContent = s[effectiveState] || effectiveState;
+
+      // Update Transcript
+      if (currentState.last_user_query) {
+        document.getElementById("subtitle-user").textContent = `🗣️ "${currentState.last_user_query}"`;
+      } else {
+        document.getElementById("subtitle-user").textContent = "";
+      }
+
+      if (currentState.last_robot_response) {
+        document.getElementById("subtitle-robot").textContent = currentState.last_robot_response;
+      }
+    }
+
+    // Natural Eye Blinking loop
+    function scheduleNextBlink() {
+      const delay = Math.random() * 3500 + 2000;
+      setTimeout(() => {
+        if (!currentState.is_muted && currentState.state !== "speaking") {
+          const eyeL = document.getElementById("eye-left");
+          const eyeR = document.getElementById("eye-right");
+          eyeL.classList.add("blink");
+          eyeR.classList.add("blink");
+          setTimeout(() => {
+            eyeL.classList.remove("blink");
+            eyeR.classList.remove("blink");
+            scheduleNextBlink();
+          }, 160);
+        } else {
+          scheduleNextBlink();
+        }
+      }, delay);
+    }
+    scheduleNextBlink();
+
+    // Touch Handlers
+    const touchLeft = document.getElementById("touch-left");
+    const touchRight = document.getElementById("touch-right");
+
+    touchLeft.addEventListener("pointerdown", async (e) => {
+      createRipple(e, touchLeft);
+      try {
+        const resp = await fetch("/kiosk/mute", { method: "POST" });
+        if (resp.ok) {
+          const data = await resp.json();
+          currentState.is_muted = data.is_muted;
+          const lang = currentState.language === "en" ? "en" : "bn";
+          showToast(data.is_muted ? STRINGS[lang].mutedToast : STRINGS[lang].unmutedToast);
+          renderUI();
+        }
+      } catch (err) {
+        console.error("Mute error:", err);
+      }
+    });
+
+    touchRight.addEventListener("pointerdown", async (e) => {
+      createRipple(e, touchRight);
+      try {
+        const resp = await fetch("/kiosk/interrupt", { method: "POST" });
+        if (resp.ok) {
+          const lang = currentState.language === "en" ? "en" : "bn";
+          showToast(STRINGS[lang].interruptedToast);
+          currentState.state = "interrupted";
+          renderUI();
+        }
+      } catch (err) {
+        console.error("Interrupt error:", err);
+      }
+    });
+
+    // Server-Sent Events (SSE) with Auto-reconnection
+    let eventSource = null;
+
+    function connectSSE() {
+      if (eventSource) {
+        eventSource.close();
+      }
+
+      const connDot = document.getElementById("connection-dot");
+      const connLabel = document.getElementById("connection-label");
+
+      eventSource = new EventSource("/kiosk/events");
+
+      eventSource.onopen = () => {
+        connDot.className = "connection-dot";
+        const lang = currentState.language === "en" ? "en" : "bn";
+        connLabel.textContent = STRINGS[lang].connected;
+      };
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          currentState = Object.assign(currentState, data);
+          renderUI();
+        } catch (err) {
+          console.error("Error parsing event data:", err);
+        }
+      };
+
+      eventSource.onerror = () => {
+        connDot.className = "connection-dot offline";
+        const lang = currentState.language === "en" ? "en" : "bn";
+        connLabel.textContent = STRINGS[lang].reconnecting;
+        eventSource.close();
+        setTimeout(connectSSE, 2000);
+      };
+    }
+
+    // Initial fetch and start SSE
+    fetch("/kiosk/state")
+      .then(res => res.json())
+      .then(data => {
+        currentState = Object.assign(currentState, data);
+        renderUI();
+      })
+      .catch(err => {
+        console.warn("Initial state fetch error; waiting for SSE:", err);
+      })
+      .finally(() => {
+        connectSSE();
+      });
+  </script>
+</body>
+</html>
