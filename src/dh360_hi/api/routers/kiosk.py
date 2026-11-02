@@ -197,16 +197,18 @@ async def stream_kiosk_events(request: Request) -> StreamingResponse:
     loop = asyncio.get_running_loop()
 
     def _state_listener(new_state: str, metadata: dict[str, Any]) -> None:
-        snapshot = _get_current_kiosk_state(request)
-        snapshot["state"] = new_state
-        if "user_text" in metadata:
-            snapshot["last_user_query"] = metadata["user_text"]
-        if "response_text" in metadata:
-            snapshot["last_robot_response"] = metadata["response_text"]
-        with asyncio.CancelledError:
+        try:
+            snapshot = _get_current_kiosk_state(request)
+            snapshot["state"] = new_state
+            if "user_text" in metadata:
+                snapshot["last_user_query"] = metadata["user_text"]
+            if "response_text" in metadata:
+                snapshot["last_robot_response"] = metadata["response_text"]
             loop.call_soon_threadsafe(
                 lambda: event_queue.put_nowait(snapshot) if not event_queue.full() else None
             )
+        except Exception as exc:
+            logger.debug("Kiosk event queue error: %s", exc)
 
     if coord is not None:
         coord.register_state_callback(_state_listener)
