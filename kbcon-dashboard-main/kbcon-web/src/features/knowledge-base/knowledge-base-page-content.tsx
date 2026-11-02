@@ -186,6 +186,22 @@ export function KnowledgeBasePageContent() {
     );
   }
 
+  if (role === "superAdmin") {
+    return (
+      <div className="flex items-start gap-3 rounded-2xl bg-amber-50 p-6 text-sm text-amber-900 ring-1 ring-amber-200">
+        <ShieldAlert className="size-6 shrink-0 text-amber-600 mt-0.5" />
+        <div>
+          <h3 className="font-bold text-base text-amber-950 mb-1">
+            Access Restricted to Super Admin
+          </h3>
+          <p className="text-amber-800 leading-relaxed">
+            Super Admins are restricted from accessing tenant-private Knowledge Base records. Company/tenant knowledge is managed exclusively by designated tenant Admins.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (!role) {
     return (
       <div className="flex items-center gap-2 rounded-2xl bg-red-50 p-4 text-sm text-red-700 ring-1 ring-red-200">

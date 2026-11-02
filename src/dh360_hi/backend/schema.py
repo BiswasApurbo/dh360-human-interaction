@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 SCHEMA_V1_SQL = """
 -- Schema Version Tracking
@@ -88,6 +88,14 @@ CREATE TABLE IF NOT EXISTS system_settings (
 );
 """
 
+SCHEMA_V5_SQL = """
+-- Migration v5: Multi-Tenant Architecture: tenant_id and robot_id columns on persons table
+ALTER TABLE persons ADD COLUMN tenant_id TEXT;
+ALTER TABLE persons ADD COLUMN robot_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_persons_tenant_id ON persons(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_persons_robot_id ON persons(robot_id);
+"""
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, str]] = {
     1: (SCHEMA_V1_SQL, "Initial schema: persons, face_embeddings, and indices with cascade delete"),
     2: (SCHEMA_V2_SQL, "Schema v2: interaction_sessions table and performance indices"),
@@ -98,5 +106,9 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, str]] = {
     4: (
         SCHEMA_V4_SQL,
         "Schema v4: system_settings table for persistent institution and system configuration",
+    ),
+    5: (
+        SCHEMA_V5_SQL,
+        "Schema v5: multi-tenant architecture with tenant_id and robot_id scoping on persons",
     ),
 }

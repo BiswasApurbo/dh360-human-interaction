@@ -34,8 +34,13 @@ class BasePersonRepository(ABC):
         """Retrieve a person record by person ID."""
 
     @abstractmethod
-    def list_persons(self, status: PersonStatus | None = None) -> list[PersonRecord]:
-        """List person records, optionally filtered by lifecycle status."""
+    def list_persons(
+        self,
+        status: PersonStatus | None = None,
+        tenant_id: str | None = None,
+        robot_id: str | None = None,
+    ) -> list[PersonRecord]:
+        """List person records, optionally filtered by lifecycle status, tenant, and robot."""
 
     @abstractmethod
     def update_person(self, person: PersonRecord) -> PersonRecord:
@@ -137,6 +142,8 @@ class SQLitePersonRepository(BasePersonRepository):
                 if "ai_qa_pairs" in keys and row["ai_qa_pairs"] is not None
                 else "[]"
             ),
+            tenant_id=row["tenant_id"] if "tenant_id" in keys else None,
+            robot_id=row["robot_id"] if "robot_id" in keys else None,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -163,8 +170,9 @@ class SQLitePersonRepository(BasePersonRepository):
             person_id, display_name, preferred_name, status,
             consent_status, consent_timestamp, notes,
             role, department, office_room, working_hours, profile_description, ai_qa_pairs,
+            tenant_id, robot_id,
             created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         try:
             with self._db.transaction() as cur:
@@ -184,6 +192,8 @@ class SQLitePersonRepository(BasePersonRepository):
                         person.working_hours,
                         person.profile_description,
                         person.ai_qa_pairs_json,
+                        person.tenant_id,
+                        person.robot_id,
                         person.created_at,
                         person.updated_at,
                     ),
@@ -203,17 +213,31 @@ class SQLitePersonRepository(BasePersonRepository):
             row = cur.fetchone()
             return self._row_to_person(row) if row else None
 
-    def list_persons(self, status: PersonStatus | None = None) -> list[PersonRecord]:
-        """List person records, optionally filtered by lifecycle status."""
+    def list_persons(
+        self,
+        status: PersonStatus | None = None,
+        tenant_id: str | None = None,
+        robot_id: str | None = None,
+    ) -> list[PersonRecord]:
+        """List person records, optionally filtered by lifecycle status, tenant, and robot."""
+        conditions: list[str] = []
+        params_list: list[Any] = []
+
         if status is not None:
-            query = "SELECT * FROM persons WHERE status = ? ORDER BY created_at ASC;"
-            params: tuple[str, ...] = (status.value,)
-        else:
-            query = "SELECT * FROM persons ORDER BY created_at ASC;"
-            params = ()
+            conditions.append("status = ?")
+            params_list.append(status.value)
+        if tenant_id is not None:
+            conditions.append("(tenant_id = ? OR tenant_id IS NULL)")
+            params_list.append(tenant_id)
+        if robot_id is not None:
+            conditions.append("(robot_id = ? OR robot_id IS NULL)")
+            params_list.append(robot_id)
+
+        where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        query = f"SELECT * FROM persons{where_clause} ORDER BY created_at ASC;"
 
         with self._db.readonly_cursor() as cur:
-            cur.execute(query, params)
+            cur.execute(query, tuple(params_list))
             rows = cur.fetchall()
             return [self._row_to_person(r) for r in rows]
 
@@ -233,6 +257,8 @@ class SQLitePersonRepository(BasePersonRepository):
             working_hours = ?,
             profile_description = ?,
             ai_qa_pairs = ?,
+            tenant_id = COALESCE(?, tenant_id),
+            robot_id = COALESCE(?, robot_id),
             updated_at = ?
         WHERE person_id = ?;
         """
@@ -252,6 +278,8 @@ class SQLitePersonRepository(BasePersonRepository):
                     person.working_hours,
                     person.profile_description,
                     person.ai_qa_pairs_json,
+                    person.tenant_id,
+                    person.robot_id,
                     person.updated_at,
                     person.person_id,
                 ),

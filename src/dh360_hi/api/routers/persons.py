@@ -49,6 +49,8 @@ class PersonCreateRequest(BaseModel):
     working_hours: StrictStr | None = None
     profile_description: StrictStr | None = None
     qa_pairs: list[QAPairRequest] | None = None
+    tenant_id: StrictStr | None = None
+    robot_id: StrictStr | None = None
 
 
 class PersonUpdateRequest(BaseModel):
@@ -66,6 +68,8 @@ class PersonUpdateRequest(BaseModel):
     working_hours: StrictStr | None = None
     profile_description: StrictStr | None = None
     qa_pairs: list[QAPairRequest] | None = None
+    tenant_id: StrictStr | None = None
+    robot_id: StrictStr | None = None
 
 
 def _get_service(request: Request) -> HumanInteractionService:
@@ -83,11 +87,19 @@ def list_persons(
     request: Request,
     status: PersonStatus | None = None,
     consent_status: ConsentStatus | None = None,
+    robot_id: str | None = None,
     _operator: OperatorPrincipal = _person_read,
 ) -> list[dict[str, Any]]:
     """List sanitized person profiles through the application service."""
     service = _get_service(request)
-    profiles = service.list_persons(status=status, consent_status=consent_status)
+    tenant_id = request.headers.get("X-Tenant-ID")
+    effective_robot_id = request.headers.get("X-Robot-ID") or robot_id
+    profiles = service.list_persons(
+        status=status,
+        consent_status=consent_status,
+        tenant_id=tenant_id,
+        robot_id=effective_robot_id,
+    )
     return [profile.to_dict() for profile in profiles]
 
 
@@ -102,6 +114,11 @@ def get_person(
     profile = service.get_person(person_id)
     if profile is None:
         raise EntityNotFoundError("person", person_id)
+
+    tenant_id = request.headers.get("X-Tenant-ID")
+    if tenant_id and profile.tenant_id is not None and profile.tenant_id != tenant_id:
+        raise EntityNotFoundError("person", person_id)
+
     return profile.to_dict()
 
 
@@ -112,6 +129,9 @@ def create_person(
     _operator: OperatorPrincipal = _person_create,
 ) -> dict[str, Any]:
     """Create a profile with active status and pending consent by default."""
+    tenant_id = request.headers.get("X-Tenant-ID") or payload.tenant_id
+    robot_id = request.headers.get("X-Robot-ID") or payload.robot_id
+
     command = CreatePersonCommand(
         display_name=payload.display_name,
         preferred_name=payload.preferred_name,
@@ -127,6 +147,8 @@ def create_person(
         qa_pairs=(
             [qa.model_dump() for qa in payload.qa_pairs] if payload.qa_pairs is not None else None
         ),
+        tenant_id=tenant_id,
+        robot_id=robot_id,
     )
     return _get_service(request).create_person(command).to_dict()
 
@@ -139,6 +161,15 @@ def update_person(
     operator: OperatorPrincipal = _person_update,
 ) -> dict[str, Any]:
     """Update profile fields through the existing application service."""
+    service = _get_service(request)
+    existing = service.get_person(person_id)
+    if existing is None:
+        raise EntityNotFoundError("person", person_id)
+
+    tenant_id = request.headers.get("X-Tenant-ID")
+    if tenant_id and existing.tenant_id is not None and existing.tenant_id != tenant_id:
+        raise EntityNotFoundError("person", person_id)
+
     if all(
         value is None
         for value in (
@@ -152,6 +183,8 @@ def update_person(
             payload.working_hours,
             payload.profile_description,
             payload.qa_pairs,
+            payload.tenant_id,
+            payload.robot_id,
         )
     ):
         raise ValidationAppError("At least one profile field must be provided", field="body")
@@ -187,9 +220,11 @@ def update_person(
         qa_pairs=(
             [qa.model_dump() for qa in payload.qa_pairs] if payload.qa_pairs is not None else None
         ),
+        tenant_id=payload.tenant_id,
+        robot_id=payload.robot_id,
     )
     try:
-        return _get_service(request).update_person(person_id, command).to_dict()
+        return service.update_person(person_id, command).to_dict()
     except PersonNotFoundError as exc:
         raise EntityNotFoundError("person", person_id) from exc
 
@@ -201,8 +236,17 @@ def delete_person(
     _operator: OperatorPrincipal = _person_delete,
 ) -> Response:
     """Delete a person profile and its associated biometrics."""
+    service = _get_service(request)
+    existing = service.get_person(person_id)
+    if existing is None:
+        raise EntityNotFoundError("person", person_id)
+
+    tenant_id = request.headers.get("X-Tenant-ID")
+    if tenant_id and existing.tenant_id is not None and existing.tenant_id != tenant_id:
+        raise EntityNotFoundError("person", person_id)
+
     try:
-        deleted = _get_service(request).delete_person(person_id)
+        deleted = service.delete_person(person_id)
     except PersonNotFoundError as exc:
         raise EntityNotFoundError("person", person_id) from exc
     if not deleted:
@@ -220,8 +264,17 @@ def reset_person_biometrics(
     _operator: OperatorPrincipal = _biometrics_reset,
 ) -> Response:
     """Remove a person's biometric records without deleting the profile."""
+    service = _get_service(request)
+    existing = service.get_person(person_id)
+    if existing is None:
+        raise EntityNotFoundError("person", person_id)
+
+    tenant_id = request.headers.get("X-Tenant-ID")
+    if tenant_id and existing.tenant_id is not None and existing.tenant_id != tenant_id:
+        raise EntityNotFoundError("person", person_id)
+
     try:
-        _get_service(request).reset_person_biometrics(person_id)
+        service.reset_person_biometrics(person_id)
     except PersonNotFoundError as exc:
         raise EntityNotFoundError("person", person_id) from exc
     auth_ctrl = getattr(request.app.state, "authorization_controller", None)

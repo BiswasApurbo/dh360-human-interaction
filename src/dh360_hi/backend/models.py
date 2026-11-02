@@ -109,6 +109,8 @@ class PersonRecord:
     working_hours: str | None = None
     profile_description: str | None = None
     ai_qa_pairs_json: str = "[]"
+    tenant_id: str | None = None
+    robot_id: str | None = None
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
 
@@ -165,6 +167,8 @@ class PersonProfile:
     created_at: str
     updated_at: str
     embedding_count: int = 0
+    tenant_id: str | None = None
+    robot_id: str | None = None
 
 
 @dataclass(frozen=True)

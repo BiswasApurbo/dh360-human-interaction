@@ -106,9 +106,45 @@ export async function PATCH(request: Request, context: RouteParams) {
       updates.name = body.name.trim();
     }
 
+    // 4. Handle assignedRobots update
+    if (Array.isArray(body.assignedRobots)) {
+      const newRobots = (body.assignedRobots as string[]).filter(
+        (r): r is string => typeof r === "string" && Boolean(r.trim())
+      );
+      updates.assignedRobots = newRobots;
+
+      try {
+        const assignedSnap = await adminDb
+          .collection("robots")
+          .where("assignedAdminId", "==", uid)
+          .get();
+        for (const doc of assignedSnap.docs) {
+          if (!newRobots.includes(doc.id)) {
+            await doc.ref.set(
+              { assignedAdminId: null, assignedAdminName: null },
+              { merge: true }
+            );
+          }
+        }
+        const adminName =
+          (updates.name as string) || targetUser.displayName || "Admin";
+        for (const rId of newRobots) {
+          await adminDb.collection("robots").doc(rId).set(
+            {
+              assignedAdminId: uid,
+              assignedAdminName: adminName,
+            },
+            { merge: true }
+          );
+        }
+      } catch (rErr) {
+        console.warn(`[admin/users/[uid]] Failed syncing robots for ${uid}:`, rErr);
+      }
+    }
+
     updates.updatedAt = new Date().toISOString();
 
-    // 4. Update Firestore doc
+    // 5. Update Firestore doc
     await adminDb.collection("users").doc(uid).set(updates, { merge: true });
 
     return NextResponse.json({ success: true, uid, updates });

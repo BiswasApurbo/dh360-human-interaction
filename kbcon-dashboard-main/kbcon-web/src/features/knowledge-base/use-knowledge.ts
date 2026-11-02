@@ -10,7 +10,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/features/auth/use-auth";
-import type { Role } from "@/features/auth/use-role";
+import { useRole, type Role } from "@/features/auth/use-role";
 
 export type KbRow = {
   id: string;
@@ -208,6 +208,7 @@ export type CanonicalKnowledgeItem = {
 
 export function useCanonicalKnowledge(initialQuery = "", initialType = "all") {
   const { user, loading: authLoading } = useAuth();
+  const { role, loading: roleLoading } = useRole();
   const [items, setItems] = useState<CanonicalKnowledgeItem[]>([]);
   const [total, setTotal] = useState<number>(0);
   const [loading, setLoading] = useState(true);
@@ -229,7 +230,13 @@ export function useCanonicalKnowledge(initialQuery = "", initialType = "all") {
   };
 
   const loadData = async (queryStr = initialQuery, typeStr = initialType) => {
-    if (authLoading) return;
+    if (authLoading || roleLoading) return;
+    if (role === "superAdmin") {
+      setItems([]);
+      setTotal(0);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -258,10 +265,10 @@ export function useCanonicalKnowledge(initialQuery = "", initialType = "all") {
   };
 
   useEffect(() => {
-    if (!authLoading) {
+    if (!authLoading && !roleLoading) {
       void loadData(initialQuery, initialType);
     }
-  }, [authLoading, initialQuery, initialType]);
+  }, [authLoading, roleLoading, role, initialQuery, initialType]);
 
   const createItem = async (payload: {
     question_en: string;

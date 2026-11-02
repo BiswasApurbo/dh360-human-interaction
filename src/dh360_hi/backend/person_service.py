@@ -149,6 +149,8 @@ class BasePersonService(ABC):
         working_hours: str | None = None,
         profile_description: str | None = None,
         qa_pairs: list[QAPair | dict[str, str]] | None = None,
+        tenant_id: str | None = None,
+        robot_id: str | None = None,
     ) -> PersonProfile:
         """Create and persist a new person profile."""
 
@@ -165,8 +167,13 @@ class BasePersonService(ABC):
         """Retrieve structured person context including deserialized Q&A pairs."""
 
     @abstractmethod
-    def list_people(self, status: PersonStatus | str | None = None) -> list[PersonProfile]:
-        """List person profiles, optionally filtered by lifecycle status."""
+    def list_people(
+        self,
+        status: PersonStatus | str | None = None,
+        tenant_id: str | None = None,
+        robot_id: str | None = None,
+    ) -> list[PersonProfile]:
+        """List person profiles, optionally filtered by lifecycle status, tenant, and robot."""
 
     @abstractmethod
     def update_person(
@@ -303,6 +310,8 @@ class PersonService(BasePersonService):
             created_at=rec.created_at,
             updated_at=rec.updated_at,
             embedding_count=count,
+            tenant_id=rec.tenant_id,
+            robot_id=rec.robot_id,
         )
 
     def create_person(
@@ -319,6 +328,8 @@ class PersonService(BasePersonService):
         working_hours: str | None = None,
         profile_description: str | None = None,
         qa_pairs: list[QAPair | dict[str, str]] | None = None,
+        tenant_id: str | None = None,
+        robot_id: str | None = None,
     ) -> PersonProfile:
         """Create and persist a new person profile."""
         if not display_name or not display_name.strip():
@@ -359,6 +370,8 @@ class PersonService(BasePersonService):
             working_hours=valid_hours,
             profile_description=valid_profile_desc,
             ai_qa_pairs_json=serialized_qa,
+            tenant_id=tenant_id,
+            robot_id=robot_id,
             created_at=now_str,
             updated_at=now_str,
         )
@@ -392,10 +405,17 @@ class PersonService(BasePersonService):
             qa_pairs=_deserialize_qa_pairs(rec.ai_qa_pairs_json),
         )
 
-    def list_people(self, status: PersonStatus | str | None = None) -> list[PersonProfile]:
-        """List person profiles, optionally filtered by lifecycle status."""
+    def list_people(
+        self,
+        status: PersonStatus | str | None = None,
+        tenant_id: str | None = None,
+        robot_id: str | None = None,
+    ) -> list[PersonProfile]:
+        """List person profiles, optionally filtered by lifecycle status, tenant, and robot."""
         target_status = PersonStatus(status) if isinstance(status, str) else status
-        records = self._repo.list_persons(status=target_status)
+        records = self._repo.list_persons(
+            status=target_status, tenant_id=tenant_id, robot_id=robot_id
+        )
         return [self._record_to_profile(r) for r in records]
 
     def update_person(

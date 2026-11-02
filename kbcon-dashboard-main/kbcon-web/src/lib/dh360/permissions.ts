@@ -135,12 +135,12 @@ export const ALLOWED_DH360_RULES: RouteRule[] = [
     scope: "enrollment:manage",
   },
 
-  // Biometrics Reset: Destructive operation strictly limited to Super Admin
+  // Biometrics Reset: Restricted to tenant Admins managing their own people (Super Admin blocked)
   {
     name: "person_biometrics_reset",
     pattern: /^\/persons\/([A-Za-z0-9_-]+)\/biometrics\/?$/,
     allowedMethods: ["DELETE"],
-    minRole: "superAdmin",
+    minRole: "admin",
     scope: "biometrics:reset",
   },
 
@@ -151,20 +151,6 @@ export const ALLOWED_DH360_RULES: RouteRule[] = [
     allowedMethods: ["GET", "PATCH", "DELETE"],
     minRole: "admin",
     scope: "persons:read",
-    customCheck: (body, principal) => {
-      // 1. Person deletion is strictly limited to superAdmin
-      // (Handled by method check or here)
-      // 2. Consent modification strictly requires superAdmin
-      if (body && Object.prototype.hasOwnProperty.call(body, "consent_status")) {
-        if (principal.role !== "superAdmin") {
-          return {
-            allowed: false,
-            reason: "Only superAdmin is permitted to modify person consent_status.",
-          };
-        }
-      }
-      return { allowed: true };
-    },
   },
 
   // Authorization Sessions
@@ -330,20 +316,21 @@ export function checkPermission(
     };
   }
 
-  // Check destructive operations on person_entity
-  if (matchedRule.name === "person_entity" && normMethod === "DELETE") {
-    if (principal.role !== "superAdmin") {
+  // Enforce Multi-Tenant Isolation for Super Admin:
+  // Super Admin manages platform and admins, but must NEVER access tenant-private People or Knowledge Base records.
+  if (principal.role === "superAdmin") {
+    if (normPath.startsWith("/persons") || normPath.startsWith("/knowledge")) {
       return {
         matched: true,
         allowed: false,
         httpStatus: 403,
-        reason: "Person profile deletion is restricted to superAdmin.",
+        reason: "Super Admin is restricted from accessing tenant-private data.",
         rule: matchedRule,
       };
     }
   }
 
-  // Check role hierarchy (superAdmin can do anything admin can do)
+  // Check role hierarchy (superAdmin can do anything admin can do, unless explicitly restricted)
   if (matchedRule.minRole === "superAdmin" && principal.role !== "superAdmin") {
     return {
       matched: true,

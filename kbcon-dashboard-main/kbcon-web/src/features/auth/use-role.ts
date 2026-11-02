@@ -32,7 +32,7 @@ export const DEFAULT_ADMIN_PERMISSIONS: AdminPermissions = {
   people: true,
   knowledgeBase: true,
   telemetry: true,
-  settings: false,
+  settings: true,
 };
 
 export function useRole() {

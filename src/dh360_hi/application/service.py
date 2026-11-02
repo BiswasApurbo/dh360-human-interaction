@@ -277,17 +277,26 @@ class HumanInteractionService:
         self,
         status: PersonStatus | str | None = None,
         consent_status: ConsentStatus | str | None = None,
+        tenant_id: str | None = None,
+        robot_id: str | None = None,
     ) -> list[PersonProfileDTO]:
         """List registered person profiles with optional filtering.
 
         Args:
             status: Optional PersonStatus filter (e.g. ACTIVE).
             consent_status: Optional ConsentStatus filter (e.g. GRANTED).
+            tenant_id: Optional owning tenant/Admin UID filter.
+            robot_id: Optional robot association filter.
 
         Returns:
             List of matching PersonProfileDTO records.
         """
-        people = self._person_service.list_people(status=status)
+        if tenant_id is not None or robot_id is not None:
+            people = self._person_service.list_people(
+                status=status, tenant_id=tenant_id, robot_id=robot_id
+            )
+        else:
+            people = self._person_service.list_people(status=status)
         if consent_status is not None:
             c_val = (
                 consent_status.value if hasattr(consent_status, "value") else str(consent_status)
@@ -326,6 +335,8 @@ class HumanInteractionService:
             working_hours=command.working_hours,
             profile_description=command.profile_description,
             qa_pairs=command.qa_pairs,
+            tenant_id=command.tenant_id,
+            robot_id=command.robot_id,
         )
         return PersonProfileDTO.from_profile(profile)
 

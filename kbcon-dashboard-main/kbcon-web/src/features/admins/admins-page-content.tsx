@@ -268,6 +268,7 @@ export function AdminsPageContent() {
               <th className="px-4 py-3 font-semibold">{t("name")}</th>
               <th className="px-4 py-3 font-semibold">{t("email")}</th>
               <th className="px-4 py-3 font-semibold">Role</th>
+              <th className="px-4 py-3 font-semibold">Assigned Robots</th>
               <th className="px-4 py-3 font-semibold">{t("status")}</th>
               <th className="px-4 py-3 font-semibold">Permissions</th>
               <th className="px-4 py-3 text-right font-semibold">
@@ -278,21 +279,21 @@ export function AdminsPageContent() {
           <tbody>
             {loading && (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center">
+                <td colSpan={7} className="px-4 py-8 text-center">
                   <Loader2 className="mx-auto size-6 animate-spin text-sky-500" />
                 </td>
               </tr>
             )}
             {!loading && error && (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-red-600">
+                <td colSpan={7} className="px-4 py-8 text-center text-red-600">
                   {t("loadFailed")}
                 </td>
               </tr>
             )}
             {!loading && !error && admins.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-sky-700">
+                <td colSpan={7} className="px-4 py-8 text-center text-sky-700">
                   {t("empty")}
                 </td>
               </tr>
@@ -327,6 +328,26 @@ export function AdminsPageContent() {
                       )}
                       <span>{isAccountSuper ? "Super Admin" : "Admin"}</span>
                     </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    {isAccountSuper ? (
+                      <span className="text-xs text-purple-700 font-semibold">
+                        All Robots
+                      </span>
+                    ) : a.assignedRobots && a.assignedRobots.length > 0 ? (
+                      <div className="flex flex-wrap gap-1 max-w-xs">
+                        {a.assignedRobots.map((rId) => (
+                          <span
+                            key={rId}
+                            className="rounded bg-sky-100 px-2 py-0.5 font-mono text-[11px] font-semibold text-sky-900 border border-sky-300"
+                          >
+                            {rId}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-slate-400 italic">None</span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <span

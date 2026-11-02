@@ -8,7 +8,6 @@ import {
   Sparkles,
   UserCheck,
   BookOpen,
-  Activity,
   Settings,
   Users,
 } from "lucide-react";
@@ -26,13 +25,19 @@ import {
 } from "@/components/ui/sidebar";
 import { useRole } from "@/features/auth/use-role";
 
-const items = [
+const superAdminItems = [
+  { key: "dashboard", href: "/dashboard", icon: LayoutDashboard },
+  { key: "robots", href: "/robots", icon: Bot },
+  { key: "settings", href: "/settings", icon: Settings },
+  { key: "admins", href: "/super-admin/admins", icon: Users },
+] as const;
+
+const adminItems = [
   { key: "dashboard", href: "/dashboard", icon: LayoutDashboard },
   { key: "robots", href: "/robots", icon: Bot },
   { key: "assistant", href: "/assistant", icon: Sparkles },
   { key: "people", href: "/people", icon: UserCheck },
   { key: "knowledgeBase", href: "/knowledge-base", icon: BookOpen },
-  { key: "telemetry", href: "/telemetry", icon: Activity },
   { key: "settings", href: "/settings", icon: Settings },
 ] as const;
 
@@ -45,13 +50,14 @@ export function AppSidebar() {
 
   const isSuper = role === "superAdmin";
 
-  const visibleItems = items.filter(({ key }) => {
-    if (isSuper) return true;
-    if (permissions && key in permissions) {
-      return Boolean(permissions[key as keyof typeof permissions]);
-    }
-    return true;
-  });
+  const visibleItems = isSuper
+    ? superAdminItems
+    : adminItems.filter(({ key }) => {
+        if (permissions && key in permissions) {
+          return Boolean(permissions[key as keyof typeof permissions]);
+        }
+        return true;
+      });
 
   return (
     <Sidebar collapsible="icon">
@@ -84,24 +90,6 @@ export function AppSidebar() {
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
-
-              {isSuper && (
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={pathname.startsWith("/super-admin/admins")}
-                    tooltip={t("admins")}
-                  >
-                    <Link
-                      href="/super-admin/admins"
-                      onClick={() => setOpenMobile(false)}
-                    >
-                      <Users />
-                      <span>{t("admins")}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

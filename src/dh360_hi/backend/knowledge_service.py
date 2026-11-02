@@ -672,6 +672,7 @@ class KnowledgeService:
                         "Institution Type": (row.get("Institution Type") or "general")
                         .strip()
                         .lower(),
+                        "tenant_id": (row.get("tenant_id") or "").strip(),
                     }
                 )
 
@@ -708,6 +709,7 @@ class KnowledgeService:
             "প্রশ্ন (বাংলা)",
             "উত্তর (বাংলা)",
             "Institution Type",
+            "tenant_id",
         ]
         with open(temp_path, mode="w", encoding="utf-8-sig", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
@@ -747,6 +749,7 @@ class KnowledgeService:
         self,
         query: str | None = None,
         institution_type: str | None = None,
+        tenant_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Return all raw knowledge facts with stable IDs and optional filtering."""
         with self._io_lock:
@@ -770,6 +773,10 @@ class KnowledgeService:
 
             facts: list[dict[str, Any]] = []
             for idx, row in enumerate(rows):
+                row_tenant = (row.get("tenant_id") or "").strip()
+                if tenant_id and row_tenant and row_tenant != tenant_id:
+                    continue
+
                 q_en = row.get("Question (English)", "")
                 a_en = row.get("Answer (English)", "")
                 q_bn = row.get("প্রশ্ন (বাংলা)", "")
@@ -800,11 +807,16 @@ class KnowledgeService:
                         "question_bn": q_bn,
                         "answer_bn": a_bn,
                         "institution_type": itype,
+                        "tenant_id": row_tenant,
                     }
                 )
             return facts
 
-    def get_fact_by_id(self, item_id: str) -> dict[str, Any] | None:
+    def get_fact_by_id(
+        self,
+        item_id: str,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any] | None:
         """Fetch a single knowledge entry by stable UUID ID or legacy index."""
         with self._io_lock:
             rows, needs_migration = self._read_all_raw_rows_unlocked()
@@ -824,6 +836,9 @@ class KnowledgeService:
             if target_idx is None:
                 return None
             r = rows[target_idx]
+            row_tenant = (r.get("tenant_id") or "").strip()
+            if tenant_id and row_tenant and row_tenant != tenant_id:
+                return None
             itype = r.get("Institution Type", "general")
             if itype not in ("university", "clinic", "general"):
                 itype = (
@@ -848,6 +863,7 @@ class KnowledgeService:
         question_bn: str = "",
         answer_bn: str = "",
         institution_type: str = "general",
+        tenant_id: str | None = None,
     ) -> dict[str, Any]:
         """Add a new institutional fact with persistent UUID, persist to CSV, and reload memory."""
         q_en = (question_en or "").strip()
@@ -878,6 +894,7 @@ class KnowledgeService:
                 "প্রশ্ন (বাংলা)": q_bn,
                 "উত্তর (বাংলা)": a_bn,
                 "Institution Type": itype,
+                "tenant_id": (tenant_id or "").strip(),
             }
             rows.append(new_row)
             self._atomic_write_rows_unlocked(rows)
@@ -892,6 +909,7 @@ class KnowledgeService:
                 "question_bn": q_bn,
                 "answer_bn": a_bn,
                 "institution_type": itype,
+                "tenant_id": (tenant_id or "").strip(),
             }
 
     def update_fact(
@@ -902,6 +920,7 @@ class KnowledgeService:
         question_bn: str | None = None,
         answer_bn: str | None = None,
         institution_type: str | None = None,
+        tenant_id: str | None = None,
     ) -> dict[str, Any]:
         """Update an existing knowledge entry by stable UUID ID, persist to CSV, and reload memory."""
         with self._io_lock:
@@ -911,6 +930,10 @@ class KnowledgeService:
                 raise KeyError(f"Knowledge item '{item_id}' not found.")
 
             current = rows[idx]
+            row_tenant = (current.get("tenant_id") or "").strip()
+            if tenant_id and row_tenant and row_tenant != tenant_id:
+                raise KeyError(f"Knowledge item '{item_id}' not found.")
+
             q_en = (
                 current.get("Question (English)", "")
                 if question_en is None
@@ -944,6 +967,7 @@ class KnowledgeService:
                 "প্রশ্ন (বাংলা)": q_bn,
                 "উত্তর (বাংলা)": a_bn,
                 "Institution Type": itype,
+                "tenant_id": row_tenant or (tenant_id or "").strip(),
             }
             self._atomic_write_rows_unlocked(rows)
             self._load_public_facts_unlocked()
@@ -956,14 +980,19 @@ class KnowledgeService:
                 "question_bn": q_bn,
                 "answer_bn": a_bn,
                 "institution_type": itype,
+                "tenant_id": rows[idx]["tenant_id"],
             }
 
-    def delete_fact(self, item_id: str) -> bool:
+    def delete_fact(self, item_id: str, tenant_id: str | None = None) -> bool:
         """Delete an existing knowledge entry by stable UUID ID from CSV and reload memory."""
         with self._io_lock:
             rows, _ = self._read_all_raw_rows_unlocked()
             idx = self._find_row_index(rows, item_id)
             if idx is None:
+                raise KeyError(f"Knowledge item '{item_id}' not found.")
+
+            row_tenant = (rows[idx].get("tenant_id") or "").strip()
+            if tenant_id and row_tenant and row_tenant != tenant_id:
                 raise KeyError(f"Knowledge item '{item_id}' not found.")
 
             rows.pop(idx)

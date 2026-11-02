@@ -11,6 +11,7 @@ import {
   RefreshCw,
   Send,
   Shield,
+  ShieldAlert,
   ShieldCheck,
   Sparkles,
   Square,
@@ -19,6 +20,8 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
+import { useRole } from "@/features/auth/use-role";
+import { useRobots } from "@/features/robots/use-robots";
 import { useAssistantAuth } from "./use-assistant-auth";
 import type {
   AssistantLanguage,
@@ -39,9 +42,20 @@ function currentTimestamp(): number {
 
 export function AssistantPageContent() {
   const t = useTranslations("Assistant");
+  const { role, loading: roleLoading } = useRole();
+  const { robots } = useRobots(role);
+  const [activeRobotId, setActiveRobotId] = useState<string>("");
 
-  // Language & Audio state
-  const [language, setLanguage] = useState<AssistantLanguage>("bn");
+  useEffect(() => {
+    if (robots.length > 0 && (!activeRobotId || !robots.some((r) => r.id === activeRobotId))) {
+      setActiveRobotId(robots[0].id);
+    }
+  }, [robots, activeRobotId]);
+
+  const activeRobot = robots.find((r) => r.id === activeRobotId) ?? robots[0] ?? null;
+
+  // Language bound directly from selected robot
+  const language: AssistantLanguage = (activeRobot?.language as AssistantLanguage) || "bn";
   const [audioEnabled, setAudioEnabled] = useState(true);
 
   // Conversational state
@@ -173,7 +187,11 @@ export function AssistantPageContent() {
     setIsProcessing(true);
 
     try {
-      const headers = await getHeaders();
+      const baseHeaders = await getHeaders();
+      const headers = {
+        ...baseHeaders,
+        ...(activeRobot?.id ? { "X-Robot-ID": activeRobot.id } : {}),
+      };
       const res = await fetch("/api/dh360/dialogue/turn", {
         method: "POST",
         headers,
@@ -238,7 +256,11 @@ export function AssistantPageContent() {
     setIsListeningRobot(true);
 
     try {
-      const headers = await getHeaders();
+      const baseHeaders = await getHeaders();
+      const headers = {
+        ...baseHeaders,
+        ...(activeRobot?.id ? { "X-Robot-ID": activeRobot.id } : {}),
+      };
       const res = await fetch("/api/dh360/dialogue/turn/voice", {
         method: "POST",
         headers,
@@ -400,6 +422,30 @@ export function AssistantPageContent() {
     );
   };
 
+  if (roleLoading) {
+    return (
+      <div className="flex justify-center py-16">
+        <Loader2 className="size-8 animate-spin text-sky-500" />
+      </div>
+    );
+  }
+
+  if (role === "superAdmin") {
+    return (
+      <div className="flex items-start gap-3 rounded-2xl bg-amber-50 p-6 text-sm text-amber-900 ring-1 ring-amber-200">
+        <ShieldAlert className="size-6 shrink-0 text-amber-600 mt-0.5" />
+        <div>
+          <h3 className="font-bold text-base text-amber-950 mb-1">
+            Access Restricted to Super Admin
+          </h3>
+          <p className="text-amber-800 leading-relaxed">
+            Super Admins are restricted from accessing tenant conversational AI sessions and person interactions. AI Assistant is reserved for tenant Admins operating their assigned robots.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto flex h-full min-h-0 w-full max-w-5xl flex-1 flex-col gap-2.5 overflow-hidden">
       {/* Top Banner: Mode & Authorization Status */}
@@ -453,31 +499,23 @@ export function AssistantPageContent() {
             <span className="hidden sm:inline">{audioEnabled ? t("audioOn") : t("audioOff")}</span>
           </button>
 
-          {/* Language selector */}
-          <div className="flex items-center rounded-xl bg-slate-100 p-0.5 ring-1 ring-slate-200">
-            <button
-              type="button"
-              onClick={() => setLanguage("bn")}
-              className={`rounded-lg px-2 py-0.5 text-xs font-bold transition-all ${
-                language === "bn"
-                  ? "bg-white text-sky-800 shadow-sm"
-                  : "text-slate-600 hover:text-slate-900"
-              }`}
-            >
-              বাংলা
-            </button>
-            <button
-              type="button"
-              onClick={() => setLanguage("en")}
-              className={`rounded-lg px-2 py-0.5 text-xs font-bold transition-all ${
-                language === "en"
-                  ? "bg-white text-sky-800 shadow-sm"
-                  : "text-slate-600 hover:text-slate-900"
-              }`}
-            >
-              EN
-            </button>
-          </div>
+          {/* Active Robot Selector */}
+          {robots.length > 0 && (
+            <div className="flex items-center gap-1.5 rounded-xl bg-slate-100 px-2.5 py-1 ring-1 ring-slate-200">
+              <Bot className="size-3.5 text-sky-700" />
+              <select
+                value={activeRobot?.id || ""}
+                onChange={(e) => setActiveRobotId(e.target.value)}
+                className="bg-transparent text-xs font-semibold text-sky-950 outline-none cursor-pointer"
+              >
+                {robots.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name} ({r.language === "en" ? "EN" : "BN"})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Clear conversation button */}
           {messages.length > 0 && (

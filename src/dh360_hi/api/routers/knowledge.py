@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from dh360_hi.api.dependencies import get_knowledge_service
@@ -32,6 +32,7 @@ class KnowledgeItemResponse(BaseModel):
     question_bn: str = Field(default="", description="Question in Bangla")
     answer_bn: str = Field(default="", description="Answer in Bangla")
     institution_type: str = Field(default="general", description="university, clinic, or general")
+    tenant_id: str | None = Field(default=None, description="Owning tenant/Admin UID")
 
 
 class KnowledgeListResponse(BaseModel):
@@ -54,6 +55,7 @@ class KnowledgeItemCreate(BaseModel):
     question_bn: str = Field(default="", description="Question in Bangla")
     answer_bn: str = Field(default="", description="Answer in Bangla")
     institution_type: str = Field(default="general", description="university, clinic, or general")
+    tenant_id: str | None = Field(default=None, description="Owning tenant/Admin UID")
 
 
 class KnowledgeItemUpdate(BaseModel):
@@ -66,6 +68,7 @@ class KnowledgeItemUpdate(BaseModel):
     question_bn: str | None = Field(default=None, description="Question in Bangla")
     answer_bn: str | None = Field(default=None, description="Answer in Bangla")
     institution_type: str | None = Field(default=None, description="university, clinic, or general")
+    tenant_id: str | None = Field(default=None, description="Owning tenant/Admin UID")
 
 
 class KnowledgeDeleteResponse(BaseModel):
@@ -106,13 +109,17 @@ class KnowledgeReloadResponse(BaseModel):
     description="Returns all public institutional facts with optional search query and mode filtering.",
 )
 async def list_knowledge_items(
+    request: Request,
     query: str | None = Query(default=None, description="Search keyword matching across all Q&A fields"),
     institution_type: str | None = Query(default=None, description="Filter by mode: university, clinic, general, or all"),
     knowledge_service: KnowledgeService = Depends(get_knowledge_service),
     _principal: OperatorPrincipal = _knowledge_manage,
 ) -> KnowledgeListResponse:
     """Fetch all knowledge items with optional query filter."""
-    facts = knowledge_service.get_all_facts(query=query, institution_type=institution_type)
+    tenant_id = request.headers.get("X-Tenant-ID")
+    facts = knowledge_service.get_all_facts(
+        query=query, institution_type=institution_type, tenant_id=tenant_id
+    )
     return KnowledgeListResponse(
         items=[KnowledgeItemResponse(**f) for f in facts],
         total=len(facts),
@@ -130,10 +137,12 @@ async def list_knowledge_items(
 )
 async def create_knowledge_item(
     payload: KnowledgeItemCreate,
+    request: Request,
     knowledge_service: KnowledgeService = Depends(get_knowledge_service),
     _principal: OperatorPrincipal = _knowledge_manage,
 ) -> KnowledgeItemResponse:
     """Add a new fact to the knowledge base."""
+    tenant_id = request.headers.get("X-Tenant-ID")
     try:
         created = knowledge_service.add_fact(
             question_en=payload.question_en,
@@ -141,6 +150,7 @@ async def create_knowledge_item(
             question_bn=payload.question_bn,
             answer_bn=payload.answer_bn,
             institution_type=payload.institution_type,
+            tenant_id=tenant_id,
         )
         return KnowledgeItemResponse(**created)
     except ValueError as e:
@@ -159,11 +169,13 @@ async def create_knowledge_item(
 )
 async def get_knowledge_item(
     item_id: str,
+    request: Request,
     knowledge_service: KnowledgeService = Depends(get_knowledge_service),
     _principal: OperatorPrincipal = _knowledge_manage,
 ) -> KnowledgeItemResponse:
     """Fetch a single knowledge item."""
-    item = knowledge_service.get_fact_by_id(item_id)
+    tenant_id = request.headers.get("X-Tenant-ID")
+    item = knowledge_service.get_fact_by_id(item_id, tenant_id=tenant_id)
     if not item:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -183,10 +195,12 @@ async def get_knowledge_item(
 async def update_knowledge_item(
     item_id: str,
     payload: KnowledgeItemUpdate,
+    request: Request,
     knowledge_service: KnowledgeService = Depends(get_knowledge_service),
     _principal: OperatorPrincipal = _knowledge_manage,
 ) -> KnowledgeItemResponse:
     """Update a fact in the knowledge base."""
+    tenant_id = request.headers.get("X-Tenant-ID")
     try:
         updated = knowledge_service.update_fact(
             item_id=item_id,
@@ -195,6 +209,7 @@ async def update_knowledge_item(
             question_bn=payload.question_bn,
             answer_bn=payload.answer_bn,
             institution_type=payload.institution_type,
+            tenant_id=tenant_id,
         )
         return KnowledgeItemResponse(**updated)
     except KeyError as e:
@@ -219,12 +234,14 @@ async def update_knowledge_item(
 )
 async def delete_knowledge_item(
     item_id: str,
+    request: Request,
     knowledge_service: KnowledgeService = Depends(get_knowledge_service),
     _principal: OperatorPrincipal = _knowledge_manage,
 ) -> KnowledgeDeleteResponse:
     """Delete a fact from the knowledge base."""
+    tenant_id = request.headers.get("X-Tenant-ID")
     try:
-        knowledge_service.delete_fact(item_id)
+        knowledge_service.delete_fact(item_id, tenant_id=tenant_id)
         return KnowledgeDeleteResponse(
             status="deleted",
             id=item_id,

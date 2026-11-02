@@ -28,7 +28,7 @@ export function CreateRobotForm({
       .trim()
       .regex(/^[A-Za-z0-9-]{3,32}$/, t("idInvalid")),
     name: z.string().trim().min(2, t("nameShort")),
-    type: z.string().trim().min(2, t("typeShort")),
+    language: z.enum(["en", "bn"]),
     mode: z.enum(["education", "healthcare"]),
   });
   type Values = z.infer<typeof schema>;
@@ -39,17 +39,17 @@ export function CreateRobotForm({
     formState: { errors, isSubmitting },
   } = useForm<Values>({
     resolver: zodResolver(schema),
-    defaultValues: { mode: "education" },
+    defaultValues: { language: "bn", mode: "education" },
   });
 
   async function onSubmit(values: Values) {
     setError(null);
     try {
-      const fn = httpsCallable<Values, { robotId: string; secret: string }>(
+      const fn = httpsCallable<Values & { type: string }, { robotId: string; secret: string }>(
         functions,
         "createRobot",
       );
-      const res = await fn(values);
+      const res = await fn({ ...values, type: "Humanoid" });
       onDone(res.data.secret, res.data.robotId);
     } catch (err) {
       const code = (err as { code?: string }).code;
@@ -97,17 +97,17 @@ export function CreateRobotForm({
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="robot-type" className="text-sky-900">
-            {t("type")}
+          <Label htmlFor="robot-language" className="text-sky-900">
+            {t("language")}
           </Label>
-          <Input
-            id="robot-type"
-            className="h-10 border-sky-200 bg-white"
-            {...register("type")}
-          />
-          {errors.type && (
-            <p className="text-xs text-red-600">{errors.type.message}</p>
-          )}
+          <select
+            id="robot-language"
+            className="h-10 w-full rounded-md border border-sky-200 bg-white px-3 text-sm text-sky-900 outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+            {...register("language")}
+          >
+            <option value="bn">{t("langBn")}</option>
+            <option value="en">{t("langEn")}</option>
+          </select>
         </div>
 
         <div className="space-y-1.5">

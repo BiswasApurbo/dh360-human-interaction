@@ -35,7 +35,7 @@ def person_service(memory_db_manager: DatabaseManager) -> PersonService:
 def test_schema_v4_migration_and_settings_persistence(memory_db_manager: DatabaseManager) -> None:
     """Verify system_settings table exists and persists values across connection queries."""
     repo = SQLitePersonRepository(memory_db_manager)
-    assert memory_db_manager.get_schema_version() == 4
+    assert memory_db_manager.get_schema_version() >= 4
 
     # Initial state is default
     assert repo.get_setting("institution_type") is None

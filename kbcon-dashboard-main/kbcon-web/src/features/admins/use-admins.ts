@@ -10,6 +10,7 @@ export type AdminRow = {
   role: "superAdmin" | "admin";
   active: boolean;
   mustChangePassword?: boolean;
+  assignedRobots?: string[];
   permissions: {
     dashboard: boolean;
     robots: boolean;

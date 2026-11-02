@@ -10,6 +10,8 @@ export interface PersonProfile {
   person_id: string;
   display_name: string;
   preferred_name: string | null;
+  tenant_id?: string | null;
+  robot_id?: string | null;
   status: PersonStatus | string;
   consent_status: ConsentStatus | string;
   consent_timestamp: string | null;
@@ -32,6 +34,8 @@ export interface PersonContext {
 export interface CreatePersonInput {
   display_name: string;
   preferred_name?: string | null;
+  tenant_id?: string | null;
+  robot_id?: string | null;
   role?: string | null;
   department?: string | null;
   office_room?: string | null;
@@ -43,6 +47,8 @@ export interface CreatePersonInput {
 export interface UpdatePersonInput {
   display_name?: string;
   preferred_name?: string | null;
+  tenant_id?: string | null;
+  robot_id?: string | null;
   status?: PersonStatus;
   consent_status?: ConsentStatus;
   role?: string | null;

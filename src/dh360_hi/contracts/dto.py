@@ -106,10 +106,26 @@ class PersonProfileDTO:
     consent_timestamp: str | None = None
     created_at: str = ""
     updated_at: str = ""
+    tenant_id: str | None = None
+    robot_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert DTO to a JSON-serializable dictionary."""
-        return asdict(self)
+        d: dict[str, Any] = {
+            "person_id": self.person_id,
+            "display_name": self.display_name,
+            "preferred_name": self.preferred_name,
+            "status": self.status,
+            "consent_status": self.consent_status,
+            "consent_timestamp": self.consent_timestamp,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+        if self.tenant_id is not None:
+            d["tenant_id"] = self.tenant_id
+        if self.robot_id is not None:
+            d["robot_id"] = self.robot_id
+        return d
 
     @classmethod
     def from_profile(cls, profile: PersonProfile) -> PersonProfileDTO:
@@ -127,6 +143,8 @@ class PersonProfileDTO:
             consent_timestamp=profile.consent_timestamp,
             created_at=profile.created_at,
             updated_at=profile.updated_at,
+            tenant_id=getattr(profile, "tenant_id", None),
+            robot_id=getattr(profile, "robot_id", None),
         )
 
 
@@ -146,6 +164,8 @@ class CreatePersonCommand:
     working_hours: str | None = None
     profile_description: str | None = None
     qa_pairs: list[QAPair | dict[str, str]] | None = None
+    tenant_id: str | None = None
+    robot_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.display_name or not self.display_name.strip():
@@ -156,7 +176,7 @@ class CreatePersonCommand:
 
     def to_dict(self) -> dict[str, Any]:
         """Convert command to a dictionary."""
-        return {
+        d = {
             "display_name": self.display_name.strip(),
             "preferred_name": self.preferred_name.strip() if self.preferred_name else None,
             "status": self.status.value if hasattr(self.status, "value") else str(self.status),
@@ -178,6 +198,11 @@ class CreatePersonCommand:
                 else None
             ),
         }
+        if self.tenant_id is not None:
+            d["tenant_id"] = self.tenant_id
+        if self.robot_id is not None:
+            d["robot_id"] = self.robot_id
+        return d
 
 
 @dataclass(frozen=True)
@@ -195,6 +220,8 @@ class UpdatePersonCommand:
     working_hours: str | None = None
     profile_description: str | None = None
     qa_pairs: list[QAPair | dict[str, str]] | None = None
+    tenant_id: str | None = None
+    robot_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.display_name is not None and not self.display_name.strip():
@@ -203,7 +230,7 @@ class UpdatePersonCommand:
 
     def to_dict(self) -> dict[str, Any]:
         """Convert command to a dictionary."""
-        return {
+        d = {
             "display_name": self.display_name.strip() if self.display_name is not None else None,
             "preferred_name": self.preferred_name.strip()
             if self.preferred_name is not None
@@ -232,6 +259,11 @@ class UpdatePersonCommand:
                 else None
             ),
         }
+        if self.tenant_id is not None:
+            d["tenant_id"] = self.tenant_id
+        if self.robot_id is not None:
+            d["robot_id"] = self.robot_id
+        return d
 
 
 # ---------------------------------------------------------------------------

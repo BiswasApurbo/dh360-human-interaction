@@ -17,6 +17,7 @@ export type RobotRow = {
   id: string;
   name: string;
   type: string;
+  language?: "en" | "bn";
   mode: "education" | "healthcare";
   status: RobotStatus;
   lastSeen: string | null;
@@ -53,6 +54,7 @@ export function useRobots(role: Role) {
               id: d.id,
               name: x.name ?? "",
               type: x.type ?? "",
+              language: x.language === "en" ? "en" : "bn",
               mode: x.mode === "healthcare" ? "healthcare" : "education",
               status: x.status ?? "offline",
               lastSeen: typeof x.lastSeen === "string" ? x.lastSeen : null,

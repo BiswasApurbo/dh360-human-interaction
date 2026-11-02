@@ -185,6 +185,7 @@
     "robotId": "Robot ID",
     "robotIdHint": "3-32 characters: letters, numbers, hyphen. Cannot be changed later.",
     "name": "Name",
+    "language": "Language",
     "type": "Type",
     "mode": "Mode",
     "education": "Education",

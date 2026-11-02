@@ -2,14 +2,16 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/features/auth/use-auth";
+import { useRole } from "@/features/auth/use-role";
 import type {
   CreatePersonInput,
   PersonProfile,
   UpdatePersonInput,
 } from "./types";
 
-export function usePeople() {
+export function usePeople(robotId?: string) {
   const { user, loading: authLoading } = useAuth();
+  const { role, loading: roleLoading } = useRole();
   const [people, setPeople] = useState<PersonProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -18,6 +20,9 @@ export function usePeople() {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
     };
+    if (robotId) {
+      headers["X-Robot-ID"] = robotId;
+    }
     if (user) {
       try {
         const token = await user.getIdToken();
@@ -27,10 +32,15 @@ export function usePeople() {
       }
     }
     return headers;
-  }, [user]);
+  }, [user, robotId]);
 
   const loadData = useCallback(async (isRefresh = false) => {
-    if (authLoading) return;
+    if (authLoading || roleLoading) return;
+    if (role === "superAdmin") {
+      setPeople([]);
+      setLoading(false);
+      return;
+    }
     if (!user) {
       setPeople([]);
       setLoading(false);
@@ -42,7 +52,10 @@ export function usePeople() {
     setError(null);
     try {
       const headers = await getHeaders();
-      const res = await fetch("/api/dh360/persons", { headers });
+      const url = robotId
+        ? `/api/dh360/persons?robot_id=${encodeURIComponent(robotId)}`
+        : "/api/dh360/persons";
+      const res = await fetch(url, { headers });
 
       if (!res.ok) {
         const errData = await res.json().catch(() => null);
@@ -70,11 +83,11 @@ export function usePeople() {
     } finally {
       setLoading(false);
     }
-  }, [authLoading, user, getHeaders]);
+  }, [authLoading, roleLoading, role, user, robotId, getHeaders]);
 
   useEffect(() => {
-    if (authLoading) return;
-    if (!user) {
+    if (authLoading || roleLoading) return;
+    if (!user || role === "superAdmin") {
       const id = setTimeout(() => {
         setPeople([]);
         setLoading(false);
@@ -85,7 +98,7 @@ export function usePeople() {
       void loadData(false);
     }, 0);
     return () => clearTimeout(id);
-  }, [authLoading, user, loadData]);
+  }, [authLoading, roleLoading, role, user, loadData]);
 
   const createPerson = useCallback(
     async (input: CreatePersonInput): Promise<PersonProfile> => {

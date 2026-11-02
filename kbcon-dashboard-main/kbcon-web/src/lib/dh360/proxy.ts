@@ -148,9 +148,17 @@ export async function handleDh360ProxyRequest(
     );
   }
 
-  // 6. Build upstream request headers
+  // 6. Build upstream request headers with multi-tenant context
   const upstreamHeaders = new Headers();
   upstreamHeaders.set("Authorization", `Bearer ${config.operatorToken}`);
+  upstreamHeaders.set("X-Tenant-ID", principal.uid);
+  upstreamHeaders.set("X-User-Role", principal.role);
+
+  // Forward client X-Robot-ID header if provided
+  const robotIdHeader = request.headers.get("x-robot-id");
+  if (robotIdHeader) {
+    upstreamHeaders.set("X-Robot-ID", robotIdHeader);
+  }
 
   // Forward client Accept header (crucial for text/event-stream and image/jpeg)
   const accept = request.headers.get("accept");

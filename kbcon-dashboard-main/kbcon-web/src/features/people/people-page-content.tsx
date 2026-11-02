@@ -3,8 +3,10 @@
 import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { motion } from "motion/react";
-import { Plus, RefreshCw, AlertCircle } from "lucide-react";
+import { Plus, RefreshCw, AlertCircle, ShieldAlert, Bot, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useRole } from "@/features/auth/use-role";
+import { useRobots } from "@/features/robots/use-robots";
 import { usePeople } from "./use-people";
 import { PeopleTable } from "./people-table";
 import { CreatePersonDialog } from "./create-person-dialog";
@@ -17,6 +19,10 @@ import type { PersonProfile } from "./types";
 
 export function PeoplePageContent() {
   const t = useTranslations("People");
+  const { role, loading: roleLoading } = useRole();
+  const { robots } = useRobots(role);
+  const [selectedRobotFilter, setSelectedRobotFilter] = useState<string>("");
+
   const {
     people,
     loading,
@@ -26,7 +32,7 @@ export function PeoplePageContent() {
     updatePerson,
     deletePerson,
     resetBiometrics,
-  } = usePeople();
+  } = usePeople(selectedRobotFilter || undefined);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedPerson, setSelectedPerson] = useState<PersonProfile | null>(null);
@@ -59,6 +65,30 @@ export function PeoplePageContent() {
     setEnrollOpen(true);
   };
 
+  if (roleLoading) {
+    return (
+      <div className="flex justify-center py-16">
+        <Loader2 className="size-8 animate-spin text-sky-500" />
+      </div>
+    );
+  }
+
+  if (role === "superAdmin") {
+    return (
+      <div className="flex items-start gap-3 rounded-2xl bg-amber-50 p-6 text-sm text-amber-900 ring-1 ring-amber-200">
+        <ShieldAlert className="size-6 shrink-0 text-amber-600 mt-0.5" />
+        <div>
+          <h3 className="font-bold text-base text-amber-950 mb-1">
+            Access Restricted to Super Admin
+          </h3>
+          <p className="text-amber-800 leading-relaxed">
+            Super Admins are restricted from accessing tenant-private People and biometric records. Company/tenant individuals and biometrics are managed exclusively by designated tenant Admins.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5">
       {/* Page Header */}
@@ -71,6 +101,24 @@ export function PeoplePageContent() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {robots.length > 0 && (
+            <div className="flex items-center gap-1.5 rounded-xl border border-sky-300 bg-white px-2.5 py-1.5 text-xs text-sky-900 shadow-sm">
+              <Bot className="size-3.5 text-sky-600" />
+              <select
+                value={selectedRobotFilter}
+                onChange={(e) => setSelectedRobotFilter(e.target.value)}
+                className="bg-transparent font-medium outline-none cursor-pointer"
+              >
+                <option value="">All Assigned Robots</option>
+                {robots.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name} ({r.id})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <motion.button
             type="button"
             onClick={() => refresh()}
@@ -134,6 +182,7 @@ export function PeoplePageContent() {
         open={createOpen}
         onOpenChange={setCreateOpen}
         onSubmit={createPerson}
+        robots={robots}
       />
 
       <PersonDetailSheet

@@ -75,7 +75,7 @@ export function RobotsPageContent() {
     );
   }
 
-  const colSpan = isSuper ? 8 : 7;
+  const colSpan = isSuper ? 8 : 6;
 
   return (
     <div className="space-y-5">
@@ -185,14 +185,14 @@ export function RobotsPageContent() {
             <tr>
               <th className="px-4 py-3 font-semibold">{t("robotId")}</th>
               <th className="px-4 py-3 font-semibold">{t("name")}</th>
+              <th className="px-4 py-3 font-semibold">{t("language")}</th>
               <th className="px-4 py-3 font-semibold">{t("mode")}</th>
               <th className="px-4 py-3 font-semibold">{t("status")}</th>
-              {isSuper ? (
+              {isSuper && (
                 <th className="px-4 py-3 font-semibold">{t("assignedTo")}</th>
-              ) : null}
-              <th className="px-4 py-3 font-semibold">{t("type")}</th>
+              )}
               <th className="px-4 py-3 font-semibold">{t("firmware")}</th>
-              <th className="px-4 py-3 font-semibold" />
+              {isSuper && <th className="px-4 py-3 text-right font-semibold" />}
             </tr>
           </thead>
           <tbody>
@@ -239,6 +239,11 @@ export function RobotsPageContent() {
                   </Link>
                 </td>
                 <td className="px-4 py-3 font-medium text-sky-900">{r.name}</td>
+                <td className="px-4 py-3 text-sky-800">
+                  <span className="rounded bg-sky-50 px-2 py-0.5 text-xs font-semibold text-sky-800 border border-sky-200">
+                    {r.language === "en" ? t("langEn") : t("langBn")}
+                  </span>
+                </td>
                 <td className="px-4 py-3 text-sky-800">{t(r.mode)}</td>
                 <td className="px-4 py-3">
                   <span
@@ -273,20 +278,20 @@ export function RobotsPageContent() {
                     </div>
                   </td>
                 )}
-                <td className="px-4 py-3 text-sky-800">{r.type}</td>
                 <td className="px-4 py-3 font-mono text-xs text-sky-800">
                   {r.firmwareVersion ?? "—"}
                 </td>
-                <td className="px-4 py-3 font-mono text-xs text-sky-800"></td>
-                <td className="px-4 py-3 text-right">
-                  <button
-                    type="button"
-                    onClick={() => setConfigId(r.id)}
-                    className="inline-flex h-8 items-center rounded-lg px-3 text-xs font-semibold text-sky-800 ring-1 ring-sky-300 hover:bg-sky-50"
-                  >
-                    {t("configure")}
-                  </button>
-                </td>
+                {isSuper && (
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      type="button"
+                      onClick={() => setConfigId(r.id)}
+                      className="inline-flex h-8 items-center rounded-lg px-3 text-xs font-semibold text-sky-800 ring-1 ring-sky-300 hover:bg-sky-50"
+                    >
+                      {t("configure")}
+                    </button>
+                  </td>
+                )}
               </motion.tr>
             ))}
           </tbody>

@@ -6,10 +6,11 @@ import { motion } from "motion/react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Eye, EyeOff, Loader2, ShieldCheck } from "lucide-react";
+import { Eye, EyeOff, Loader2, ShieldCheck, Bot } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/features/auth/use-auth";
+import { useRobots } from "@/features/robots/use-robots";
 
 export function CreateAdminForm({
   onDone,
@@ -21,6 +22,8 @@ export function CreateAdminForm({
   const t = useTranslations("Admins");
   const tl = useTranslations("Login");
   const { user } = useAuth();
+  const { robots: allRobots, loading: robotsLoading } = useRobots("superAdmin");
+  const [selectedRobots, setSelectedRobots] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
 
@@ -32,7 +35,7 @@ export function CreateAdminForm({
     people: true,
     knowledgeBase: true,
     telemetry: true,
-    settings: false,
+    settings: true,
   });
 
   const schema = z.object({
@@ -52,6 +55,12 @@ export function CreateAdminForm({
     setPermissions((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
+  function toggleRobot(id: string) {
+    setSelectedRobots((prev) =>
+      prev.includes(id) ? prev.filter((r) => r !== id) : [...prev, id]
+    );
+  }
+
   async function onSubmit(values: Values) {
     if (!user) return;
     setError(null);
@@ -66,6 +75,7 @@ export function CreateAdminForm({
         body: JSON.stringify({
           ...values,
           permissions,
+          assignedRobots: selectedRobots,
         }),
       });
 
@@ -164,6 +174,42 @@ export function CreateAdminForm({
             <p className="text-xs text-red-600">{errors.password.message}</p>
           )}
         </div>
+      </div>
+
+      {/* Assigned Robots Selection */}
+      <div className="rounded-xl border border-sky-100 bg-sky-50/50 p-4">
+        <div className="flex items-center gap-2 mb-2">
+          <Bot className="size-4 text-sky-700" />
+          <h4 className="text-xs font-bold text-sky-900">
+            Assigned Robots (Multi-Select)
+          </h4>
+        </div>
+        {robotsLoading ? (
+          <div className="flex items-center gap-2 py-2 text-xs text-sky-700">
+            <Loader2 className="size-3.5 animate-spin" />
+            <span>Loading robots...</span>
+          </div>
+        ) : allRobots.length === 0 ? (
+          <p className="text-xs text-sky-700/80 italic">No robots currently registered.</p>
+        ) : (
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {allRobots.map((robot) => (
+              <label
+                key={robot.id}
+                className="flex items-center gap-2 rounded-lg bg-white p-2 border border-sky-100 text-xs font-medium text-slate-700 cursor-pointer hover:bg-sky-50 transition-colors"
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedRobots.includes(robot.id)}
+                  onChange={() => toggleRobot(robot.id)}
+                  className="rounded border-sky-300 text-sky-600 focus:ring-sky-500"
+                />
+                <span className="font-semibold text-sky-950">{robot.name}</span>
+                <span className="text-[10px] font-mono text-sky-700">({robot.id})</span>
+              </label>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Granular Module Permissions */}

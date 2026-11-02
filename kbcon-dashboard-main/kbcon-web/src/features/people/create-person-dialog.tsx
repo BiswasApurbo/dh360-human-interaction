@@ -21,17 +21,20 @@ interface CreatePersonDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSubmit: (data: CreatePersonInput) => Promise<unknown>;
+  robots?: Array<{ id: string; name: string }>;
 }
 
 export function CreatePersonDialog({
   open,
   onOpenChange,
   onSubmit,
+  robots = [],
 }: CreatePersonDialogProps) {
   const t = useTranslations("People");
 
   const [displayName, setDisplayName] = useState("");
   const [preferredName, setPreferredName] = useState("");
+  const [selectedRobotId, setSelectedRobotId] = useState("");
   const [role, setRole] = useState("");
   const [department, setDepartment] = useState("");
   const [officeRoom, setOfficeRoom] = useState("");
@@ -44,6 +47,7 @@ export function CreatePersonDialog({
   const resetForm = () => {
     setDisplayName("");
     setPreferredName("");
+    setSelectedRobotId("");
     setRole("");
     setDepartment("");
     setOfficeRoom("");
@@ -88,6 +92,7 @@ export function CreatePersonDialog({
       await onSubmit({
         display_name: displayName.trim(),
         preferred_name: preferredName.trim() || undefined,
+        robot_id: selectedRobotId || undefined,
         role: role.trim() || undefined,
         department: department.trim() || undefined,
         office_room: officeRoom.trim() || undefined,
@@ -150,6 +155,25 @@ export function CreatePersonDialog({
               />
             </div>
           </div>
+
+          {robots && robots.length > 0 && (
+            <div className="space-y-1.5">
+              <Label htmlFor="associatedRobot">Associated Robot</Label>
+              <select
+                id="associatedRobot"
+                value={selectedRobotId}
+                onChange={(e) => setSelectedRobotId(e.target.value)}
+                className="h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-sky-950 ring-offset-background outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+              >
+                <option value="">All Assigned Robots (Tenant General)</option>
+                {robots.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name} ({r.id})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">

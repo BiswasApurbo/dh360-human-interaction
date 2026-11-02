@@ -103,6 +103,7 @@ export async function GET(request: Request) {
         active,
         mustChangePassword: Boolean(claims.mustChangePassword || fsData.mustChangePassword),
         permissions,
+        assignedRobots: (fsData.assignedRobots as string[]) || [],
         createdAt: u.metadata.creationTime,
         lastSignInTime: u.metadata.lastSignInTime,
       };
@@ -160,6 +161,9 @@ export async function POST(request: Request) {
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
   const password = typeof body.password === "string" ? body.password : "";
   const permissionsInput = (body.permissions as Record<string, boolean>) || {};
+  const assignedRobots = Array.isArray(body.assignedRobots)
+    ? (body.assignedRobots as string[]).filter((r): r is string => typeof r === "string" && Boolean(r.trim()))
+    : [];
 
   if (!email || !email.includes("@")) {
     return NextResponse.json({ error: "INVALID_ARGUMENT", message: "Valid email is required." }, { status: 400 });
@@ -185,6 +189,7 @@ export async function POST(request: Request) {
         password,
         role: "admin",
         permissions,
+        assignedRobots,
       });
       const data = await res.json();
       return NextResponse.json(data, { status: res.status });
@@ -207,10 +212,11 @@ export async function POST(request: Request) {
       displayName: name,
     });
 
-    // 2. Set custom claims for RBAC
+    // 2. Set custom claims for RBAC and mandatory first password change
     await adminAuth.setCustomUserClaims(newUser.uid, {
       role: "admin",
       permissions,
+      mustChangePassword: true,
     });
 
     // 3. Persist in Firestore
@@ -220,9 +226,26 @@ export async function POST(request: Request) {
       role: "admin",
       active: true,
       permissions,
+      assignedRobots,
+      mustChangePassword: true,
       createdAt: new Date().toISOString(),
       createdBy: authResult.principal.uid,
     });
+
+    // 4. Update assigned robots
+    for (const robotId of assignedRobots) {
+      try {
+        await adminDb.collection("robots").doc(robotId).set(
+          {
+            assignedAdminId: newUser.uid,
+            assignedAdminName: name,
+          },
+          { merge: true }
+        );
+      } catch (rErr) {
+        console.warn(`[admin/users] Failed to associate robot ${robotId}:`, rErr);
+      }
+    }
 
     return NextResponse.json(
       {
@@ -233,6 +256,8 @@ export async function POST(request: Request) {
           role: "admin",
           active: true,
           permissions,
+          assignedRobots,
+          mustChangePassword: true,
         },
       },
       { status: 201 }

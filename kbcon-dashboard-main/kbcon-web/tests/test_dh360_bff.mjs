@@ -447,65 +447,68 @@ async function runTests() {
     assert.strictEqual(body.error, "FORBIDDEN");
   });
 
-  await test("2.2 Admin cannot reset biometrics (Super Admin required) -> HTTP 403", async () => {
-    const req = new Request("http://localhost:3000/api/dh360/persons/p-100/biometrics", {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+  await test("2.2 Super Admin is blocked from /persons endpoints (tenant-private data) -> HTTP 403", async () => {
+    const req = new Request("http://localhost:3000/api/dh360/persons", {
+      headers: { Authorization: `Bearer ${SUPER_ADMIN_TOKEN}` },
     });
-    const res = await handleDh360ProxyRequest(req, ["persons", "p-100", "biometrics"]);
+    const res = await handleDh360ProxyRequest(req, ["persons"]);
     assert.strictEqual(res.status, 403);
     const body = await res.json();
     assert.strictEqual(body.error, "FORBIDDEN");
+    assert.match(body.message, /Super Admin is restricted from accessing tenant-private data/);
   });
 
-  await test("2.3 Admin cannot delete person profile (Super Admin required) -> HTTP 403", async () => {
-    const req = new Request("http://localhost:3000/api/dh360/persons/p-100", {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+  await test("2.3 Super Admin is blocked from /knowledge endpoints (tenant-private data) -> HTTP 403", async () => {
+    const req = new Request("http://localhost:3000/api/dh360/knowledge/items", {
+      headers: { Authorization: `Bearer ${SUPER_ADMIN_TOKEN}` },
     });
-    const res = await handleDh360ProxyRequest(req, ["persons", "p-100"]);
+    const res = await handleDh360ProxyRequest(req, ["knowledge", "items"]);
     assert.strictEqual(res.status, 403);
     const body = await res.json();
     assert.strictEqual(body.error, "FORBIDDEN");
+    assert.match(body.message, /Super Admin is restricted from accessing tenant-private data/);
   });
 
-  await test("2.4 Admin cannot modify consent_status (Super Admin required) -> HTTP 403", async () => {
+  await test("2.4 Admin CAN modify person (within tenant) -> HTTP 200 & injects X-Tenant-ID", async () => {
+    lastDh360Request = null;
     const req = new Request("http://localhost:3000/api/dh360/persons/p-100", {
       method: "PATCH",
       headers: {
         Authorization: `Bearer ${ADMIN_TOKEN}`,
         "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ consent_status: "granted" }),
-    });
-    const res = await handleDh360ProxyRequest(req, ["persons", "p-100"]);
-    assert.strictEqual(res.status, 403);
-    const body = await res.json();
-    assert.strictEqual(body.error, "FORBIDDEN");
-  });
-
-  await test("2.5 Super Admin CAN modify consent_status -> HTTP 200", async () => {
-    const req = new Request("http://localhost:3000/api/dh360/persons/p-100", {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${SUPER_ADMIN_TOKEN}`,
-        "Content-Type": "application/json",
+        "X-Robot-ID": "robot-01",
       },
       body: JSON.stringify({ consent_status: "granted" }),
     });
     const res = await handleDh360ProxyRequest(req, ["persons", "p-100"]);
     assert.strictEqual(res.status, 200);
+    assert.strictEqual(lastDh360Request.headers["x-tenant-id"], "admin-456");
+    assert.strictEqual(lastDh360Request.headers["x-user-role"], "admin");
+    assert.strictEqual(lastDh360Request.headers["x-robot-id"], "robot-01");
   });
 
-  await test("2.6 Super Admin CAN delete person profile -> HTTP 204", async () => {
+  await test("2.5 Admin CAN delete person profile (within tenant) -> HTTP 204", async () => {
     lastDh360Request = null;
     const req = new Request("http://localhost:3000/api/dh360/persons/p-100", {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${SUPER_ADMIN_TOKEN}` },
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
     });
     const res = await handleDh360ProxyRequest(req, ["persons", "p-100"]);
     assert.strictEqual(res.status, 204);
     assert.strictEqual(lastDh360Request.method, "DELETE");
+    assert.strictEqual(lastDh360Request.headers["x-tenant-id"], "admin-456");
+  });
+
+  await test("2.6 Admin CAN reset biometrics (within tenant) -> HTTP 204", async () => {
+    lastDh360Request = null;
+    const req = new Request("http://localhost:3000/api/dh360/persons/p-100/biometrics", {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    const res = await handleDh360ProxyRequest(req, ["persons", "p-100", "biometrics"]);
+    assert.strictEqual(res.status, 204);
+    assert.strictEqual(lastDh360Request.method, "DELETE");
+    assert.strictEqual(lastDh360Request.headers["x-tenant-id"], "admin-456");
   });
 
   await test("2.7 Bootstrap account with mustChangePassword=true is blocked with HTTP 403", async () => {

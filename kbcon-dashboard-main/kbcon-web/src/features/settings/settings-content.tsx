@@ -25,8 +25,6 @@ import { usePathname, useRouter } from "@/i18n/navigation";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/features/auth/use-auth";
-import { InstitutionCard } from "./institution-card";
-import { RetentionCard } from "./retention-card";
 
 const cardClass =
   "rounded-3xl border border-sky-200 bg-gradient-to-br from-white via-sky-50 to-sky-100 p-5 shadow-lg shadow-sky-200/60 sm:p-6";
@@ -467,9 +465,6 @@ export function SettingsContent() {
           </div>
         </div>
       </motion.section>
-
-      <InstitutionCard />
-      <RetentionCard />
     </div>
   );
 }
