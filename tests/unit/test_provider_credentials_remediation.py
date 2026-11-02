@@ -76,7 +76,7 @@ def test_soniox_source_contains_no_hardcoded_secrets() -> None:
     assert "e4569dcb012aa3c5f471d62fdd3c93b7" not in content, (
         "Found hardcoded Soniox key in soniox.py"
     )
-    assert 'SONIOX_API_KEY      = os.getenv("SONIOX_API_KEY"' in content
+    assert 'SONIOX_API_KEY = os.getenv("SONIOX_API_KEY' in content
 
 
 def test_soniox_missing_credentials_raises_value_error(monkeypatch: pytest.MonkeyPatch) -> None:

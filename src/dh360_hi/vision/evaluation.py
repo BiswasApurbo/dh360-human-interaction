@@ -150,8 +150,8 @@ def evaluate_pairs(
         tpr = float(tp / n_gen)
         accuracy = float((tp + tn) / (n_gen + n_imp))
 
-        precision = tp / max(tp + fp, 1)
-        recall = tp / max(tp + fn, 1)
+        precision = float(tp) / max(float(tp + fp), 1.0)
+        recall = float(tp) / max(float(tp + fn), 1.0)
         f1 = float(2 * precision * recall / max(precision + recall, 1e-6))
 
         point = ThresholdPoint(
