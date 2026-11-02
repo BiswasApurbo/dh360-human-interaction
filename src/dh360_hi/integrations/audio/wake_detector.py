@@ -25,15 +25,12 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Accepted acoustic variants of "Hey KB"
+# Accepted acoustic variants of "Hey KB" in Vosk vocabulary
 DEFAULT_WAKE_VARIANTS = (
-    "hey kb",
     "hey k b",
     "hey kay bee",
-    "hey kbee",
-    "hey kb.",
-    "a kb",
-    "hi kb",
+    "hi k b",
+    "hi kay bee",
 )
 
 
@@ -151,9 +148,10 @@ class WakeWordDetector:
         clean = re.sub(r"[^\w\s]", "", text.strip().lower())
         if not clean:
             return False
+        normalized = clean.replace("kb", "k b")
         for variant in self._variants:
-            clean_variant = re.sub(r"[^\w\s]", "", variant)
-            if clean_variant in clean:
+            clean_variant = re.sub(r"[^\w\s]", "", variant).replace("kb", "k b")
+            if clean_variant in normalized:
                 return True
         return False
 
