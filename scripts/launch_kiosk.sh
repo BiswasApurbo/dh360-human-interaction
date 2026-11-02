@@ -10,7 +10,7 @@ set -u
 
 KIOSK_URL="http://127.0.0.1:8000/kiosk"
 HEALTH_URL="http://127.0.0.1:8000/health"
-MAX_WAIT_SECONDS=60
+MAX_WAIT_SECONDS=120
 POLL_INTERVAL=1
 
 export DISPLAY="${DISPLAY:-:0}"
@@ -61,12 +61,20 @@ if [ -z "$CHROMIUM_BIN" ]; then
 fi
 
 apply_portrait_orientation() {
-    echo "[Kiosk] Enforcing portrait display rotation (left)..."
+    echo "[Kiosk] Enforcing portrait display rotation (270 / left)..."
+    # Wayland / Labwc (wlr-randr)
+    if command -v wlr-randr > /dev/null 2>&1; then
+        for out in $(wlr-randr 2>/dev/null | grep '^[^ ]' | awk '{print $1}'); do
+            wlr-randr --output "$out" --transform 270 2>/dev/null || true
+        done
+    fi
+    # X11 fallback
     if command -v xrandr > /dev/null 2>&1; then
         for out in $(xrandr 2>/dev/null | grep ' connected' | awk '{print $1}'); do
             xrandr --output "$out" --rotate left 2>/dev/null || true
         done
     fi
+    # Touchscreen coordinate transformation
     if command -v xinput > /dev/null 2>&1; then
         xinput set-prop 'QDtech MPI7003' 'Coordinate Transformation Matrix' 0 -1 1 1 0 0 0 0 1 2>/dev/null || true
     fi
@@ -87,6 +95,7 @@ while true; do
 
     "$CHROMIUM_BIN" \
         --kiosk \
+        --ozone-platform-hint=auto \
         --noerrdialogs \
         --disable-infobars \
         --no-first-run \
@@ -94,7 +103,8 @@ while true; do
         --fast-start \
         --disable-pinch \
         --overscroll-history-navigation=0 \
-        --disable-features=TranslateUI \
+        --disable-features=Translate,TranslateUI \
+        --disable-translate \
         --disk-cache-dir=/tmp/chromium-kiosk-cache \
         --autoplay-policy=no-user-gesture-required \
         --check-for-update-interval=31536000 \
