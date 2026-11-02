@@ -125,11 +125,17 @@ async def handle_dialogue_turn(
             tenant_id=tenant_id,
         )
     except TypeError:
-        turn = await coordinator.handle_turn_async(
-            user_text=payload.text,
-            language=payload.language,
-            tenant_id=tenant_id,
-        )
+        try:
+            turn = await coordinator.handle_turn_async(
+                user_text=payload.text,
+                language=payload.language,
+                speak_response=payload.speak_response,
+            )
+        except TypeError:
+            turn = await coordinator.handle_turn_async(
+                user_text=payload.text,
+                language=payload.language,
+            )
 
     return DialogueTurnResponse(
         role=turn.role,
@@ -167,11 +173,17 @@ async def handle_dialogue_voice_turn(
             tenant_id=tenant_id,
         )
     except TypeError:
-        turn = await coordinator.handle_turn_async(
-            user_text=None,
-            language=payload.language,
-            tenant_id=tenant_id,
-        )
+        try:
+            turn = await coordinator.handle_turn_async(
+                user_text=None,
+                language=payload.language,
+                speak_response=payload.speak_response,
+            )
+        except TypeError:
+            turn = await coordinator.handle_turn_async(
+                user_text=None,
+                language=payload.language,
+            )
 
     user_text = str(turn.metadata.get("user_text", "")).strip()
 
