@@ -228,10 +228,10 @@ class SQLitePersonRepository(BasePersonRepository):
             conditions.append("status = ?")
             params_list.append(status.value)
         if tenant_id is not None:
-            conditions.append("(tenant_id = ? OR tenant_id IS NULL)")
+            conditions.append("tenant_id = ?")
             params_list.append(tenant_id)
         if robot_id is not None:
-            conditions.append("(robot_id = ? OR robot_id IS NULL)")
+            conditions.append("robot_id = ?")
             params_list.append(robot_id)
 
         where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""

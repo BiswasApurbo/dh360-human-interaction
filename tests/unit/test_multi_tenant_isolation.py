@@ -35,7 +35,7 @@ def test_schema_v5_tenant_columns(memory_db_manager: DatabaseManager) -> None:
 
 
 def test_person_service_tenant_isolation(memory_db_manager: DatabaseManager) -> None:
-    """Verify PersonService filters people strictly by tenant_id."""
+    """Verify PersonService filters people strictly by tenant_id and excludes unassigned legacy records."""
     repo = SQLitePersonRepository(memory_db_manager)
     service = PersonService(repo)
 
@@ -56,32 +56,44 @@ def test_person_service_tenant_isolation(memory_db_manager: DatabaseManager) -> 
         display_name="Legacy User",
     )
 
-    # Tenant A list
+    # Tenant A list: only Tenant A records returned; Legacy User strictly excluded
     list_a = service.list_people(tenant_id="tenant-a")
     names_a = [p.display_name for p in list_a]
     assert "User Admin A" in names_a
-    assert "Legacy User" in names_a
+    assert "Legacy User" not in names_a
     assert "User Admin B" not in names_a
 
-    # Tenant B list
+    # Tenant B list: only Tenant B records returned; Legacy User strictly excluded
     list_b = service.list_people(tenant_id="tenant-b")
     names_b = [p.display_name for p in list_b]
     assert "User Admin B" in names_b
-    assert "Legacy User" in names_b
+    assert "Legacy User" not in names_b
     assert "User Admin A" not in names_b
+
+    # Unfiltered list (internal / system / gallery loader): all records returned
+    list_all = service.list_people()
+    names_all = [p.display_name for p in list_all]
+    assert "User Admin A" in names_all
+    assert "User Admin B" in names_all
+    assert "Legacy User" in names_all
 
 
 def test_api_person_cross_tenant_access_prevention(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Verify FastAPI persons router blocks cross-tenant retrieval, update, and deletion."""
+    """Verify FastAPI persons router blocks cross-tenant and legacy null-tenant access."""
     token = _configure_operator(
         monkeypatch,
-        "persons:read,persons:create,persons:update,persons:delete,biometrics:reset",
+        "persons:read,persons:create,persons:update,persons:delete,biometrics:reset,enrollment:manage",
     )
     headers_a = {"Authorization": f"Bearer {token}", "X-Tenant-ID": "admin-a"}
     headers_b = {"Authorization": f"Bearer {token}", "X-Tenant-ID": "admin-b"}
 
     app = create_app()
     with TestClient(app) as client:
+        # Internal system creates a legacy person with NULL tenant_id
+        svc = client.app.state.service
+        legacy_rec = svc._person_service.create_person(display_name="Unassigned Legacy Person")
+        legacy_id = legacy_rec.person_id
+
         # Admin A creates a person
         res_create = client.post(
             "/persons",
@@ -116,21 +128,51 @@ def test_api_person_cross_tenant_access_prevention(monkeypatch: pytest.MonkeyPat
         res_del_b = client.delete(f"/persons/{person_a_id}", headers=headers_b)
         assert res_del_b.status_code == 404
 
-        # Admin A lists persons: Admin A sees their person
+        # Admin A lists persons: Admin A sees their person, but NOT legacy person or Admin B
         res_list_a = client.get("/persons", headers=headers_a)
         ids_a = [p["person_id"] for p in res_list_a.json()]
         assert person_a_id in ids_a
+        assert legacy_id not in ids_a
 
-        # Admin B lists persons: Admin B does NOT see Admin A's person
+        # Admin B lists persons: Admin B does NOT see Admin A's person or legacy person
         res_list_b = client.get("/persons", headers=headers_b)
         ids_b = [p["person_id"] for p in res_list_b.json()]
         assert person_a_id not in ids_b
+        assert legacy_id not in ids_b
+
+        # STRICT ISOLATION AGAINST NULL-TENANT RECORDS:
+        # Admin A cannot retrieve legacy person -> returns 404
+        assert client.get(f"/persons/{legacy_id}", headers=headers_a).status_code == 404
+        # Admin A cannot update legacy person -> returns 404
+        assert (
+            client.patch(
+                f"/persons/{legacy_id}",
+                headers=headers_a,
+                json={"display_name": "Adopted Name"},
+            ).status_code
+            == 404
+        )
+        # Admin A cannot reset biometrics of legacy person -> returns 404
+        assert (
+            client.delete(f"/persons/{legacy_id}/biometrics", headers=headers_a).status_code == 404
+        )
+        # Admin A cannot delete legacy person -> returns 404
+        assert client.delete(f"/persons/{legacy_id}", headers=headers_a).status_code == 404
+        # Admin A cannot start enrollment on legacy person -> returns 404
+        assert (
+            client.post(
+                f"/persons/{legacy_id}/enrollment/sessions",
+                headers=headers_a,
+                json={"mode": "add_samples"},
+            ).status_code
+            == 404
+        )
 
 
 def test_api_knowledge_cross_tenant_access_prevention(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pytest.TempPathFactory
 ) -> None:
-    """Verify FastAPI knowledge router blocks cross-tenant access and mutation."""
+    """Verify FastAPI knowledge router blocks cross-tenant mutation and protects shared baseline facts."""
     csv_file = tmp_path / "tenant_knowledge.csv"
     csv_file.write_text(
         "id,Question (English),Answer (English),প্রশ্ন (বাংলা),উত্তর (বাংলা),Institution Type,tenant_id\n"
@@ -145,6 +187,23 @@ def test_api_knowledge_cross_tenant_access_prevention(
     headers_b = {"Authorization": f"Bearer {token}", "X-Tenant-ID": "admin-b"}
 
     with TestClient(app) as client:
+        # Admin A can read shared baseline fact
+        res_get_shared = client.get("/knowledge/items/kb-shared", headers=headers_a)
+        assert res_get_shared.status_code == 200
+        assert res_get_shared.json()["id"] == "kb-shared"
+
+        # Admin A CANNOT update shared baseline fact -> returns 403 Forbidden
+        res_put_shared = client.put(
+            "/knowledge/items/kb-shared",
+            headers=headers_a,
+            json={"question_en": "Modified Shared Q", "answer_en": "Modified Shared A"},
+        )
+        assert res_put_shared.status_code == 403
+
+        # Admin A CANNOT delete shared baseline fact -> returns 403 Forbidden
+        res_del_shared = client.delete("/knowledge/items/kb-shared", headers=headers_a)
+        assert res_del_shared.status_code == 403
+
         # Admin A creates a knowledge item
         res_create = client.post(
             "/knowledge/items",
@@ -177,9 +236,11 @@ def test_api_knowledge_cross_tenant_access_prevention(
         res_del_b = client.delete(f"/knowledge/items/{item_a_id}", headers=headers_b)
         assert res_del_b.status_code == 404
 
-        # In list: Admin A sees item_a_id; Admin B does NOT see item_a_id
+        # In list: Admin A sees shared baseline AND item_a_id; Admin B sees shared baseline but NOT item_a_id
         list_a = client.get("/knowledge/items", headers=headers_a).json()["items"]
+        assert any(item["id"] == "kb-shared" for item in list_a)
         assert any(item["id"] == item_a_id for item in list_a)
 
         list_b = client.get("/knowledge/items", headers=headers_b).json()["items"]
+        assert any(item["id"] == "kb-shared" for item in list_b)
         assert not any(item["id"] == item_a_id for item in list_b)

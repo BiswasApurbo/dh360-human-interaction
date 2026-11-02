@@ -22,7 +22,7 @@ _settings_read = Depends(require_scope(OperatorScope.SETTINGS_READ))
 _settings_manage = Depends(require_scope(OperatorScope.SETTINGS_MANAGE))
 
 VALID_INSTITUTION_TYPES = frozenset(
-    {"university", "clinic", "hospital", "campus", "academic", "healthcare", "medical"}
+    {"university", "clinic", "hospital", "campus", "academic", "healthcare", "medical", "education"}
 )
 
 

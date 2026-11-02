@@ -56,17 +56,32 @@ def _get_service(request: Request) -> HumanInteractionService:
     return service
 
 
-def _require_person(service: HumanInteractionService, person_id: str) -> None:
-    """Raise the standard 404 contract when the target person does not exist."""
-    if service.get_person(person_id) is None:
+def _require_person(
+    service: HumanInteractionService,
+    person_id: str,
+    tenant_id: str | None = None,
+) -> None:
+    """Raise the standard 404 contract when the target person does not exist or tenant mismatches."""
+    profile = service.get_person(person_id)
+    if profile is None:
+        raise EntityNotFoundError("person", person_id)
+    if tenant_id and profile.tenant_id != tenant_id:
         raise EntityNotFoundError("person", person_id)
 
 
-def _require_active_session(service: HumanInteractionService, person_id: str) -> None:
-    """Raise the standard 404 contract when no active session matches the person."""
+def _require_active_session(
+    service: HumanInteractionService,
+    person_id: str,
+    tenant_id: str | None = None,
+) -> None:
+    """Raise the standard 404 contract when no active session matches the person or tenant mismatches."""
     progress = service.get_enrollment_progress()
     if progress is None or progress.person_id != person_id:
         raise EntityNotFoundError("enrollment_session", person_id)
+    if tenant_id:
+        profile = service.get_person(person_id)
+        if profile is None or profile.tenant_id != tenant_id:
+            raise EntityNotFoundError("enrollment_session", person_id)
 
 
 @router.post(
@@ -81,7 +96,8 @@ def start_enrollment_session(
 ) -> dict[str, Any]:
     """Open a server-side capture source and start an enrollment session for a person."""
     service = _get_service(request)
-    _require_person(service, person_id)
+    tenant_id = request.headers.get("X-Tenant-ID")
+    _require_person(service, person_id, tenant_id=tenant_id)
     if service.get_enrollment_progress() is not None:
         raise ConflictAppError("An enrollment session is already active")
     runtime = getattr(service, "runtime", None)
@@ -104,6 +120,8 @@ def get_enrollment_session(
 ) -> dict[str, Any]:
     """Return the current progress of the active enrollment session for a person."""
     service = _get_service(request)
+    tenant_id = request.headers.get("X-Tenant-ID")
+    _require_active_session(service, person_id, tenant_id=tenant_id)
     progress = service.get_enrollment_progress()
     if progress is None or progress.person_id != person_id:
         raise EntityNotFoundError("enrollment_session", person_id)
@@ -118,7 +136,8 @@ def get_enrollment_preview_frame(
 ) -> Response:
     """Return the latest server camera frame as a JPEG preview for an active enrollment session."""
     service = _get_service(request)
-    _require_active_session(service, person_id)
+    tenant_id = request.headers.get("X-Tenant-ID")
+    _require_active_session(service, person_id, tenant_id=tenant_id)
     frame_getter = getattr(service, "get_latest_enrollment_frame", None)
     frame = frame_getter() if callable(frame_getter) else None
     if frame is None or getattr(frame, "image", None) is None:
@@ -156,7 +175,8 @@ def step_enrollment_session(
 ) -> dict[str, Any]:
     """Capture and process exactly one server-side camera frame for the active session."""
     service = _get_service(request)
-    _require_active_session(service, person_id)
+    tenant_id = request.headers.get("X-Tenant-ID")
+    _require_active_session(service, person_id, tenant_id=tenant_id)
     progress = service.step_enrollment()
     return progress.to_dict()
 
@@ -169,8 +189,10 @@ def commit_enrollment_session(
 ) -> dict[str, Any]:
     """Transactionally persist collected samples within a safe person-mutation barrier."""
     service = _get_service(request)
-    _require_active_session(service, person_id)
+    tenant_id = request.headers.get("X-Tenant-ID")
+    _require_active_session(service, person_id, tenant_id=tenant_id)
     result = service.commit_enrollment()
+    return result.to_dict()
     return result.to_dict()
 
 
@@ -202,6 +224,7 @@ def cancel_enrollment_session(
 ) -> dict[str, Any]:
     """Cancel the active enrollment session without persisting any samples."""
     service = _get_service(request)
-    _require_active_session(service, person_id)
+    tenant_id = request.headers.get("X-Tenant-ID")
+    _require_active_session(service, person_id, tenant_id=tenant_id)
     service.cancel_enrollment("Cancelled via API")
     return {"cancelled": True, "person_id": person_id}

@@ -521,6 +521,8 @@ class KnowledgeService:
         cleaned = (inst_type or "").strip().lower()
         if cleaned in ("clinic", "hospital", "healthcare", "medical"):
             return "clinic"
+        if cleaned in ("university", "campus", "academic", "education"):
+            return "university"
         return "university"
 
     @property
@@ -587,9 +589,9 @@ class KnowledgeService:
                     row_type = (row.get("Institution Type") or "").strip().lower()
                     if not row_type:
                         row_type = "university"
-                    elif row_type in ("clinic", "hospital", "healthcare"):
+                    elif row_type in ("clinic", "hospital", "healthcare", "medical"):
                         row_type = "clinic"
-                    elif row_type in ("university", "campus", "academic"):
+                    elif row_type in ("university", "campus", "academic", "education"):
                         row_type = "university"
 
                     row_tenant = (row.get("tenant_id") or "").strip() or None
@@ -787,9 +789,9 @@ class KnowledgeService:
                 a_bn = row.get("উত্তর (বাংলা)", "")
                 itype = row.get("Institution Type", "general")
                 if itype not in ("university", "clinic", "general"):
-                    if itype in ("hospital", "healthcare"):
+                    if itype in ("hospital", "healthcare", "medical"):
                         itype = "clinic"
-                    elif itype in ("academic", "campus"):
+                    elif itype in ("academic", "campus", "education"):
                         itype = "university"
                     else:
                         itype = "general"
@@ -884,8 +886,8 @@ class KnowledgeService:
         if itype not in ("university", "clinic", "general"):
             itype = (
                 "clinic"
-                if itype in ("hospital", "healthcare")
-                else ("university" if itype in ("academic", "campus") else "general")
+                if itype in ("hospital", "healthcare", "medical")
+                else ("university" if itype in ("academic", "campus", "education") else "general")
             )
 
         with self._io_lock:
@@ -935,8 +937,13 @@ class KnowledgeService:
 
             current = rows[idx]
             row_tenant = (current.get("tenant_id") or "").strip()
-            if tenant_id and row_tenant and row_tenant != tenant_id:
-                raise KeyError(f"Knowledge item '{item_id}' not found.")
+            if tenant_id:
+                if not row_tenant:
+                    raise PermissionError(
+                        "Institutional baseline knowledge facts cannot be modified by tenant administrators."
+                    )
+                if row_tenant != tenant_id:
+                    raise KeyError(f"Knowledge item '{item_id}' not found.")
 
             q_en = (
                 current.get("Question (English)", "")
@@ -957,8 +964,12 @@ class KnowledgeService:
                 if itype not in ("university", "clinic", "general"):
                     itype = (
                         "clinic"
-                        if itype in ("hospital", "healthcare")
-                        else ("university" if itype in ("academic", "campus") else "general")
+                        if itype in ("hospital", "healthcare", "medical")
+                        else (
+                            "university"
+                            if itype in ("academic", "campus", "education")
+                            else "general"
+                        )
                     )
             else:
                 itype = current.get("Institution Type", "general")
@@ -996,8 +1007,13 @@ class KnowledgeService:
                 raise KeyError(f"Knowledge item '{item_id}' not found.")
 
             row_tenant = (rows[idx].get("tenant_id") or "").strip()
-            if tenant_id and row_tenant and row_tenant != tenant_id:
-                raise KeyError(f"Knowledge item '{item_id}' not found.")
+            if tenant_id:
+                if not row_tenant:
+                    raise PermissionError(
+                        "Institutional baseline knowledge facts cannot be deleted by tenant administrators."
+                    )
+                if row_tenant != tenant_id:
+                    raise KeyError(f"Knowledge item '{item_id}' not found.")
 
             rows.pop(idx)
             self._atomic_write_rows_unlocked(rows)

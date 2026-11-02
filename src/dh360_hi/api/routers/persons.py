@@ -116,7 +116,7 @@ def get_person(
         raise EntityNotFoundError("person", person_id)
 
     tenant_id = request.headers.get("X-Tenant-ID")
-    if tenant_id and profile.tenant_id is not None and profile.tenant_id != tenant_id:
+    if tenant_id and profile.tenant_id != tenant_id:
         raise EntityNotFoundError("person", person_id)
 
     return profile.to_dict()
@@ -167,7 +167,7 @@ def update_person(
         raise EntityNotFoundError("person", person_id)
 
     tenant_id = request.headers.get("X-Tenant-ID")
-    if tenant_id and existing.tenant_id is not None and existing.tenant_id != tenant_id:
+    if tenant_id and existing.tenant_id != tenant_id:
         raise EntityNotFoundError("person", person_id)
 
     if all(
@@ -242,7 +242,7 @@ def delete_person(
         raise EntityNotFoundError("person", person_id)
 
     tenant_id = request.headers.get("X-Tenant-ID")
-    if tenant_id and existing.tenant_id is not None and existing.tenant_id != tenant_id:
+    if tenant_id and existing.tenant_id != tenant_id:
         raise EntityNotFoundError("person", person_id)
 
     try:
@@ -270,7 +270,7 @@ def reset_person_biometrics(
         raise EntityNotFoundError("person", person_id)
 
     tenant_id = request.headers.get("X-Tenant-ID")
-    if tenant_id and existing.tenant_id is not None and existing.tenant_id != tenant_id:
+    if tenant_id and existing.tenant_id != tenant_id:
         raise EntityNotFoundError("person", person_id)
 
     try:

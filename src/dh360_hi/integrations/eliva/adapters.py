@@ -79,7 +79,7 @@ def build_kbcon_system_instruction(
             "    - Exception: If the user explicitly asks in their prompt to answer in another language (e.g. 'answer in English', 'in English'), follow the user's explicit request."
         )
 
-    if institution_type == "clinic":
+    if institution_type in ("clinic", "hospital", "healthcare", "medical"):
         identity_en = (
             f"You are KBCON, an interactive humanoid assistant robot stationed at this healthcare facility{inst_name}. "
             "You assist patients, visitors, and medical staff with facility navigation, clinic timings, departments, "

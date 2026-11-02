@@ -215,6 +215,11 @@ async def update_knowledge_item(
             tenant_id=tenant_id,
         )
         return KnowledgeItemResponse(**updated)
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e),
+        ) from e
     except KeyError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -250,6 +255,11 @@ async def delete_knowledge_item(
             id=item_id,
             timestamp=time.time(),
         )
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e),
+        ) from e
     except KeyError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
