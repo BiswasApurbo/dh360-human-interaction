@@ -93,9 +93,18 @@ def test_device_pairing_lifecycle(tmp_path: Path) -> None:
 def test_robot_registry_unprovisioned_fallback(tmp_path: Path) -> None:
     """An unprovisioned machine without configs must resolve to UNPROVISIONED, never defaulting to Kb-001."""
     with (
-        patch("dh360_hi.backend.robot_registry.ROBOT_ID_FILE_CANDIDATES", [tmp_path / "nonexistent.json"]),
-        patch("dh360_hi.backend.robot_registry.DEVICE_CONFIG_CANDIDATES", [tmp_path / "no_device.json"]),
-        patch("dh360_hi.backend.robot_registry.OFFLINE_CONFIG_CACHE_CANDIDATES", [tmp_path / "no_cache.json"]),
+        patch(
+            "dh360_hi.backend.robot_registry.ROBOT_ID_FILE_CANDIDATES",
+            [tmp_path / "nonexistent.json"],
+        ),
+        patch(
+            "dh360_hi.backend.robot_registry.DEVICE_CONFIG_CANDIDATES",
+            [tmp_path / "no_device.json"],
+        ),
+        patch(
+            "dh360_hi.backend.robot_registry.OFFLINE_CONFIG_CACHE_CANDIDATES",
+            [tmp_path / "no_cache.json"],
+        ),
         patch.dict("os.environ", {}, clear=True),
     ):
         registry = RobotRegistry(default_robot_id=None)
@@ -111,11 +120,13 @@ def test_robot_registry_detects_paired_device(tmp_path: Path) -> None:
     """When device_config.json has status='paired', RobotRegistry automatically adopts the paired robot ID."""
     cfg_file = tmp_path / "device_config.json"
     cfg_file.write_text(
-        json.dumps({
-            "device_id": "dev_test_99",
-            "status": "paired",
-            "paired_robot_id": "KB-042",
-        }),
+        json.dumps(
+            {
+                "device_id": "dev_test_99",
+                "status": "paired",
+                "paired_robot_id": "KB-042",
+            }
+        ),
         encoding="utf-8",
     )
 

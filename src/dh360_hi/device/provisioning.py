@@ -89,7 +89,9 @@ def request_pairing_session(
                     err_msg = err_json.get("message") or err_json.get("error") or err_msg
                 except Exception:
                     pass
-                raise PairingError(f"Server rejected pairing request ({resp.status_code}): {err_msg}")
+                raise PairingError(
+                    f"Server rejected pairing request ({resp.status_code}): {err_msg}"
+                )
 
             data = resp.json()
             if not data.get("code") or not data.get("sessionId"):
@@ -154,9 +156,7 @@ def poll_pairing_approval(
                         return data
 
                     if status in ("expired", "rejected", "revoked"):
-                        raise PairingExpiredError(
-                            f"Pairing session ended with status: {status}"
-                        )
+                        raise PairingExpiredError(f"Pairing session ended with status: {status}")
 
                 elif resp.status_code in (404, 410):
                     raise PairingExpiredError("Pairing session expired or not found.")

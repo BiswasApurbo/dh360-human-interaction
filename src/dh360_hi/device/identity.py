@@ -74,15 +74,13 @@ class DeviceConfig:
             device_id=str(data.get("device_id") or data.get("deviceId") or ""),
             status=str(data.get("status") or "unpaired"),
             paired_robot_id=(
-                str(data.get("paired_robot_id") or data.get("robot_id") or data.get("robotId") or "")
+                str(
+                    data.get("paired_robot_id") or data.get("robot_id") or data.get("robotId") or ""
+                )
                 or None
             ),
-            tenant_id=(
-                str(data.get("tenant_id") or data.get("tenantId") or "") or None
-            ),
-            device_token=(
-                str(data.get("device_token") or data.get("deviceToken") or "") or None
-            ),
+            tenant_id=(str(data.get("tenant_id") or data.get("tenantId") or "") or None),
+            device_token=(str(data.get("device_token") or data.get("deviceToken") or "") or None),
             paired_at=data.get("paired_at") or data.get("pairedAt"),
             robot_config=data.get("robot_config") or data.get("robotConfig"),
         )
@@ -153,7 +151,9 @@ class DeviceIdentity:
                     config=config,
                 )
             except Exception as exc:
-                logger.warning("Could not load existing device identity at %s: %s", resolved_dir, exc)
+                logger.warning(
+                    "Could not load existing device identity at %s: %s", resolved_dir, exc
+                )
 
         # Generate a new unique device identity
         new_id = f"dev_{uuid.uuid4().hex}"
@@ -199,9 +199,7 @@ class DeviceIdentity:
             self.public_key_file.chmod(0o644)
 
         # 4. Save device_config.json
-        self.config_file.write_text(
-            json.dumps(self.config.to_dict(), indent=2), encoding="utf-8"
-        )
+        self.config_file.write_text(json.dumps(self.config.to_dict(), indent=2), encoding="utf-8")
         self.config_file.chmod(0o600)
 
     def get_public_key_pem(self) -> str:
