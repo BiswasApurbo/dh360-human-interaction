@@ -191,7 +191,19 @@ export async function POST(request: Request) {
         permissions,
         assignedRobots,
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const message =
+          typeof data.detail === "string"
+            ? data.detail
+            : Array.isArray(data.detail)
+              ? data.detail.map((d: { msg?: string }) => d.msg || "Validation error").join("; ")
+              : (data.message || "Failed to create Admin account.");
+        return NextResponse.json(
+          { error: data.error || (res.status === 409 ? "ALREADY_EXISTS" : "CREATION_FAILED"), message },
+          { status: res.status }
+        );
+      }
       return NextResponse.json(data, { status: res.status });
     } catch (err: unknown) {
       return NextResponse.json(

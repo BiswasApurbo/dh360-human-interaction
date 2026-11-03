@@ -16,8 +16,8 @@ import { getDh360Config } from "./dh360/config";
 let adminApp: App | null = null;
 
 function resolveServiceAccount(): Record<string, unknown> | null {
-  // 1. Check FIREBASE_SERVICE_ACCOUNT_KEY environment variable (raw JSON or path)
-  const envKey = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+  // 1. Check FIREBASE_SERVICE_ACCOUNT_KEY or FIREBASE_SERVICE_ACCOUNT environment variable (raw JSON, base64, or path)
+  const envKey = process.env.FIREBASE_SERVICE_ACCOUNT_KEY || process.env.FIREBASE_SERVICE_ACCOUNT;
   if (envKey) {
     if (fs.existsSync(envKey)) {
       try {
@@ -29,11 +29,32 @@ function resolveServiceAccount(): Record<string, unknown> | null {
     try {
       return JSON.parse(envKey);
     } catch {
-      // Fall through
+      // Try base64 decoding
+      try {
+        const decoded = Buffer.from(envKey, "base64").toString("utf-8");
+        return JSON.parse(decoded);
+      } catch {
+        // Fall through
+      }
     }
   }
 
-  // 2. Check GOOGLE_APPLICATION_CREDENTIALS
+  // 2. Check GOOGLE_SERVICE_ACCOUNT_JSON
+  const gJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (gJson) {
+    try {
+      return JSON.parse(gJson);
+    } catch {
+      try {
+        const decoded = Buffer.from(gJson, "base64").toString("utf-8");
+        return JSON.parse(decoded);
+      } catch {
+        // Fall through
+      }
+    }
+  }
+
+  // 3. Check GOOGLE_APPLICATION_CREDENTIALS
   const gCred = process.env.GOOGLE_APPLICATION_CREDENTIALS;
   if (gCred && fs.existsSync(gCred)) {
     try {
@@ -43,7 +64,7 @@ function resolveServiceAccount(): Record<string, unknown> | null {
     }
   }
 
-  // 3. Check ~/.config/kbcon/firebase-service-account.json
+  // 4. Check ~/.config/kbcon/firebase-service-account.json
   const defaultLocalPath = path.join(os.homedir(), ".config", "kbcon", "firebase-service-account.json");
   if (fs.existsSync(defaultLocalPath)) {
     try {

@@ -81,7 +81,7 @@ class ClearTemporaryPasswordRequest(BaseModel):
 class CreateAdminRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     email: str = Field(..., min_length=3)
-    password: str = Field(..., min_length=8)
+    password: str = Field(..., min_length=6)
     name: str = Field(default="")
     role: str = Field(default="admin")
     permissions: dict[str, bool] = Field(default_factory=dict)
@@ -245,6 +245,12 @@ async def create_admin_user(
         logger.info("Created admin user %s (%s)", payload.email, user.uid)
         return {"success": True, "user": user_record}
     except Exception as exc:
+        err_msg = str(exc)
+        if "EMAIL_EXISTS" in err_msg or "already exists" in err_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An account with this email address already exists.",
+            ) from exc
         logger.exception("Failed to create admin user %s", payload.email)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -366,6 +372,52 @@ async def create_robot(
     }
     robot_ref.set(robot_data)
     return {"success": True, "robotId": payload.robotId, "secret": secret}
+
+
+@router.patch("/admin/robots")
+async def patch_robot(
+    payload: dict[str, Any],
+    _auth: OperatorPrincipal = _operator_manage,
+) -> dict[str, Any]:
+    """Update robot configuration, mode, or assigned administrator."""
+    db = get_firebase_firestore()
+    robot_id = str(payload.get("robotId") or "").strip()
+    if not robot_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="robotId is required.",
+        )
+
+    robot_ref = db.collection("robots").document(robot_id)
+    doc_snap = robot_ref.get()
+    if not doc_snap.exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Robot '{robot_id}' not found.",
+        )
+
+    now_str = datetime.now(UTC).isoformat()
+    updates: dict[str, Any] = {"updatedAt": now_str}
+
+    if "adminId" in payload:
+        admin_id = payload["adminId"]
+        admin_name = None
+        if admin_id:
+            u_doc = db.collection("users").document(str(admin_id)).get()
+            if u_doc.exists:
+                u_data = u_doc.to_dict() or {}
+                admin_name = u_data.get("name") or u_data.get("email")
+        updates["assignedAdminId"] = admin_id
+        updates["assignedAdminName"] = admin_name
+
+    if "config" in payload and isinstance(payload["config"], dict):
+        updates["config"] = payload["config"]
+
+    if payload.get("mode") in ("education", "healthcare"):
+        updates["mode"] = payload["mode"]
+
+    robot_ref.set(updates, merge=True)
+    return {"success": True, "robotId": robot_id, **updates}
 
 
 @router.delete("/admin/users/{uid}")

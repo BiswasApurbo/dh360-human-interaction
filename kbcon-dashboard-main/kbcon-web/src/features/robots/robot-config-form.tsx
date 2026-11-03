@@ -3,11 +3,10 @@
 import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { motion } from "motion/react";
-import { httpsCallable } from "firebase/functions";
 import { Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { functions } from "@/lib/firebase";
+import { auth } from "@/lib/firebase";
 import type { RobotRow } from "./use-robots";
 
 export function RobotConfigForm({
@@ -52,16 +51,24 @@ export function RobotConfigForm({
     setSaving(true);
     setMsg(null);
     try {
-      const fn = httpsCallable(functions, "updateRobotConfig");
-      await fn({
-        robotId: robot.id,
-        config: {
-          defaultLanguage: lang,
-          telemetryIntervalSec: n,
-          fallbackBn: fbBn.trim(),
-          fallbackEn: fbEn.trim(),
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch("/api/admin/robots", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
         },
+        body: JSON.stringify({
+          robotId: robot.id,
+          config: {
+            defaultLanguage: lang,
+            telemetryIntervalSec: n,
+            fallbackBn: fbBn.trim(),
+            fallbackEn: fbEn.trim(),
+          },
+        }),
       });
+      if (!res.ok) throw new Error("Failed to update config");
       setMsg({ ok: true, text: t("configSaved") });
     } catch {
       setMsg({ ok: false, text: t("configFailed") });

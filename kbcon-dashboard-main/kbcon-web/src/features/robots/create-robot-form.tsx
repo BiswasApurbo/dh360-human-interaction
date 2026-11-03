@@ -6,11 +6,10 @@ import { motion } from "motion/react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { httpsCallable } from "firebase/functions";
 import { Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { auth, functions } from "@/lib/firebase";
+import { auth } from "@/lib/firebase";
 
 export function CreateRobotForm({
   onDone,
@@ -45,40 +44,42 @@ export function CreateRobotForm({
   async function onSubmit(values: Values) {
     setError(null);
     try {
-      const token = await auth.currentUser?.getIdToken();
-      if (token) {
-        const res = await fetch("/api/admin/robots", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify(values),
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          onDone(data.secret, data.robotId);
-          return;
-        }
-
-        if (res.status === 409) {
-          setError(t("idExists"));
-          return;
-        }
+      const token = await auth.currentUser?.getIdToken(true);
+      if (!token) {
+        setError(t("createFailed"));
+        return;
       }
 
-      const fn = httpsCallable<Values & { type: string }, { robotId: string; secret: string }>(
-        functions,
-        "createRobot",
-      );
-      const res = await fn({ ...values, type: "Humanoid" });
-      onDone(res.data.secret, res.data.robotId);
+      const res = await fetch("/api/admin/robots", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(values),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        onDone(data.secret, data.robotId);
+        return;
+      }
+
+      if (res.status === 409) {
+        setError(t("idExists"));
+        return;
+      }
+
+      const errJson = await res.json().catch(() => ({}));
+      const message =
+        typeof errJson.detail === "string"
+          ? errJson.detail
+          : Array.isArray(errJson.detail)
+            ? errJson.detail.map((d: { msg?: string }) => d.msg || "Validation error").join("; ")
+            : (errJson.message || t("createFailed"));
+      setError(message);
     } catch (err) {
-      const code = (err as { code?: string }).code;
-      setError(
-        code === "functions/already-exists" ? t("idExists") : t("createFailed"),
-      );
+      setError(err instanceof Error ? err.message : t("createFailed"));
     }
   }
 

@@ -65,7 +65,7 @@ export function CreateAdminForm({
     if (!user) return;
     setError(null);
     try {
-      const token = await user.getIdToken();
+      const token = await user.getIdToken(true);
       const res = await fetch("/api/admin/users", {
         method: "POST",
         headers: {
@@ -85,7 +85,13 @@ export function CreateAdminForm({
           setError(t("emailExists"));
           return;
         }
-        throw new Error(errJson.message || t("createFailed"));
+        const message =
+          typeof errJson.detail === "string"
+            ? errJson.detail
+            : Array.isArray(errJson.detail)
+              ? errJson.detail.map((d: { msg?: string }) => d.msg || "Validation error").join("; ")
+              : (errJson.message || t("createFailed"));
+        throw new Error(message);
       }
 
       onDone();

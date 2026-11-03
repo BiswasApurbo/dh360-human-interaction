@@ -3,9 +3,8 @@
 import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { AnimatePresence, motion } from "motion/react";
-import { httpsCallable } from "firebase/functions";
 import { Check, Copy, KeyRound, Loader2, Plus } from "lucide-react";
-import { functions } from "@/lib/firebase";
+import { auth } from "@/lib/firebase";
 import { useRole } from "@/features/auth/use-role";
 import { useAdmins } from "@/features/admins/use-admins";
 import { useRobots } from "./use-robots";
@@ -46,8 +45,16 @@ export function RobotsPageContent() {
     setBusyId(robotId);
     setMessage(null);
     try {
-      const fn = httpsCallable(functions, "assignRobot");
-      await fn({ robotId, adminId: adminId === "" ? null : adminId });
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch("/api/admin/robots", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ robotId, adminId: adminId === "" ? null : adminId }),
+      });
+      if (!res.ok) throw new Error("Failed to assign robot");
       setMessage({ ok: true, text: t("assigned") });
     } catch {
       setMessage({ ok: false, text: t("assignFailed") });
