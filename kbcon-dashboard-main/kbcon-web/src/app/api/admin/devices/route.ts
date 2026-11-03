@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { authenticateFirebaseToken } from "@/lib/dh360/auth";
 import { getMemoryDevices } from "@/lib/device/provisioning";
 import { getAdminFirestore, hasServerAdminCredentials } from "@/lib/server-admin";
+import type { QueryDocumentSnapshot } from "firebase-admin/firestore";
 
 export async function GET(request: Request) {
   const authHeader = request.headers.get("authorization");
@@ -52,7 +53,7 @@ export async function GET(request: Request) {
     const db = await getAdminFirestore();
     const snap = await db.collection("devices").get();
 
-    const devices = snap.docs.map((doc) => {
+    const devices = snap.docs.map((doc: QueryDocumentSnapshot) => {
       const data = doc.data();
       const lastHb = data.lastHeartbeat ? new Date(data.lastHeartbeat).getTime() : 0;
       const isOnline = lastHb > 0 && now - lastHb < 90_000;
