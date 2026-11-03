@@ -318,7 +318,7 @@ function EnrollmentDialogContent({
         setLoading(false);
       }
     },
-    [getHeaders, person.person_id, fetchPreviewFrame, scheduleNextStep, t]
+    [getHeaders, person.person_id, person.consent_status, fetchPreviewFrame, scheduleNextStep, t]
   );
 
   // Auto-start session immediately when modal opens

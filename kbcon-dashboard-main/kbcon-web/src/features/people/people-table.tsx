@@ -31,7 +31,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { useRole } from "@/features/auth/use-role";
 import type { PersonProfile } from "./types";
 
 interface PeopleTableProps {
@@ -54,8 +53,6 @@ export function PeopleTable({
   onRequestRegister,
 }: PeopleTableProps) {
   const t = useTranslations("People");
-  const { role } = useRole();
-  const isSuperAdmin = role === "superAdmin";
   const [searchTerm, setSearchTerm] = useState("");
 
   const filteredPeople = people.filter((p) => {
