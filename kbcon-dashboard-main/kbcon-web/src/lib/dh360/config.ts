@@ -74,10 +74,15 @@ export function getDh360Config(): Dh360Config {
     );
   }
 
-  const operatorToken = (
-    process.env.DH360_OPERATOR_TOKEN ||
-    "1c35baf97266daa8a3a0b781dcbbf0d31e502b392dcbd7a292d0b5eb9399d12f"
-  ).trim();
+  const operatorToken = (process.env.DH360_OPERATOR_TOKEN || "").trim();
+  if (!operatorToken) {
+    throw new ConfigurationError(
+      "DH360_OPERATOR_TOKEN is not set or empty in server environment. " +
+        (isVercel
+          ? "Please configure DH360_OPERATOR_TOKEN in Vercel Project Settings > Environment Variables."
+          : "Please configure DH360_OPERATOR_TOKEN in .env.local.")
+    );
+  }
 
   cachedConfig = { apiUrl, operatorToken };
   return cachedConfig;
