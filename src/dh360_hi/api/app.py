@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from typing import TYPE_CHECKING
@@ -32,6 +33,7 @@ from dh360_hi.contracts.authorization import AuthorizationSession
 from dh360_hi.contracts.errors import ApplicationError
 from dh360_hi.contracts.integration import AuthorizationUpdatedIntegrationEvent
 from dh360_hi.edge.authorization_controller import AuthorizationController
+from dh360_hi.edge.heartbeat import EdgeHeartbeatClient
 
 if TYPE_CHECKING:
     from dh360_hi.application.dialogue_coordinator import DialogueCoordinator
@@ -96,9 +98,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if auth_ctrl is not None and service is not None:
         service.authorization_controller = auth_ctrl
 
+    hb_client: EdgeHeartbeatClient | None = None
+    if os.environ.get("DISABLE_EDGE_HEARTBEAT") != "1" and not getattr(app.state, "_test_mode", False):
+        hb_client = EdgeHeartbeatClient()
+        hb_client.start()
+        app.state.heartbeat_client = hb_client
+
     try:
         yield
     finally:
+        # Stop EdgeHeartbeatClient
+        hb: EdgeHeartbeatClient | None = getattr(app.state, "heartbeat_client", None)
+        if hb is not None:
+            with suppress(Exception):
+                hb.stop()
+
         # Deterministic shutdown ordering:
         # 1. Close DialogueCoordinator if present
         dialogue_coord: DialogueCoordinator | None = getattr(

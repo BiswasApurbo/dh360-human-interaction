@@ -10,10 +10,12 @@ import {
   Pause,
   Play,
   RotateCcw,
+  Shield,
   Sparkles,
   UserCheck,
   X,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { useAuth } from "@/features/auth/use-auth";
 import type { PersonProfile } from "./types";
 
@@ -250,6 +252,10 @@ function EnrollmentDialogContent({
   // Start or resume enrollment session
   const startSession = useCallback(
     async (mode: "replace" | "add_samples" = "replace") => {
+      if (person.consent_status !== "granted") {
+        setError("Biometric enrollment requires explicit granted consent.");
+        return;
+      }
       setLoading(true);
       setError(null);
       setIsPaused(false);
@@ -457,6 +463,41 @@ function EnrollmentDialogContent({
   };
 
   const stageInfo = getStageHeader();
+
+  if (person.consent_status !== "granted") {
+    return (
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
+      >
+        <div className="relative w-full max-w-md rounded-2xl bg-white shadow-2xl border border-amber-200 overflow-hidden flex flex-col p-6 space-y-4">
+          <div className="flex items-center gap-3 text-amber-600">
+            <div className="flex size-10 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+              <Shield className="size-6" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-900">
+                Consent Required for Enrollment
+              </h3>
+              <p className="text-xs text-slate-500">
+                {person.display_name} • Status: <span className="font-semibold capitalize">{person.consent_status}</span>
+              </p>
+            </div>
+          </div>
+          <p className="text-xs text-slate-600 leading-relaxed">
+            Biometric facial enrollment and identification require explicit granted consent under data protection policies.
+            Please open the person&apos;s profile and grant consent before proceeding with biometric enrollment.
+          </p>
+          <div className="flex justify-end pt-2">
+            <Button variant="outline" size="sm" onClick={onClose} className="text-xs">
+              Close
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

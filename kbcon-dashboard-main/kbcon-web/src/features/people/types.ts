@@ -4,7 +4,19 @@ export interface QAPair {
 }
 
 export type PersonStatus = "active" | "suspended";
-export type ConsentStatus = "granted" | "revoked" | "pending";
+export type ConsentStatus = "granted" | "withdrawn" | "pending" | "refused";
+
+export interface ConsentAuditRecord {
+  audit_id: string;
+  person_id: string;
+  tenant_id: string | null;
+  previous_status: string;
+  new_status: string;
+  changed_by_uid: string;
+  changed_by_name: string | null;
+  notes: string | null;
+  timestamp: string;
+}
 
 export interface PersonProfile {
   person_id: string;

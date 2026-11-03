@@ -23,6 +23,7 @@ from dh360_hi.api.security import (
     require_scope,
 )
 from dh360_hi.application.service import HumanInteractionService
+from dh360_hi.backend.models import ConsentStatus
 from dh360_hi.contracts.errors import (
     ConflictAppError,
     EntityNotFoundError,
@@ -67,6 +68,8 @@ def _require_person(
         raise EntityNotFoundError("person", person_id)
     if tenant_id and profile.tenant_id != tenant_id:
         raise EntityNotFoundError("person", person_id)
+    if profile.consent_status != ConsentStatus.GRANTED:
+        raise ConflictAppError("Biometric enrollment requires explicit granted consent.")
 
 
 def _require_active_session(

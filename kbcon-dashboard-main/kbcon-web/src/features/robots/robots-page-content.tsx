@@ -3,8 +3,9 @@
 import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { AnimatePresence, motion } from "motion/react";
-import { Check, Copy, KeyRound, Loader2, Plus } from "lucide-react";
+import { Check, Copy, KeyRound, Loader2, Plus, RefreshCw } from "lucide-react";
 import { auth } from "@/lib/firebase";
+import { useAuth } from "@/features/auth/use-auth";
 import { useRole } from "@/features/auth/use-role";
 import { useAdmins } from "@/features/admins/use-admins";
 import { useRobots } from "./use-robots";
@@ -23,6 +24,7 @@ const statusStyle = {
 
 export function RobotsPageContent() {
   const t = useTranslations("Robots");
+  const { user } = useAuth();
   const { role, loading: roleLoading } = useRole();
   const isSuper = role === "superAdmin";
   const { robots, loading, error } = useRobots(role);
@@ -37,9 +39,46 @@ export function RobotsPageContent() {
   const configRobot = robots.find((r) => r.id === configId) ?? null;
   const [copied, setCopied] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [reconnectingId, setReconnectingId] = useState<string | null>(null);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(
     null,
   );
+
+  async function reconnectRobot(robotId: string) {
+    setReconnectingId(robotId);
+    setMessage(null);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch(`/api/admin/robots/${robotId}/reconnect`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        setMessage({
+          ok: true,
+          text: data.message || `Robot ${robotId} successfully reconnected and online.`,
+        });
+      } else {
+        setMessage({
+          ok: false,
+          text:
+            data.message ||
+            `Reconnection probe failed for ${robotId}. Device is unreachable.`,
+        });
+      }
+    } catch (err: unknown) {
+      setMessage({
+        ok: false,
+        text: err instanceof Error ? err.message : "Failed to reconnect to robot.",
+      });
+    } finally {
+      setReconnectingId(null);
+    }
+  }
 
   async function assign(robotId: string, adminId: string) {
     setBusyId(robotId);
@@ -82,7 +121,7 @@ export function RobotsPageContent() {
     );
   }
 
-  const colSpan = isSuper ? 8 : 6;
+  const colSpan = isSuper ? 8 : 7;
 
   return (
     <div className="space-y-5">
@@ -199,7 +238,7 @@ export function RobotsPageContent() {
                 <th className="px-4 py-3 font-semibold">{t("assignedTo")}</th>
               )}
               <th className="px-4 py-3 font-semibold">{t("firmware")}</th>
-              {isSuper && <th className="px-4 py-3 text-right font-semibold" />}
+              <th className="px-4 py-3 text-right font-semibold">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -288,17 +327,40 @@ export function RobotsPageContent() {
                 <td className="px-4 py-3 font-mono text-xs text-sky-800">
                   {r.firmwareVersion ?? "—"}
                 </td>
-                {isSuper && (
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() => setConfigId(r.id)}
-                      className="inline-flex h-8 items-center rounded-lg px-3 text-xs font-semibold text-sky-800 ring-1 ring-sky-300 hover:bg-sky-50"
-                    >
-                      {t("configure")}
-                    </button>
-                  </td>
-                )}
+                <td className="px-4 py-3 text-right">
+                  <div className="flex items-center justify-end gap-1.5">
+                    {(isSuper || (user && r.assignedAdminId === user.uid)) && (
+                      <button
+                        type="button"
+                        disabled={reconnectingId === r.id}
+                        onClick={() => reconnectRobot(r.id)}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold text-sky-800 ring-1 ring-sky-300 hover:bg-sky-50 disabled:opacity-60"
+                        title="Probe and reconnect robot"
+                      >
+                        {reconnectingId === r.id ? (
+                          <>
+                            <Loader2 className="size-3.5 animate-spin text-sky-600" />
+                            <span>Reconnecting...</span>
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw className="size-3.5 text-sky-600" />
+                            <span>Reconnect</span>
+                          </>
+                        )}
+                      </button>
+                    )}
+                    {isSuper && (
+                      <button
+                        type="button"
+                        onClick={() => setConfigId(r.id)}
+                        className="inline-flex h-8 items-center rounded-lg px-3 text-xs font-semibold text-sky-800 ring-1 ring-sky-300 hover:bg-sky-50"
+                      >
+                        {t("configure")}
+                      </button>
+                    )}
+                  </div>
+                </td>
               </motion.tr>
             ))}
           </tbody>

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 SCHEMA_V1_SQL = """
 -- Schema Version Tracking
@@ -96,6 +96,24 @@ CREATE INDEX IF NOT EXISTS idx_persons_tenant_id ON persons(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_persons_robot_id ON persons(robot_id);
 """
 
+SCHEMA_V6_SQL = """
+-- Migration v6: Consent Audit History Table for Privacy Compliance
+CREATE TABLE IF NOT EXISTS consent_audit_log (
+    audit_id TEXT PRIMARY KEY,
+    person_id TEXT NOT NULL,
+    tenant_id TEXT,
+    previous_status TEXT NOT NULL,
+    new_status TEXT NOT NULL,
+    changed_by_uid TEXT NOT NULL,
+    changed_by_name TEXT,
+    notes TEXT,
+    timestamp TEXT NOT NULL,
+    FOREIGN KEY (person_id) REFERENCES persons(person_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_consent_audit_person ON consent_audit_log(person_id);
+CREATE INDEX IF NOT EXISTS idx_consent_audit_tenant ON consent_audit_log(tenant_id);
+"""
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, str]] = {
     1: (SCHEMA_V1_SQL, "Initial schema: persons, face_embeddings, and indices with cascade delete"),
     2: (SCHEMA_V2_SQL, "Schema v2: interaction_sessions table and performance indices"),
@@ -110,5 +128,9 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, str]] = {
     5: (
         SCHEMA_V5_SQL,
         "Schema v5: multi-tenant architecture with tenant_id and robot_id scoping on persons",
+    ),
+    6: (
+        SCHEMA_V6_SQL,
+        "Schema v6: consent audit log table for granular privacy and audit trail tracking",
     ),
 }

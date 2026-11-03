@@ -412,6 +412,39 @@ class HumanInteractionService:
         finally:
             self._finish_person_mutation(prior_state, resume=resume_runtime)
 
+    def update_person_consent(
+        self,
+        person_id: str,
+        new_status: Any,
+        changed_by_uid: str,
+        changed_by_name: str | None = None,
+        notes: str | None = None,
+        tenant_id: str | None = None,
+    ) -> tuple[PersonProfileDTO, dict[str, Any]]:
+        """Update consent status and record an immutable audit entry."""
+        with self._lock:
+            profile, audit = self._person_service.update_person_consent(
+                person_id=person_id,
+                new_status=new_status,
+                changed_by_uid=changed_by_uid,
+                changed_by_name=changed_by_name,
+                notes=notes,
+                tenant_id=tenant_id,
+            )
+            self._synchronize_person_mutation(person_id, deleted=False)
+            return PersonProfileDTO.from_profile(profile), audit
+
+    def get_consent_audit_history(
+        self,
+        person_id: str,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Retrieve chronological consent audit logs for a person."""
+        with self._lock:
+            return self._person_service.get_consent_audit_history(
+                person_id=person_id, tenant_id=tenant_id
+            )
+
     def delete_person(self, person_id: str) -> bool:
         """Delete a person profile, stored embeddings, and synchronize runtime identity state.
 

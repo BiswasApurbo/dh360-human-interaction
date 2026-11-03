@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/features/auth/use-auth";
 import { useRole } from "@/features/auth/use-role";
 import type {
+  ConsentAuditRecord,
   CreatePersonInput,
   PersonProfile,
   UpdatePersonInput,
@@ -197,6 +198,58 @@ export function usePeople(robotId?: string) {
     [getHeaders, loadData]
   );
 
+  const updateConsent = useCallback(
+    async (
+      personId: string,
+      consentStatus: string,
+      notes?: string
+    ): Promise<{ person: PersonProfile; audit: ConsentAuditRecord }> => {
+      const headers = await getHeaders();
+      const res = await fetch(`/api/dh360/persons/${personId}/consent`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          consent_status: consentStatus,
+          notes: notes || null,
+        }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(
+          errData?.detail || `Failed to update consent (status ${res.status})`
+        );
+      }
+
+      const result = await res.json();
+      const updatedPerson: PersonProfile = result.person;
+      setPeople((prev) =>
+        prev.map((p) => (p.person_id === personId ? updatedPerson : p))
+      );
+      return result;
+    },
+    [getHeaders]
+  );
+
+  const getConsentHistory = useCallback(
+    async (personId: string): Promise<ConsentAuditRecord[]> => {
+      const headers = await getHeaders();
+      const res = await fetch(`/api/dh360/persons/${personId}/consent-history`, {
+        headers,
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(
+          errData?.detail || `Failed to load consent history (status ${res.status})`
+        );
+      }
+
+      return (await res.json()) as ConsentAuditRecord[];
+    },
+    [getHeaders]
+  );
+
   return {
     people,
     loading,
@@ -204,6 +257,8 @@ export function usePeople(robotId?: string) {
     refresh: () => loadData(true),
     createPerson,
     updatePerson,
+    updateConsent,
+    getConsentHistory,
     deletePerson,
     resetBiometrics,
   };

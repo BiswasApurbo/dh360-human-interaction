@@ -335,3 +335,61 @@ def test_persistence_across_simulated_service_restart(tmp_path: Path) -> None:
     assert np.allclose(entry.embeddings[0], vec, atol=1e-5)
 
     db2.close()
+
+
+def test_consent_management_audit_trail(memory_service: tuple) -> None:
+    """Test dedicated consent update method and its immutable audit history trail."""
+    service, _, _ = memory_service
+
+    person = service.create_person("Sarah Connor", tenant_id="tenant-123")
+    assert person.consent_status == ConsentStatus.GRANTED  # default in create_person
+
+    # 1. Update consent to WITHDRAWN with actor info and notes
+    updated, audit1 = service.update_person_consent(
+        person_id=person.person_id,
+        new_status=ConsentStatus.WITHDRAWN,
+        changed_by_uid="admin-user-1",
+        changed_by_name="Admin John",
+        notes="Subject requested consent withdrawal",
+        tenant_id="tenant-123",
+    )
+    assert updated.consent_status == ConsentStatus.WITHDRAWN
+    assert audit1["previous_status"] == "granted"
+    assert audit1["new_status"] == "withdrawn"
+    assert audit1["changed_by_uid"] == "admin-user-1"
+    assert audit1["changed_by_name"] == "Admin John"
+    assert audit1["notes"] == "Subject requested consent withdrawal"
+
+    # 2. Update consent to GRANTED again
+    updated2, audit2 = service.update_person_consent(
+        person_id=person.person_id,
+        new_status=ConsentStatus.GRANTED,
+        changed_by_uid="admin-user-2",
+        changed_by_name="Admin Mary",
+        notes="Subject signed new consent form",
+        tenant_id="tenant-123",
+    )
+    assert updated2.consent_status == ConsentStatus.GRANTED
+    assert audit2["previous_status"] == "withdrawn"
+    assert audit2["new_status"] == "granted"
+
+    # 3. Retrieve audit history
+    history = service.get_consent_audit_history(person.person_id, tenant_id="tenant-123")
+    assert len(history) == 2
+    # Ordered descending by timestamp: audit2 is first, audit1 is second
+    assert history[0]["audit_id"] == audit2["audit_id"]
+    assert history[0]["new_status"] == "granted"
+    assert history[1]["audit_id"] == audit1["audit_id"]
+    assert history[1]["new_status"] == "withdrawn"
+
+    # 4. Verify tenant scoping: accessing from a different tenant fails with PersonNotFoundError
+    with pytest.raises(PersonNotFoundError):
+        service.get_consent_audit_history(person.person_id, tenant_id="other-tenant")
+    with pytest.raises(PersonNotFoundError):
+        service.update_person_consent(
+            person_id=person.person_id,
+            new_status=ConsentStatus.REFUSED,
+            changed_by_uid="admin-user-other",
+            tenant_id="other-tenant",
+        )
+

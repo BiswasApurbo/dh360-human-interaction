@@ -4,9 +4,10 @@ import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { motion } from "motion/react";
 import { doc, onSnapshot } from "firebase/firestore";
-import { ArrowLeft, Loader2, ShieldAlert } from "lucide-react";
-import { db } from "@/lib/firebase";
+import { ArrowLeft, CheckCircle2, Loader2, RefreshCw, ShieldAlert } from "lucide-react";
+import { auth, db } from "@/lib/firebase";
 import { Link } from "@/i18n/navigation";
+import { useAuth } from "@/features/auth/use-auth";
 import { useRole } from "@/features/auth/use-role";
 import { useNow } from "@/hooks/use-now";
 import { effectiveStatus } from "@/lib/robot-status";
@@ -49,13 +50,59 @@ function Field({
 
 export function RobotDetail({ robotId }: { robotId: string }) {
   const t = useTranslations("Robots");
+  const { user } = useAuth();
   const { role, loading: roleLoading } = useRole();
   const { robots, loading } = useRobots(role);
   const now = useNow();
   const [tel, setTel] = useState<Tel>(null);
   const [kbName, setKbName] = useState<string | null>(null);
+  const [reconnecting, setReconnecting] = useState(false);
+  const [reconnectResult, setReconnectResult] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
 
   const robot = robots.find((r) => r.id === robotId) ?? null;
+  const isSuper = role === "superAdmin";
+  const canReconnect = isSuper || (user && robot?.assignedAdminId === user.uid);
+
+  async function handleReconnect() {
+    setReconnecting(true);
+    setReconnectResult(null);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch(`/api/admin/robots/${robotId}/reconnect`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        setReconnectResult({
+          ok: true,
+          text:
+            data.message ||
+            `Robot ${robotId} successfully reconnected and verified online.`,
+        });
+      } else {
+        setReconnectResult({
+          ok: false,
+          text:
+            data.message ||
+            `Reconnection probe failed for ${robotId}. Device is unreachable.`,
+        });
+      }
+    } catch (err: unknown) {
+      setReconnectResult({
+        ok: false,
+        text: err instanceof Error ? err.message : "Failed to reconnect to robot.",
+      });
+    } finally {
+      setReconnecting(false);
+    }
+  }
 
   // সর্বশেষ Telemetry ও Knowledge Base-এর নাম
   useEffect(() => {
@@ -131,17 +178,57 @@ export function RobotDetail({ robotId }: { robotId: string }) {
     <div className="space-y-5">
       {back}
 
-      <div className="flex flex-wrap items-center gap-3">
-        <h1 className="text-xl font-bold text-sky-900 sm:text-2xl">
-          {robot.name}
-        </h1>
-        <span className="font-mono text-sm text-sky-700">{robot.id}</span>
-        <span
-          className={`rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyle[status]}`}
-        >
-          {t(status)}
-        </span>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-xl font-bold text-sky-900 sm:text-2xl">
+            {robot.name}
+          </h1>
+          <span className="font-mono text-sm text-sky-700">{robot.id}</span>
+          <span
+            className={`rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyle[status]}`}
+          >
+            {t(status)}
+          </span>
+        </div>
+
+        {canReconnect && (
+          <button
+            type="button"
+            disabled={reconnecting}
+            onClick={handleReconnect}
+            className="inline-flex h-9 items-center gap-2 rounded-xl border border-sky-300 bg-white px-3.5 text-xs font-semibold text-sky-800 shadow-sm hover:bg-sky-50 disabled:opacity-60"
+          >
+            {reconnecting ? (
+              <>
+                <Loader2 className="size-3.5 animate-spin text-sky-600" />
+                <span>Reconnecting...</span>
+              </>
+            ) : (
+              <>
+                <RefreshCw className="size-3.5 text-sky-600" />
+                <span>Reconnect</span>
+              </>
+            )}
+          </button>
+        )}
       </div>
+
+      {reconnectResult && (
+        <p
+          className={`rounded-xl px-4 py-2.5 text-xs font-medium ring-1 flex items-center gap-2 ${
+            reconnectResult.ok
+              ? "bg-emerald-50 text-emerald-800 ring-emerald-200"
+              : "bg-red-50 text-red-700 ring-red-200"
+          }`}
+        >
+          {reconnectResult.ok ? (
+            <CheckCircle2 className="size-4 shrink-0 text-emerald-600" />
+          ) : (
+            <ShieldAlert className="size-4 shrink-0 text-red-500" />
+          )}
+          <span>{reconnectResult.text}</span>
+        </p>
+      )}
 
       <motion.section
         initial={{ opacity: 0, y: 20 }}

@@ -10,7 +10,6 @@ import { useRobots } from "@/features/robots/use-robots";
 import { usePeople } from "./use-people";
 import { PeopleTable } from "./people-table";
 import { CreatePersonDialog } from "./create-person-dialog";
-import { DeletePersonDialog } from "./delete-person-dialog";
 import { ResetBiometricsDialog } from "./reset-biometrics-dialog";
 import { PersonDetailSheet } from "./person-detail-sheet";
 import { EnrollmentDialog } from "./enrollment-dialog";
@@ -30,15 +29,14 @@ export function PeoplePageContent() {
     refresh,
     createPerson,
     updatePerson,
-    deletePerson,
+    updateConsent,
+    getConsentHistory,
     resetBiometrics,
   } = usePeople(selectedRobotFilter || undefined);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [selectedPerson, setSelectedPerson] = useState<PersonProfile | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
-  const [personToDelete, setPersonToDelete] = useState<PersonProfile | null>(null);
-  const [deleteOpen, setDeleteOpen] = useState(false);
   const [personToReset, setPersonToReset] = useState<PersonProfile | null>(null);
   const [resetOpen, setResetOpen] = useState(false);
   const [personToEnroll, setPersonToEnroll] = useState<PersonProfile | null>(null);
@@ -48,11 +46,6 @@ export function PeoplePageContent() {
   const handleSelectPerson = (person: PersonProfile) => {
     setSelectedPerson(person);
     setSheetOpen(true);
-  };
-
-  const handleRequestDelete = (person: PersonProfile) => {
-    setPersonToDelete(person);
-    setDeleteOpen(true);
   };
 
   const handleRequestResetBiometrics = (person: PersonProfile) => {
@@ -170,7 +163,6 @@ export function PeoplePageContent() {
         people={people}
         loading={loading}
         onSelectPerson={handleSelectPerson}
-        onRequestDelete={handleRequestDelete}
         onRequestResetBiometrics={handleRequestResetBiometrics}
         onRequestEnroll={handleRequestEnroll}
         onOpenAuthorization={() => setAuthOpen(true)}
@@ -190,13 +182,8 @@ export function PeoplePageContent() {
         open={sheetOpen}
         onOpenChange={setSheetOpen}
         onUpdate={updatePerson}
-      />
-
-      <DeletePersonDialog
-        person={personToDelete}
-        open={deleteOpen}
-        onOpenChange={setDeleteOpen}
-        onConfirm={deletePerson}
+        onUpdateConsent={updateConsent}
+        onGetConsentHistory={getConsentHistory}
       />
 
       <ResetBiometricsDialog

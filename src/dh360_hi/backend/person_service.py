@@ -514,6 +514,75 @@ class PersonService(BasePersonService):
         persisted = self._repo.update_person(updated_rec)
         return self._record_to_profile(persisted)
 
+    def update_person_consent(
+        self,
+        person_id: str,
+        new_status: ConsentStatus | str,
+        changed_by_uid: str,
+        changed_by_name: str | None = None,
+        notes: str | None = None,
+        tenant_id: str | None = None,
+    ) -> tuple[PersonProfile, dict[str, Any]]:
+        """Explicitly record or update a person's consent with an immutable audit entry."""
+        existing = self._repo.get_person(person_id)
+        if existing is None:
+            raise PersonNotFoundError(f"Person '{person_id}' not found")
+
+        if tenant_id and existing.tenant_id != tenant_id:
+            raise PersonNotFoundError(f"Person '{person_id}' not found")
+
+        norm_status = (
+            ConsentStatus(new_status) if isinstance(new_status, str) else new_status
+        )
+        prev_status = existing.consent_status.value
+        now_str = utc_now_iso()
+
+        updated_rec = PersonRecord(
+            person_id=existing.person_id,
+            display_name=existing.display_name,
+            preferred_name=existing.preferred_name,
+            status=existing.status,
+            consent_status=norm_status,
+            consent_timestamp=now_str,
+            notes=existing.notes,
+            role=existing.role,
+            department=existing.department,
+            office_room=existing.office_room,
+            working_hours=existing.working_hours,
+            profile_description=existing.profile_description,
+            ai_qa_pairs_json=existing.ai_qa_pairs_json,
+            tenant_id=existing.tenant_id,
+            robot_id=existing.robot_id,
+            created_at=existing.created_at,
+            updated_at=now_str,
+        )
+        persisted = self._repo.update_person(updated_rec)
+        audit_entry = self._repo.record_consent_audit(
+            person_id=person_id,
+            previous_status=prev_status,
+            new_status=norm_status.value,
+            changed_by_uid=changed_by_uid,
+            changed_by_name=changed_by_name,
+            notes=notes,
+            tenant_id=existing.tenant_id,
+        )
+        return self._record_to_profile(persisted), audit_entry
+
+    def get_consent_audit_history(
+        self,
+        person_id: str,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Retrieve chronological consent audit records."""
+        existing = self._repo.get_person(person_id)
+        if existing is None:
+            raise PersonNotFoundError(f"Person '{person_id}' not found")
+
+        if tenant_id and existing.tenant_id != tenant_id:
+            raise PersonNotFoundError(f"Person '{person_id}' not found")
+
+        return self._repo.get_consent_audit_history(person_id, tenant_id=tenant_id)
+
     def delete_person(
         self,
         person_id: str,

@@ -144,6 +144,22 @@ export const ALLOWED_DH360_RULES: RouteRule[] = [
     scope: "biometrics:reset",
   },
 
+  // Consent Management & Audit History
+  {
+    name: "person_consent",
+    pattern: /^\/persons\/([A-Za-z0-9_-]+)\/consent\/?$/,
+    allowedMethods: ["POST"],
+    minRole: "admin",
+    scope: "consent:manage",
+  },
+  {
+    name: "person_consent_history",
+    pattern: /^\/persons\/([A-Za-z0-9_-]+)\/consent-history\/?$/,
+    allowedMethods: ["GET"],
+    minRole: "admin",
+    scope: "consent:manage",
+  },
+
   // Person Profile by ID: Read, Update, Delete
   {
     name: "person_entity",

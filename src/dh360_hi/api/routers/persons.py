@@ -25,6 +25,7 @@ _person_create = Depends(require_scope(OperatorScope.PERSONS_CREATE))
 _person_update = Depends(require_scope(OperatorScope.PERSONS_UPDATE))
 _person_delete = Depends(require_scope(OperatorScope.PERSONS_DELETE))
 _biometrics_reset = Depends(require_scope(OperatorScope.BIOMETRICS_RESET))
+_consent_manage = Depends(require_scope(OperatorScope.CONSENT_MANAGE))
 
 
 class QAPairRequest(BaseModel):
@@ -70,6 +71,15 @@ class PersonUpdateRequest(BaseModel):
     qa_pairs: list[QAPairRequest] | None = None
     tenant_id: StrictStr | None = None
     robot_id: StrictStr | None = None
+
+
+class PersonConsentUpdateRequest(BaseModel):
+    """Strict request body for updating person consent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    consent_status: ConsentStatus
+    notes: StrictStr | None = None
 
 
 def _get_service(request: Request) -> HumanInteractionService:
@@ -281,3 +291,56 @@ def reset_person_biometrics(
     if auth_ctrl is not None and hasattr(auth_ctrl, "invalidate_person"):
         auth_ctrl.invalidate_person(person_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/{person_id}/consent")
+def update_person_consent(
+    person_id: str,
+    payload: PersonConsentUpdateRequest,
+    request: Request,
+    _operator: OperatorPrincipal = _consent_manage,
+) -> dict[str, Any]:
+    """Explicitly record or update a person's consent with an immutable audit entry."""
+    service = _get_service(request)
+    existing = service.get_person(person_id)
+    if existing is None:
+        raise EntityNotFoundError("person", person_id)
+
+    tenant_id = request.headers.get("X-Tenant-ID")
+    if tenant_id and existing.tenant_id != tenant_id:
+        raise EntityNotFoundError("person", person_id)
+
+    changed_by_uid = request.headers.get("X-User-ID") or "operator"
+    changed_by_name = request.headers.get("X-User-Name") or request.headers.get("X-User-Email")
+
+    profile, audit_entry = service.update_person_consent(
+        person_id=person_id,
+        new_status=payload.consent_status,
+        changed_by_uid=changed_by_uid,
+        changed_by_name=changed_by_name,
+        notes=payload.notes,
+        tenant_id=tenant_id,
+    )
+    return {
+        "person": profile.to_dict(),
+        "audit": audit_entry,
+    }
+
+
+@router.get("/{person_id}/consent-history")
+def get_person_consent_history(
+    person_id: str,
+    request: Request,
+    _operator: OperatorPrincipal = _person_read,
+) -> list[dict[str, Any]]:
+    """Retrieve the chronological immutable consent audit history for a person."""
+    service = _get_service(request)
+    existing = service.get_person(person_id)
+    if existing is None:
+        raise EntityNotFoundError("person", person_id)
+
+    tenant_id = request.headers.get("X-Tenant-ID")
+    if tenant_id and existing.tenant_id != tenant_id:
+        raise EntityNotFoundError("person", person_id)
+
+    return service.get_consent_audit_history(person_id, tenant_id=tenant_id)

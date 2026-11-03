@@ -153,6 +153,15 @@ export async function handleDh360ProxyRequest(
   upstreamHeaders.set("Authorization", `Bearer ${config.operatorToken}`);
   upstreamHeaders.set("X-Tenant-ID", principal.uid);
   upstreamHeaders.set("X-User-Role", principal.role);
+  upstreamHeaders.set("X-User-ID", principal.uid);
+  if (principal.email) {
+    upstreamHeaders.set("X-User-Email", principal.email);
+    upstreamHeaders.set("X-User-Name", principal.email.split("@")[0]);
+  }
+  const clientUserName = request.headers.get("x-user-name");
+  if (clientUserName) {
+    upstreamHeaders.set("X-User-Name", clientUserName);
+  }
 
   // Forward client X-Robot-ID header if provided
   const robotIdHeader = request.headers.get("x-robot-id");

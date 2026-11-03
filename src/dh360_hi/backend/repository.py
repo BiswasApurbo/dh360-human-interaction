@@ -533,3 +533,94 @@ class SQLitePersonRepository(BasePersonRepository):
         now_iso = datetime.now(UTC).isoformat()
         with self._db.transaction() as cur:
             cur.execute(query, (key, value, now_iso))
+
+    def record_consent_audit(
+        self,
+        person_id: str,
+        previous_status: str,
+        new_status: str,
+        changed_by_uid: str,
+        changed_by_name: str | None = None,
+        notes: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Record an immutable audit log entry for a consent status transition."""
+        import uuid
+
+        audit_id = str(uuid.uuid4())
+        now_iso = datetime.now(UTC).isoformat()
+        query = """
+        INSERT INTO consent_audit_log (
+            audit_id, person_id, tenant_id, previous_status, new_status,
+            changed_by_uid, changed_by_name, notes, timestamp
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """
+        with self._db.transaction() as cur:
+            cur.execute(
+                query,
+                (
+                    audit_id,
+                    person_id,
+                    tenant_id,
+                    previous_status,
+                    new_status,
+                    changed_by_uid,
+                    changed_by_name,
+                    notes,
+                    now_iso,
+                ),
+            )
+        return {
+            "audit_id": audit_id,
+            "person_id": person_id,
+            "tenant_id": tenant_id,
+            "previous_status": previous_status,
+            "new_status": new_status,
+            "changed_by_uid": changed_by_uid,
+            "changed_by_name": changed_by_name,
+            "notes": notes,
+            "timestamp": now_iso,
+        }
+
+    def get_consent_audit_history(
+        self,
+        person_id: str,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Retrieve chronological consent audit logs for a person."""
+        if tenant_id:
+            query = """
+            SELECT audit_id, person_id, tenant_id, previous_status, new_status,
+                   changed_by_uid, changed_by_name, notes, timestamp
+            FROM consent_audit_log
+            WHERE person_id = ? AND tenant_id = ?
+            ORDER BY timestamp DESC;
+            """
+            params: tuple[str, ...] = (person_id, tenant_id)
+        else:
+            query = """
+            SELECT audit_id, person_id, tenant_id, previous_status, new_status,
+                   changed_by_uid, changed_by_name, notes, timestamp
+            FROM consent_audit_log
+            WHERE person_id = ?
+            ORDER BY timestamp DESC;
+            """
+            params = (person_id,)
+
+        with self._db.readonly_cursor() as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
+            return [
+                {
+                    "audit_id": r[0],
+                    "person_id": r[1],
+                    "tenant_id": r[2],
+                    "previous_status": r[3],
+                    "new_status": r[4],
+                    "changed_by_uid": r[5],
+                    "changed_by_name": r[6],
+                    "notes": r[7],
+                    "timestamp": r[8],
+                }
+                for r in rows
+            ]

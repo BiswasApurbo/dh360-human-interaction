@@ -9,7 +9,6 @@ import {
   RefreshCw,
   Search,
   Shield,
-  Trash2,
   UserCheck,
   UserX,
 } from "lucide-react";
@@ -39,7 +38,6 @@ interface PeopleTableProps {
   people: PersonProfile[];
   loading: boolean;
   onSelectPerson: (person: PersonProfile) => void;
-  onRequestDelete: (person: PersonProfile) => void;
   onRequestResetBiometrics: (person: PersonProfile) => void;
   onRequestEnroll: (person: PersonProfile) => void;
   onOpenAuthorization: () => void;
@@ -50,7 +48,6 @@ export function PeopleTable({
   people,
   loading,
   onSelectPerson,
-  onRequestDelete,
   onRequestResetBiometrics,
   onRequestEnroll,
   onOpenAuthorization,
@@ -222,25 +219,14 @@ export function PeopleTable({
                           {t("enrollBiometrics")}
                         </DropdownMenuItem>
 
-                        {isSuperAdmin && (
-                          <>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              onClick={() => onRequestResetBiometrics(person)}
-                              className="gap-2 text-xs text-amber-600 focus:text-amber-700"
-                            >
-                              <RefreshCw className="size-3.5" />
-                              {t("resetBiometrics")}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => onRequestDelete(person)}
-                              className="gap-2 text-xs text-red-600 focus:text-red-700"
-                            >
-                              <Trash2 className="size-3.5" />
-                              {t("delete")}
-                            </DropdownMenuItem>
-                          </>
-                        )}
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          onClick={() => onRequestResetBiometrics(person)}
+                          className="gap-2 text-xs text-amber-600 focus:text-amber-700"
+                        >
+                          <RefreshCw className="size-3.5" />
+                          {t("resetBiometrics")}
+                        </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </TableCell>
