@@ -74,6 +74,15 @@ function resolveServiceAccount(): Record<string, unknown> | null {
     }
   }
 
+  // 5. Embedded server-only service account for production deployment
+  try {
+    const { getEmbeddedServiceAccount } = require("./server-credentials");
+    const sa = getEmbeddedServiceAccount();
+    if (sa) return sa;
+  } catch {
+    // Fall through
+  }
+
   return null;
 }
 

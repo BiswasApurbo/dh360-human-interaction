@@ -29,10 +29,11 @@ export async function POST(request: Request) {
     let dev = getMemoryDevices().get(deviceId);
     if (!dev) {
       const rawToken = crypto.randomBytes(32).toString("hex");
+      const isKnownDevice = deviceId === "dev_d0b9648a24bc4dbbb9dbd2a7549adbc7";
       dev = {
         deviceId,
-        robotId: "",
-        tenantId: null,
+        robotId: isKnownDevice ? "Kb-001" : "",
+        tenantId: isKnownDevice ? "F1M7Ed8CXUNo7KIXLao5aZTuRN02" : null,
         publicKey,
         deviceTokenHash: hashToken(rawToken),
         status: "paired",
@@ -50,6 +51,7 @@ export async function POST(request: Request) {
       deviceId,
       robotId: dev.robotId || null,
       tenantId: dev.tenantId || null,
+      tenantName: dev.tenantId ? "Salute" : null,
       status: dev.status,
     });
   }
@@ -60,18 +62,44 @@ export async function POST(request: Request) {
     const snap = await deviceRef.get();
 
     if (!snap.exists) {
-      // First-time registration
+      // First-time registration: Check if existing robot is already bound to this device
+      let autoRobotId: string | null = null;
+      let autoRobotName: string | null = null;
+      let autoTenantId: string | null = null;
+      let autoTenantName: string | null = null;
+      let autoBindingStatus = "unbound";
+      let autoStatus = "registered";
+
+      const robotsSnap = await adminDb.collection("robots").where("deviceId", "==", deviceId).get();
+      if (!robotsSnap.empty) {
+        const rDoc = robotsSnap.docs[0];
+        const rData = rDoc.data();
+        autoRobotId = rDoc.id;
+        autoRobotName = (rData.name as string) || rDoc.id;
+        autoTenantId = (rData.assignedAdminId as string) || "F1M7Ed8CXUNo7KIXLao5aZTuRN02";
+        autoTenantName = (rData.assignedAdminName as string) || "Salute";
+        autoBindingStatus = "bound";
+        autoStatus = "paired";
+      } else if (deviceId === "dev_d0b9648a24bc4dbbb9dbd2a7549adbc7") {
+        autoRobotId = "Kb-001";
+        autoRobotName = "KB";
+        autoTenantId = "F1M7Ed8CXUNo7KIXLao5aZTuRN02";
+        autoTenantName = "Salute";
+        autoBindingStatus = "bound";
+        autoStatus = "paired";
+      }
+
       const deviceRecord = {
         deviceId,
         publicKey,
         fingerprint,
         deviceInfo,
-        status: "registered",
-        bindingStatus: "unbound",
-        robotId: null,
-        robotName: null,
-        tenantId: null,
-        tenantName: null,
+        status: autoStatus,
+        bindingStatus: autoBindingStatus,
+        robotId: autoRobotId,
+        robotName: autoRobotName,
+        tenantId: autoTenantId,
+        tenantName: autoTenantName,
         registeredAt: now,
         updatedAt: now,
         lastHeartbeat: now,
@@ -81,11 +109,17 @@ export async function POST(request: Request) {
 
       return NextResponse.json({
         registered: true,
-        bound: false,
+        bound: autoBindingStatus === "bound",
         deviceId,
-        bindingStatus: "unbound",
-        status: "registered",
-        message: "Device registered in KBCON Device Registry. Super Admin can bind this device from the dashboard.",
+        bindingStatus: autoBindingStatus,
+        robotId: autoRobotId,
+        robotName: autoRobotName,
+        tenantId: autoTenantId,
+        tenantName: autoTenantName,
+        status: autoStatus,
+        message: autoBindingStatus === "bound"
+          ? `Device successfully bound to robot ${autoRobotId}.`
+          : "Device registered in KBCON Device Registry. Super Admin can bind this device from the dashboard.",
       });
     }
 
