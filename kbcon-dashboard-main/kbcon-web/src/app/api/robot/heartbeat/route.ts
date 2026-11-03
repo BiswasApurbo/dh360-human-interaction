@@ -34,7 +34,16 @@ export async function POST(request: Request) {
         dev.lastHeartbeat = new Date().toISOString();
       }
     }
-    return NextResponse.json({ success: true, timestamp: new Date().toISOString(), robotId });
+    return NextResponse.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      robotId,
+      tenant: "Salute",
+      tenantName: "Salute",
+      tenantId: "F1M7Ed8CXUNo7KIXLao5aZTuRN02",
+      mode: "education",
+      language: "bn",
+    });
   }
 
   try {
@@ -51,15 +60,15 @@ export async function POST(request: Request) {
         );
       }
       const devData = devSnap.data() || {};
-      if (devData.status !== "paired") {
+      if (devData.status !== "paired" && devData.bindingStatus !== "bound") {
         return NextResponse.json(
-          { error: "UNAUTHORIZED", message: `Device ${deviceId} is not in paired status.` },
+          { error: "UNAUTHORIZED", message: `Device ${deviceId} is not bound to a robot.` },
           { status: 401 }
         );
       }
-      if (bearerToken) {
+      if (bearerToken && devData.deviceTokenHash) {
         const tokenHash = hashToken(bearerToken);
-        if (devData.deviceTokenHash && devData.deviceTokenHash !== tokenHash) {
+        if (devData.deviceTokenHash !== tokenHash) {
           return NextResponse.json(
             { error: "UNAUTHORIZED", message: "Invalid device authorization token." },
             { status: 401 }
@@ -119,14 +128,22 @@ export async function POST(request: Request) {
 
     await robotRef.set(updates, { merge: true });
 
+    const authoritativeTenantName = currentData.assignedAdminName || "Salute";
+    const authoritativeTenantId =
+      currentData.assignedAdminId || currentData.tenant_id || "F1M7Ed8CXUNo7KIXLao5aZTuRN02";
+
     // Return the latest robot configuration for edge state synchronization
     return NextResponse.json({
       success: true,
       timestamp: now,
       robotId,
+      name: currentData.name || robotId,
+      tenant: authoritativeTenantName,
+      tenantName: authoritativeTenantName,
+      tenantId: authoritativeTenantId,
       config: currentData.config || {},
       mode: currentData.mode || "education",
-      language: currentData.language || "en",
+      language: currentData.language || "bn",
       knowledgeBaseId: currentData.knowledgeBaseId || null,
     });
   } catch (err: unknown) {

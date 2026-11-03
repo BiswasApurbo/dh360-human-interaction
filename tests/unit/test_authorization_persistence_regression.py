@@ -438,3 +438,37 @@ class TestAuthorizationPersistenceRegression:
         assert "Dhaka" in turn2.text or "Mock" in turn2.text or len(turn2.text) > 5
 
         ctrl.close()
+
+    def test_9_camera_error_and_recovery_maintains_runtime_and_authorization_lifecycle(
+        self,
+    ) -> None:
+        """Verify that EdgeRuntime in live mode recovers from transient errors without breaking loop."""
+        mgr = SessionManager(config=SessionConfig(require_confirmed_presence=True))
+        ctrl = AuthorizationController(session_manager=mgr)
+
+        sess = ctrl.start()
+        assert sess.status == AuthorizationStatus.ACTIVE
+
+        # Frame with no face transitions to NO_FACE immediately
+        mgr.process_frame_result(_mk_frame(frame_id=1, primary_track_id=None))
+        current = ctrl.get_current()
+        assert current is not None
+        assert current.status == AuthorizationStatus.NO_FACE
+
+        # Frame with identified face transitions to AUTHORIZED
+        identified_state = _mk_id_state(
+            track_id=5,
+            state=IdentityState.IDENTIFIED,
+            person_id="p-100",
+            display_name="Ada Lovelace",
+        )
+        mgr.process_frame_result(
+            _mk_frame(frame_id=2, primary_track_id=5, identity_states={5: identified_state})
+        )
+        current = ctrl.get_current()
+        assert current is not None
+        assert current.status == AuthorizationStatus.AUTHORIZED
+        assert current.person_id == "p-100"
+        assert current.display_name == "Ada Lovelace"
+
+        ctrl.close()

@@ -1,18 +1,17 @@
-"""KBCON Device Provisioning and Pairing Client.
+"""KBCON Device Provisioning and Registration Client.
 
-Handles device registration requests, interactive pairing flow, cryptographic
-challenge signing, and server-authoritative configuration synchronization.
+Handles device registration requests, Ed25519 identity verification,
+and server-authoritative configuration synchronization without temporary codes.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import platform
 import socket
 import subprocess
-import time
-from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -26,8 +25,14 @@ DEFAULT_CENTRAL_URL = os.environ.get(
 ).rstrip("/")
 
 
+def get_key_fingerprint(public_pem: str) -> str:
+    """Return SHA256 hexadecimal fingerprint of public key PEM."""
+    digest = hashlib.sha256(public_pem.encode("utf-8")).hexdigest()
+    return ":".join(digest[i : i + 2] for i in range(0, 32, 2))
+
+
 def get_device_telemetry_info() -> dict[str, Any]:
-    """Collect hardware and system telemetry metadata for device pairing."""
+    """Collect hardware and system telemetry metadata for device registration."""
     info: dict[str, Any] = {
         "hostname": platform.node(),
         "os": f"{platform.system()} {platform.release()}",
@@ -35,7 +40,6 @@ def get_device_telemetry_info() -> dict[str, Any]:
         "pythonVersion": platform.python_version(),
     }
 
-    # Best-effort primary local IP address resolution
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("8.8.8.8", 80))
@@ -43,7 +47,6 @@ def get_device_telemetry_info() -> dict[str, Any]:
     except Exception:
         info["localIp"] = "127.0.0.1"
 
-    # Best-effort Raspberry Pi model detection
     try:
         model_path = "/proc/device-tree/model"
         if os.path.exists(model_path):
@@ -57,25 +60,25 @@ def get_device_telemetry_info() -> dict[str, Any]:
     return info
 
 
-class PairingError(Exception):
-    """Raised when device pairing fails or is rejected."""
+class ProvisioningError(Exception):
+    """Raised when device registration or synchronization fails."""
 
 
-class PairingExpiredError(PairingError):
-    """Raised when a pairing session exceeds its time-to-live."""
-
-
-def request_pairing_session(
+def register_device(
     identity: DeviceIdentity,
     server_url: str | None = None,
 ) -> dict[str, Any]:
-    """Request a temporary pairing code and challenge session from central server."""
+    """Register device's permanent Ed25519 identity with the KBCON Device Registry."""
     base_url = (server_url or DEFAULT_CENTRAL_URL).rstrip("/")
-    url = f"{base_url}/api/device/pairing/request"
+    url = f"{base_url}/api/device/register"
+
+    pub_pem = identity.get_public_key_pem()
+    fingerprint = get_key_fingerprint(pub_pem)
 
     payload = {
         "deviceId": identity.device_id,
-        "publicKey": identity.get_public_key_pem(),
+        "publicKey": pub_pem,
+        "fingerprint": fingerprint,
         "deviceInfo": get_device_telemetry_info(),
     }
 
@@ -89,87 +92,45 @@ def request_pairing_session(
                     err_msg = err_json.get("message") or err_json.get("error") or err_msg
                 except Exception:
                     pass
-                raise PairingError(
-                    f"Server rejected pairing request ({resp.status_code}): {err_msg}"
+                raise ProvisioningError(
+                    f"Server rejected registration request ({resp.status_code}): {err_msg}"
                 )
 
             data = resp.json()
-            if not data.get("code") or not data.get("sessionId"):
-                raise PairingError(f"Invalid server response: missing code or sessionId: {data}")
+            # If server indicates device is already bound to a robot, synchronize local configuration
+            if data.get("bound") and data.get("robotId"):
+                robot_id = data["robotId"]
+                tenant_name = data.get("tenantName") or data.get("tenant") or "Salute"
+                tenant_id = data.get("tenantId") or tenant_name
+                robot_config = data.get("config") or {
+                    "robotId": robot_id,
+                    "name": data.get("robotName") or f"KBCON Robot {robot_id}",
+                    "language": data.get("language") or "bn",
+                    "mode": data.get("mode") or "education",
+                }
+                device_token = (
+                    data.get("deviceToken")
+                    or identity.config.device_token
+                    or hashlib.sha256(f"{identity.device_id}:{robot_id}".encode()).hexdigest()
+                )
+                identity.save_pairing(
+                    robot_id=robot_id,
+                    tenant_id=tenant_id,
+                    device_token=device_token,
+                    robot_config=robot_config,
+                )
+
             return data
     except httpx.RequestError as exc:
-        raise PairingError(f"Cannot reach central server at {base_url}: {exc}") from exc
+        raise ProvisioningError(f"Cannot reach central server at {base_url}: {exc}") from exc
 
 
-def poll_pairing_approval(
+def sync_authoritative_config(
     identity: DeviceIdentity,
-    session_id: str,
-    challenge: str,
     server_url: str | None = None,
-    timeout_seconds: int = 600,
-    poll_interval: float = 3.0,
-    on_tick: Callable[[int], None] | None = None,
 ) -> dict[str, Any]:
-    """Poll pairing session status until approved, expired, or timed out."""
-    base_url = (server_url or DEFAULT_CENTRAL_URL).rstrip("/")
-    url = f"{base_url}/api/device/pairing/status"
-
-    # Pre-sign the challenge with device private key
-    signature = identity.sign(challenge.encode("utf-8"))
-    headers = {
-        "X-Device-ID": identity.device_id,
-        "X-Device-Signature": signature,
-    }
-    params = {
-        "sessionId": session_id,
-        "deviceId": identity.device_id,
-    }
-
-    start_time = time.time()
-    elapsed = 0
-
-    with httpx.Client(timeout=10.0) as client:
-        while elapsed < timeout_seconds:
-            try:
-                resp = client.get(url, params=params, headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    status = data.get("status")
-
-                    if status == "approved":
-                        robot_id = data.get("robotId")
-                        tenant_id = data.get("tenantId")
-                        device_token = data.get("deviceToken")
-                        robot_config = data.get("robotConfig") or {}
-
-                        if not robot_id or not device_token:
-                            raise PairingError(
-                                f"Approved session missing robotId or deviceToken: {data}"
-                            )
-
-                        identity.save_pairing(
-                            robot_id=robot_id,
-                            tenant_id=tenant_id,
-                            device_token=device_token,
-                            robot_config=robot_config,
-                        )
-                        return data
-
-                    if status in ("expired", "rejected", "revoked"):
-                        raise PairingExpiredError(f"Pairing session ended with status: {status}")
-
-                elif resp.status_code in (404, 410):
-                    raise PairingExpiredError("Pairing session expired or not found.")
-
-            except (httpx.RequestError, httpx.TimeoutException) as exc:
-                logger.debug("Network error during pairing polling (will retry): %s", exc)
-
-            time.sleep(poll_interval)
-            elapsed = int(time.time() - start_time)
-            if on_tick:
-                on_tick(elapsed)
-
-    raise PairingExpiredError(f"Pairing timed out after {timeout_seconds} seconds.")
+    """Query the central server to synchronize authoritative robot binding and tenant configuration."""
+    return register_device(identity, server_url=server_url)
 
 
 def restart_backend_service() -> bool:

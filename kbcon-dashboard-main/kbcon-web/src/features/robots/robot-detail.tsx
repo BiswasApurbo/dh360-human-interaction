@@ -13,7 +13,7 @@ import { useNow } from "@/hooks/use-now";
 import { effectiveStatus } from "@/lib/robot-status";
 import { useRobots } from "./use-robots";
 import { RobotConfigForm } from "./robot-config-form";
-import { PairDeviceForm } from "./pair-device-form";
+import { DeviceRegistry } from "./device-registry";
 
 const statusStyle = {
   online: "bg-emerald-100 text-emerald-700",
@@ -263,10 +263,10 @@ export function RobotDetail({ robotId }: { robotId: string }) {
       )}
 
       {showPairForm && (
-        <PairDeviceForm
+        <DeviceRegistry
           robots={robots}
           preselectedRobotId={robotId}
-          onCancel={() => setShowPairForm(false)}
+          onClose={() => setShowPairForm(false)}
           onDone={(msg) => {
             setShowPairForm(false);
             setReconnectResult({ ok: true, text: msg });

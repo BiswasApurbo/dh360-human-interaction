@@ -146,6 +146,26 @@ class EdgeHeartbeatClient:
 
                 self._current_backoff = self.min_backoff
 
+                # Synchronize authoritative tenant if provided
+                if isinstance(data, dict):
+                    remote_tenant = (
+                        data.get("tenantName") or data.get("tenant") or data.get("tenantId")
+                    )
+                    if remote_tenant:
+                        try:
+                            from dh360_hi.device.identity import DeviceIdentity
+
+                            dev_ident = DeviceIdentity.load_or_create()
+                            if dev_ident.config.tenant_id != remote_tenant:
+                                dev_ident.config.tenant_id = remote_tenant
+                                dev_ident.save()
+                                logger.info(
+                                    "EdgeHeartbeatClient synchronized authoritative tenant: %s",
+                                    remote_tenant,
+                                )
+                        except Exception:
+                            pass
+
                 # Synchronize remote config if provided
                 if self.on_config_synced and isinstance(data, dict):
                     remote_config = data.get("config", {})

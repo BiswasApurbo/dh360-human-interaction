@@ -10,7 +10,7 @@ import { useRole } from "@/features/auth/use-role";
 import { useAdmins } from "@/features/admins/use-admins";
 import { useRobots } from "./use-robots";
 import { CreateRobotForm } from "./create-robot-form";
-import { PairDeviceForm } from "./pair-device-form";
+import { DeviceRegistry } from "./device-registry";
 import { effectiveStatus } from "@/lib/robot-status";
 import { useNow } from "@/hooks/use-now";
 import { RobotConfigForm } from "./robot-config-form";
@@ -150,7 +150,7 @@ export function RobotsPageContent() {
               className="flex h-10 items-center gap-2 rounded-xl border border-sky-300 bg-white px-3.5 text-sm font-semibold text-sky-800 shadow-sm hover:bg-sky-50"
             >
               <Cpu className="size-4 text-sky-600" />
-              Pair Device
+              Device Registry
             </motion.button>
             <motion.button
               type="button"
@@ -177,9 +177,9 @@ export function RobotsPageContent() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
           >
-            <PairDeviceForm
+            <DeviceRegistry
               robots={robots}
-              onCancel={() => setShowPairForm(false)}
+              onClose={() => setShowPairForm(false)}
               onDone={(msg) => {
                 setShowPairForm(false);
                 setMessage({ ok: true, text: msg });

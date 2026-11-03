@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { authenticateFirebaseToken } from "@/lib/dh360/auth";
-import { POST as pairPost } from "../pair/route";
-import { POST as revokePost } from "../revoke/route";
+import { POST as bindPost } from "../bind/route";
+import { POST as unbindPost } from "../unbind/route";
 
 export async function POST(request: Request) {
   const authHeader = request.headers.get("authorization");
@@ -32,19 +32,21 @@ export async function POST(request: Request) {
   }
 
   const oldDeviceId = typeof body.oldDeviceId === "string" ? body.oldDeviceId.trim() : "";
-  const code = typeof body.code === "string" ? body.code.trim() : "";
+  const newDeviceId = typeof (body.newDeviceId || body.deviceId) === "string"
+    ? String(body.newDeviceId || body.deviceId).trim()
+    : "";
   const robotId = typeof body.robotId === "string" ? body.robotId.trim() : "";
 
-  if (!code || !robotId) {
+  if (!newDeviceId || !robotId) {
     return NextResponse.json(
-      { error: "INVALID_ARGUMENT", message: "Pairing code and target robotId are required." },
+      { error: "INVALID_ARGUMENT", message: "New deviceId and target robotId are required." },
       { status: 400 }
     );
   }
 
-  // 1. If oldDeviceId provided, revoke it first
+  // 1. If oldDeviceId provided, unbind it first
   if (oldDeviceId) {
-    const revokeReq = new Request("http://localhost/api/admin/devices/revoke", {
+    const unbindReq = new Request("http://localhost/api/admin/devices/unbind", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -52,18 +54,18 @@ export async function POST(request: Request) {
       },
       body: JSON.stringify({ deviceId: oldDeviceId }),
     });
-    await revokePost(revokeReq);
+    await unbindPost(unbindReq);
   }
 
-  // 2. Pair new device with pairing code
-  const pairReq = new Request("http://localhost/api/admin/devices/pair", {
+  // 2. Bind new device directly
+  const bindReq = new Request("http://localhost/api/admin/devices/bind", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: authHeader || "",
     },
-    body: JSON.stringify({ code, robotId }),
+    body: JSON.stringify({ deviceId: newDeviceId, robotId }),
   });
 
-  return pairPost(pairReq);
+  return bindPost(bindReq);
 }

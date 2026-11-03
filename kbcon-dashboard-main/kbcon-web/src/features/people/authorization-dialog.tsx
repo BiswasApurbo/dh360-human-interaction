@@ -4,13 +4,17 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import {
   AlertCircle,
+  AlertTriangle,
+  CameraOff,
   CheckCircle2,
   Clock,
   Loader2,
   Play,
   Shield,
+  ShieldAlert,
   Square,
   UserCheck,
+  UserX,
   X,
 } from "lucide-react";
 import { useAuth } from "@/features/auth/use-auth";
@@ -18,11 +22,16 @@ import { useAuth } from "@/features/auth/use-auth";
 interface AuthorizationSession {
   authorization_id: string;
   status:
+    | "initializing"
     | "active"
+    | "processing_face"
+    | "no_face"
     | "authorized"
+    | "not_authorized"
     | "unknown"
     | "uncertain"
-    | "no_face"
+    | "camera_error"
+    | "processing_error"
     | "lost"
     | "timeout"
     | "cancelled";
@@ -173,6 +182,15 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
   }
 
   const renderStatus = () => {
+    if (loading && !session) {
+      return (
+        <div className="flex items-center gap-3 rounded-2xl bg-sky-50 p-4 text-sm font-semibold text-sky-800 ring-1 ring-sky-200">
+          <Loader2 className="size-5 shrink-0 animate-spin text-sky-600" />
+          <span>{t("statusInitializing")}</span>
+        </div>
+      );
+    }
+
     if (!session) {
       return (
         <div className="flex items-center gap-2 rounded-2xl bg-slate-50 p-4 text-sm text-slate-600 ring-1 ring-slate-200">
@@ -183,18 +201,27 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
     }
 
     switch (session.status) {
-      case "active":
+      case "initializing":
         return (
           <div className="flex items-center gap-3 rounded-2xl bg-sky-50 p-4 text-sm font-semibold text-sky-800 ring-1 ring-sky-200">
             <Loader2 className="size-5 shrink-0 animate-spin text-sky-600" />
-            <span>{t("statusActive")}</span>
+            <span>{t("statusInitializing")}</span>
           </div>
         );
       case "no_face":
         return (
           <div className="flex items-center gap-3 rounded-2xl bg-amber-50/70 p-4 text-sm font-semibold text-amber-800 ring-1 ring-amber-200">
-            <Loader2 className="size-5 shrink-0 animate-spin text-amber-600" />
+            <UserX className="size-5 shrink-0 text-amber-600" />
             <span>{t("statusNoFace")}</span>
+          </div>
+        );
+      case "processing_face":
+      case "active":
+      case "uncertain":
+        return (
+          <div className="flex items-center gap-3 rounded-2xl bg-purple-50 p-4 text-sm font-semibold text-purple-800 ring-1 ring-purple-200">
+            <Loader2 className="size-5 shrink-0 animate-spin text-purple-600" />
+            <span>{session.status === "uncertain" ? t("statusUncertain") : t("statusProcessing")}</span>
           </div>
         );
       case "unknown":
@@ -204,11 +231,25 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
             <span>{t("statusUnknown")}</span>
           </div>
         );
-      case "uncertain":
+      case "not_authorized":
         return (
-          <div className="flex items-center gap-3 rounded-2xl bg-purple-50 p-4 text-sm font-semibold text-purple-800 ring-1 ring-purple-200">
-            <Loader2 className="size-5 shrink-0 animate-spin text-purple-600" />
-            <span>{t("statusUncertain")}</span>
+          <div className="flex items-center gap-3 rounded-2xl bg-amber-50 p-4 text-sm font-semibold text-amber-800 ring-1 ring-amber-200">
+            <ShieldAlert className="size-5 shrink-0 text-amber-600" />
+            <span>{t("statusNotAuthorized")}</span>
+          </div>
+        );
+      case "camera_error":
+        return (
+          <div className="flex items-center gap-3 rounded-2xl bg-red-50 p-4 text-sm font-semibold text-red-800 ring-1 ring-red-200">
+            <CameraOff className="size-5 shrink-0 text-red-600" />
+            <span>{t("statusCameraError")}</span>
+          </div>
+        );
+      case "processing_error":
+        return (
+          <div className="flex items-center gap-3 rounded-2xl bg-red-50 p-4 text-sm font-semibold text-red-800 ring-1 ring-red-200">
+            <AlertTriangle className="size-5 shrink-0 text-red-600" />
+            <span>{t("statusProcessingError")}</span>
           </div>
         );
       case "authorized":
@@ -232,24 +273,12 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
           </div>
         );
       case "lost":
-        return (
-          <div className="flex items-center gap-3 rounded-2xl bg-amber-50 p-4 text-sm font-semibold text-amber-800 ring-1 ring-amber-200">
-            <AlertCircle className="size-5 shrink-0 text-amber-600" />
-            <span>{t("statusLost")}</span>
-          </div>
-        );
       case "timeout":
-        return (
-          <div className="flex items-center gap-3 rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-700 ring-1 ring-slate-200">
-            <Clock className="size-5 shrink-0 text-slate-500" />
-            <span>{t("statusTimeout")}</span>
-          </div>
-        );
       case "cancelled":
         return (
           <div className="flex items-center gap-3 rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-700 ring-1 ring-slate-200">
             <X className="size-5 shrink-0 text-slate-500" />
-            <span>{t("statusCancelled")}</span>
+            <span>{t("statusEnded")}</span>
           </div>
         );
       default:

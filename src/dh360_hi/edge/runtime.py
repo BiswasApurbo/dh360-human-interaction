@@ -535,8 +535,14 @@ class EdgeInteractionRuntime:
                     self._state == RuntimeState.PAUSED or self._mutation_barrier
                 ) and not self._stop_event.is_set():
                     self._pause_condition.wait(timeout=0.1)
-                if self._stop_event.is_set() or self._state != RuntimeState.RUNNING:
+                if self._stop_event.is_set():
                     break
+                if self._state != RuntimeState.RUNNING:
+                    is_live = getattr(self._frame_source, "is_live", False) is True or isinstance(
+                        self._frame_source, WebcamFrameSource
+                    )
+                    if not (self._state == RuntimeState.ERROR and is_live):
+                        break
                 self._active_cycles += 1
 
             # Execute single frame cycle with error isolation
