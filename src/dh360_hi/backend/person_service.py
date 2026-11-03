@@ -280,6 +280,26 @@ class BasePersonService(ABC):
         """Store or update a persistent setting value by key."""
         self.repository.set_setting(key, value)
 
+    @abstractmethod
+    def update_person_consent(
+        self,
+        person_id: str,
+        new_status: ConsentStatus | str,
+        changed_by_uid: str,
+        changed_by_name: str | None = None,
+        notes: str | None = None,
+        tenant_id: str | None = None,
+    ) -> tuple[PersonProfile, dict[str, Any]]:
+        """Explicitly record or update a person's consent with an immutable audit entry."""
+
+    @abstractmethod
+    def get_consent_audit_history(
+        self,
+        person_id: str,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Retrieve chronological consent audit records."""
+
 
 class PersonService(BasePersonService):
     """Concrete PersonService coordinating domain validation and repository persistence."""

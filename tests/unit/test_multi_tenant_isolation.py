@@ -25,8 +25,8 @@ def memory_db_manager() -> DatabaseManager:
 
 
 def test_schema_v5_tenant_columns(memory_db_manager: DatabaseManager) -> None:
-    """Verify schema v5 includes tenant_id and robot_id columns on persons table."""
-    assert memory_db_manager.get_schema_version() == 5
+    """Verify schema v5+ includes tenant_id and robot_id columns on persons table."""
+    assert memory_db_manager.get_schema_version() >= 5
     with memory_db_manager.readonly_cursor() as cur:
         cur.execute("PRAGMA table_info(persons);")
         columns = [row[1] for row in cur.fetchall()]

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Request, status
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from dh360_hi.backend.robot_registry import RobotRegistry
@@ -103,7 +103,7 @@ def _get_current_kiosk_state(request: Request) -> dict[str, Any]:
 
 @router.get("", response_class=HTMLResponse)
 @router.get("/", response_class=HTMLResponse)
-async def serve_kiosk_page() -> FileResponse:
+async def serve_kiosk_page() -> Response:
     """Serve the dedicated KBCON touchscreen kiosk application page."""
     html_path = STATIC_DIR / "kiosk.html"
     if not html_path.is_file():

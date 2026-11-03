@@ -251,7 +251,7 @@ class DialogueCoordinator:
     def _run_wake_turn_worker(self) -> None:
         """Worker thread to execute spoken turn after 'Hey KB' wake trigger."""
         try:
-            self.handle_turn(user_text=None, target_language=self._default_language)
+            self.handle_turn(user_text=None, language=self._default_language)
         except Exception as exc:
             logger.warning("DialogueCoordinator: error executing wake turn: %s", exc)
 

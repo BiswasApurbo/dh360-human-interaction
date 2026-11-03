@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-from typing import Any
+from typing import Any, Literal
 
 from dh360_hi.api.app import create_app
 from dh360_hi.application.dialogue_coordinator import DialogueCoordinator
@@ -202,10 +202,8 @@ def handle_serve(args: argparse.Namespace) -> int:
             if (active_robot and active_robot.mode == "healthcare")
             else knowledge_svc.institution_type
         )
-        robot_default_lang = (
-            active_robot.language
-            if (active_robot and active_robot.language in ("bn", "en"))
-            else "bn"
+        robot_default_lang: Literal["bn", "en"] = (
+            "en" if (active_robot and active_robot.language == "en") else "bn"
         )
 
         # Local wake word detector and shared microphone capture pipeline

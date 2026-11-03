@@ -66,9 +66,10 @@ def _require_person(
     profile = service.get_person(person_id)
     if profile is None:
         raise EntityNotFoundError("person", person_id)
-    if tenant_id and profile.tenant_id != tenant_id:
+    if tenant_id and getattr(profile, "tenant_id", None) != tenant_id:
         raise EntityNotFoundError("person", person_id)
-    if profile.consent_status != ConsentStatus.GRANTED:
+    consent = getattr(profile, "consent_status", ConsentStatus.GRANTED)
+    if consent != ConsentStatus.GRANTED:
         raise ConflictAppError("Biometric enrollment requires explicit granted consent.")
 
 

@@ -107,6 +107,27 @@ class BasePersonRepository(ABC):
     def set_setting(self, key: str, value: str) -> None:
         """Store or update a persistent setting value by key."""
 
+    @abstractmethod
+    def record_consent_audit(
+        self,
+        person_id: str,
+        previous_status: str,
+        new_status: str,
+        changed_by_uid: str,
+        changed_by_name: str | None = None,
+        notes: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Record an immutable audit log entry for a consent status transition."""
+
+    @abstractmethod
+    def get_consent_audit_history(
+        self,
+        person_id: str,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Retrieve chronological consent audit logs for a person."""
+
 
 class SQLitePersonRepository(BasePersonRepository):
     """SQLite-backed implementation of BasePersonRepository."""

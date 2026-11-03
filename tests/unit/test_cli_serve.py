@@ -83,7 +83,7 @@ def test_cli_serve_wires_single_process_daemon(tmp_path: Path) -> None:
         assert auth_ctrl._session_manager is mock_sm
 
         mock_uvicorn_run.assert_called_once_with(
-            mock_app, host="0.0.0.0", port=8080, log_level="warning"
+            mock_app, host="0.0.0.0", port=8080, log_level="warning", timeout_graceful_shutdown=1
         )
         mock_svc.stop.assert_called_once_with(timeout=3.0)
 

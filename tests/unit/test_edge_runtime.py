@@ -381,7 +381,7 @@ class TestRuntimeStepOnce:
         assert len(events) == len(received)
 
     def test_step_once_when_paused_raises_error(self) -> None:
-        source = StubFrameSource()
+        source = StubFrameSource(infinite=True)
         pipeline = MagicMock(spec=TwoRatePerceptionPipeline)
         manager = SessionManager()
         bus = EventBus()
