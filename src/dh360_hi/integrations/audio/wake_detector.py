@@ -106,7 +106,10 @@ class WakeWordDetector:
                     grammar_json,
                 )
                 self._vosk_initialized = True
-                logger.info("WakeWordDetector: local Vosk keyword model initialized for phrase '%s'", self.wake_phrase)
+                logger.info(
+                    "WakeWordDetector: local Vosk keyword model initialized for phrase '%s'",
+                    self.wake_phrase,
+                )
                 return True
 
             except Exception as exc:
@@ -197,7 +200,9 @@ class WakeWordDetector:
                     res_data = json.loads(res_json)
                     text = res_data.get("text", "")
                     if self._matches_wake_phrase(text):
-                        logger.info("WakeWordDetector: 'Hey KB' wake word detected! (Result: %s)", text)
+                        logger.info(
+                            "WakeWordDetector: 'Hey KB' wake word detected! (Result: %s)", text
+                        )
                         self._last_detected_time = now
                         self.reset_state()
                         return WakeWordEvent(detected=True, phrase=text)
@@ -207,7 +212,10 @@ class WakeWordDetector:
                     partial_data = json.loads(partial_json)
                     partial_text = partial_data.get("partial", "")
                     if self._matches_wake_phrase(partial_text):
-                        logger.info("WakeWordDetector: 'Hey KB' detected via partial recognition: '%s'", partial_text)
+                        logger.info(
+                            "WakeWordDetector: 'Hey KB' detected via partial recognition: '%s'",
+                            partial_text,
+                        )
                         self._last_detected_time = now
                         self.reset_state()
                         return WakeWordEvent(detected=True, phrase=partial_text)

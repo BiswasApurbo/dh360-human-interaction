@@ -99,7 +99,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         service.authorization_controller = auth_ctrl
 
     hb_client: EdgeHeartbeatClient | None = None
-    if os.environ.get("DISABLE_EDGE_HEARTBEAT") != "1" and not getattr(app.state, "_test_mode", False):
+    if os.environ.get("DISABLE_EDGE_HEARTBEAT") != "1" and not getattr(
+        app.state, "_test_mode", False
+    ):
         hb_client = EdgeHeartbeatClient()
         hb_client.start()
         app.state.heartbeat_client = hb_client

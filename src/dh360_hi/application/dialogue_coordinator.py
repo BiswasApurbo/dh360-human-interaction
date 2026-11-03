@@ -211,7 +211,9 @@ class DialogueCoordinator:
         with self._state_lock:
             if self._current_state != "listening":
                 return
-            logger.info("DialogueCoordinator: 60s inactivity reached in LISTENING; returning to IDLE")
+            logger.info(
+                "DialogueCoordinator: 60s inactivity reached in LISTENING; returning to IDLE"
+            )
             if self._stt_provider is not None:
                 with contextlib.suppress(Exception):
                     self._stt_provider.hold()
@@ -226,10 +228,16 @@ class DialogueCoordinator:
                 logger.debug("DialogueCoordinator: wake word detected but microphone is muted")
                 return
             if self._current_state in ("thinking", "answering", "speaking"):
-                logger.debug("DialogueCoordinator: wake word detected during active %s; ignoring", self._current_state)
+                logger.debug(
+                    "DialogueCoordinator: wake word detected during active %s; ignoring",
+                    self._current_state,
+                )
                 return
 
-            logger.info("DialogueCoordinator: 'Hey KB' detected! Transitioning from %s to LISTENING", self._current_state)
+            logger.info(
+                "DialogueCoordinator: 'Hey KB' detected! Transitioning from %s to LISTENING",
+                self._current_state,
+            )
             self._set_state("listening", wake_phrase=getattr(event, "phrase", "hey kb"))
             self._arm_inactivity_timer()
 
@@ -1013,7 +1021,9 @@ class DialogueCoordinator:
                 ):
                     self._session_state.add_turn(model_turn, now=now)
                 final_state = (
-                    "muted" if self._is_microphone_muted else ("error" if error_code else "listening")
+                    "muted"
+                    if self._is_microphone_muted
+                    else ("error" if error_code else "listening")
                 )
             self._set_state(final_state)
             if final_state == "listening":

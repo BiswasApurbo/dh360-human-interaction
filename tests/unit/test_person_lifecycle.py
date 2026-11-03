@@ -392,4 +392,3 @@ def test_consent_management_audit_trail(memory_service: tuple) -> None:
             changed_by_uid="admin-user-other",
             tenant_id="other-tenant",
         )
-

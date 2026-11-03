@@ -165,7 +165,9 @@ class SharedMicrophoneCapture:
             if not self._is_muted and self.wake_detector is not None:
                 self.wake_detector.enable()
 
-            logger.info("SharedMicrophoneCapture: ended active session; returned to idle wake-word monitoring")
+            logger.info(
+                "SharedMicrophoneCapture: ended active session; returned to idle wake-word monitoring"
+            )
 
     def feed_simulated_chunk(self, chunk: bytes) -> WakeWordEvent | None:
         """Feed synthetic audio chunk (useful for testing or virtual pipes)."""

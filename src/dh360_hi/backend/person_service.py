@@ -531,9 +531,7 @@ class PersonService(BasePersonService):
         if tenant_id and existing.tenant_id != tenant_id:
             raise PersonNotFoundError(f"Person '{person_id}' not found")
 
-        norm_status = (
-            ConsentStatus(new_status) if isinstance(new_status, str) else new_status
-        )
+        norm_status = ConsentStatus(new_status) if isinstance(new_status, str) else new_status
         prev_status = existing.consent_status.value
         now_str = utc_now_iso()
 

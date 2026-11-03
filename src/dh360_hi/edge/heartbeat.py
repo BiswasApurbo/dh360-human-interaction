@@ -46,13 +46,10 @@ class EdgeHeartbeatClient:
         if not robot_id:
             try:
                 from dh360_hi.backend.robot_registry import RobotRegistry
+
                 resolved = RobotRegistry.get_instance().resolve_local_robot_id()
             except Exception:
-                resolved = (
-                    os.environ.get("ROBOT_ID")
-                    or os.environ.get("KBCON_ROBOT_ID")
-                    or "KB001"
-                )
+                resolved = os.environ.get("ROBOT_ID") or os.environ.get("KBCON_ROBOT_ID") or "KB001"
         else:
             resolved = robot_id
 
