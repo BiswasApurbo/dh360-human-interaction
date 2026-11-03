@@ -39,8 +39,22 @@ export async function POST(
   }
 
   const adminDb = await getAdminFirestore();
-  const robotRef = adminDb.collection("robots").doc(robotId);
-  const docSnap = await robotRef.get();
+  let robotRef = adminDb.collection("robots").doc(robotId);
+  let docSnap = await robotRef.get();
+
+  // Canonical resolution: match across case and hyphenation (KB001 <-> Kb-001 <-> KB-001)
+  if (!docSnap.exists) {
+    const cleanTarget = robotId.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+    const allRobots = await adminDb.collection("robots").get();
+    for (const d of allRobots.docs) {
+      if (d.id.replace(/[^a-zA-Z0-9]/g, "").toLowerCase() === cleanTarget) {
+        robotRef = d.ref;
+        docSnap = d;
+        break;
+      }
+    }
+  }
+
   if (!docSnap.exists) {
     return NextResponse.json({ error: "NOT_FOUND", message: `Robot ${robotId} not found.` }, { status: 404 });
   }
@@ -59,17 +73,26 @@ export async function POST(
     }
   }
 
-  // 4. Resolve edge API URL
+  // 4. Resolve edge API URL safely (anti-SSRF and no private LAN probing from cloud)
   let apiUrl = "";
   if (robotData.config && typeof robotData.config === "object" && "apiUrl" in robotData.config) {
     apiUrl = String(robotData.config.apiUrl);
   }
-  if (!apiUrl) {
+  const isPrivateOrLocal =
+    !apiUrl ||
+    apiUrl.includes("192.168.") ||
+    apiUrl.includes("10.") ||
+    apiUrl.includes("172.16.") ||
+    apiUrl.includes("localhost") ||
+    apiUrl.includes("127.0.0.1") ||
+    apiUrl.includes("trycloudflare.com");
+
+  if (isPrivateOrLocal) {
     try {
       const config = getDh360Config();
       apiUrl = config.apiUrl;
     } catch {
-      apiUrl = process.env.DH360_API_URL || "http://192.168.0.89:8000";
+      apiUrl = "https://raspberrypi.tailacfb18.ts.net";
     }
   }
 

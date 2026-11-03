@@ -20,8 +20,21 @@ export async function POST(request: Request) {
 
   try {
     const adminDb = await getAdminFirestore();
-    const robotRef = adminDb.collection("robots").doc(robotId);
-    const docSnap = await robotRef.get();
+    let robotRef = adminDb.collection("robots").doc(robotId);
+    let docSnap = await robotRef.get();
+
+    // Canonical resolution: match across case and hyphenation (KB001 <-> Kb-001 <-> KB-001)
+    if (!docSnap.exists) {
+      const cleanTarget = robotId.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+      const allRobots = await adminDb.collection("robots").get();
+      for (const d of allRobots.docs) {
+        if (d.id.replace(/[^a-zA-Z0-9]/g, "").toLowerCase() === cleanTarget) {
+          robotRef = d.ref;
+          docSnap = d;
+          break;
+        }
+      }
+    }
 
     if (!docSnap.exists) {
       return NextResponse.json({ error: "NOT_FOUND", message: `Robot ${robotId} not found.` }, { status: 404 });

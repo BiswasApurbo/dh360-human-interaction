@@ -49,7 +49,9 @@ class EdgeHeartbeatClient:
 
                 resolved = RobotRegistry.get_instance().resolve_local_robot_id()
             except Exception:
-                resolved = os.environ.get("ROBOT_ID") or os.environ.get("KBCON_ROBOT_ID") or "KB001"
+                resolved = (
+                    os.environ.get("ROBOT_ID") or os.environ.get("KBCON_ROBOT_ID") or "Kb-001"
+                )
         else:
             resolved = robot_id
 

@@ -186,8 +186,22 @@ export async function PATCH(request: Request) {
 
   try {
     const adminDb = await getAdminFirestore();
-    const robotRef = adminDb.collection("robots").doc(robotId);
-    const docSnap = await robotRef.get();
+    let robotRef = adminDb.collection("robots").doc(robotId);
+    let docSnap = await robotRef.get();
+
+    // Canonical resolution: match across case and hyphenation (KB001 <-> Kb-001 <-> KB-001)
+    if (!docSnap.exists) {
+      const cleanTarget = robotId.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+      const allRobots = await adminDb.collection("robots").get();
+      for (const d of allRobots.docs) {
+        if (d.id.replace(/[^a-zA-Z0-9]/g, "").toLowerCase() === cleanTarget) {
+          robotRef = d.ref;
+          docSnap = d;
+          break;
+        }
+      }
+    }
+
     if (!docSnap.exists) {
       return NextResponse.json({ error: "NOT_FOUND", message: `Robot ${robotId} not found.` }, { status: 404 });
     }
@@ -216,8 +230,26 @@ export async function PATCH(request: Request) {
         if (uDoc.exists) {
           const uData = uDoc.data() || {};
           adminName = (uData.name as string) || (uData.email as string) || null;
+          // Synchronize user doc: ensure robotId is in user's assignedRobots
+          const currentAssigned = Array.isArray(uData.assignedRobots) ? (uData.assignedRobots as string[]) : [];
+          if (!currentAssigned.includes(docSnap.id)) {
+            await uDoc.ref.set({ assignedRobots: [...currentAssigned, docSnap.id] }, { merge: true });
+          }
         }
       }
+
+      // If reassigned from another admin, remove robotId from previous admin's assignedRobots
+      const prevAdminId = typeof currentData.assignedAdminId === "string" ? currentData.assignedAdminId.trim() : null;
+      if (prevAdminId && prevAdminId !== adminId) {
+        const prevDoc = await adminDb.collection("users").doc(prevAdminId).get();
+        if (prevDoc.exists) {
+          const pData = prevDoc.data() || {};
+          const pRobots = Array.isArray(pData.assignedRobots) ? (pData.assignedRobots as string[]) : [];
+          const updatedRobots = pRobots.filter((r) => r !== docSnap.id && r !== robotId);
+          await prevDoc.ref.set({ assignedRobots: updatedRobots }, { merge: true });
+        }
+      }
+
       updates.assignedAdminId = adminId;
       updates.assignedAdminName = adminName;
     }

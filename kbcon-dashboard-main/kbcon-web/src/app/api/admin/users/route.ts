@@ -74,6 +74,21 @@ export async function GET(request: Request) {
       firestoreMap.set(doc.id, doc.data());
     });
 
+    // 3. Fetch authoritative robot assignments from 'robots' collection
+    const robotsDocs = await adminDb.collection("robots").get();
+    const robotAssignmentsMap = new Map<string, string[]>();
+    robotsDocs.forEach((doc: { id: string; data: () => Record<string, unknown> }) => {
+      const data = doc.data();
+      const adminId = typeof data.assignedAdminId === "string" ? data.assignedAdminId.trim() : null;
+      if (adminId) {
+        const existing = robotAssignmentsMap.get(adminId) || [];
+        if (!existing.includes(doc.id)) {
+          existing.push(doc.id);
+        }
+        robotAssignmentsMap.set(adminId, existing);
+      }
+    });
+
     const accounts = listUsersResult.users.map((u) => {
       const claims = (u.customClaims as Record<string, unknown>) || {};
       const fsData = firestoreMap.get(u.uid) || {};
@@ -95,6 +110,10 @@ export async function GET(request: Request) {
             (fsData.permissions as Record<string, boolean>) ||
             DEFAULT_ADMIN_PERMS;
 
+      const docRobots = Array.isArray(fsData.assignedRobots) ? (fsData.assignedRobots as string[]) : [];
+      const fromRobots = robotAssignmentsMap.get(u.uid) || [];
+      const assignedRobots = Array.from(new Set([...docRobots, ...fromRobots]));
+
       return {
         uid: u.uid,
         name: u.displayName || (fsData.name as string) || u.email?.split("@")[0] || "User",
@@ -103,7 +122,7 @@ export async function GET(request: Request) {
         active,
         mustChangePassword: Boolean(claims.mustChangePassword || fsData.mustChangePassword),
         permissions,
-        assignedRobots: (fsData.assignedRobots as string[]) || [],
+        assignedRobots,
         createdAt: u.metadata.creationTime,
         lastSignInTime: u.metadata.lastSignInTime,
       };

@@ -61,7 +61,7 @@ class RobotRecord:
         )
 
         return cls(
-            robot_id=str(data.get("id") or data.get("robot_id") or "KB001").strip(),
+            robot_id=str(data.get("id") or data.get("robot_id") or "Kb-001").strip(),
             name=str(data.get("name") or "KBCON Humanoid").strip(),
             language=norm_lang,
             mode=norm_mode,
@@ -147,7 +147,7 @@ class RobotRegistry:
                 except Exception as exc:
                     logger.warning("Failed to parse offline config cache at %s: %s", path, exc)
 
-        return "KB001"
+        return "Kb-001"
 
     def _get_cache_path(self) -> Path:
         """Return the preferred path for offline configuration cache."""
@@ -198,6 +198,14 @@ class RobotRegistry:
         if db is not None:
             try:
                 doc = db.collection("robots").document(target_id).get()
+                if not doc.exists:
+                    clean_target = target_id.replace("-", "").lower()
+                    for d in db.collection("robots").stream():
+                        if d.id.replace("-", "").lower() == clean_target:
+                            doc = d
+                            target_id = d.id
+                            break
+
                 if doc.exists:
                     raw_data = doc.to_dict() or {}
                     raw_data["id"] = target_id
