@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Search,
   Shield,
+  Trash2,
   UserCheck,
   UserX,
 } from "lucide-react";
@@ -38,6 +39,7 @@ interface PeopleTableProps {
   loading: boolean;
   onSelectPerson: (person: PersonProfile) => void;
   onRequestResetBiometrics: (person: PersonProfile) => void;
+  onRequestDeletePerson?: (person: PersonProfile) => void;
   onRequestEnroll: (person: PersonProfile) => void;
   onOpenAuthorization: () => void;
   onRequestRegister?: () => void;
@@ -48,6 +50,7 @@ export function PeopleTable({
   loading,
   onSelectPerson,
   onRequestResetBiometrics,
+  onRequestDeletePerson,
   onRequestEnroll,
   onOpenAuthorization,
   onRequestRegister,
@@ -224,6 +227,19 @@ export function PeopleTable({
                           <RefreshCw className="size-3.5" />
                           {t("resetBiometrics")}
                         </DropdownMenuItem>
+
+                        {onRequestDeletePerson && (
+                          <>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              onClick={() => onRequestDeletePerson(person)}
+                              className="gap-2 text-xs text-red-600 focus:text-red-700 focus:bg-red-50"
+                            >
+                              <Trash2 className="size-3.5" />
+                              {t("deletePerson")}
+                            </DropdownMenuItem>
+                          </>
+                        )}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </TableCell>

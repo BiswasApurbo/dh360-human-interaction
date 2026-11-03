@@ -172,6 +172,12 @@ class EdgeHeartbeatClient:
                     if remote_config != self._synced_config:
                         self._synced_config = remote_config
                         self.on_config_synced(data)
+
+                logger.info(
+                    "Heartbeat acknowledged by central dashboard (robot '%s', tenant '%s')",
+                    self.robot_id,
+                    data.get("tenantName") or data.get("tenant") if isinstance(data, dict) else "unknown",
+                )
                 return True
 
             logger.warning(
@@ -189,29 +195,40 @@ class EdgeHeartbeatClient:
                 )
                 self._was_offline = True
             return False
+        except Exception as exc:
+            logger.error("Unexpected error in heartbeat transmission: %s", exc, exc_info=True)
+            return False
 
     async def _run_loop(self) -> None:
         """Continuous heartbeat and reconnection loop with exponential backoff."""
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            while self._running:
-                if self.robot_id == "UNPROVISIONED":
-                    await asyncio.sleep(self.interval_seconds)
-                    continue
+        while self._running:
+            try:
+                async with httpx.AsyncClient(timeout=8.0) as client:
+                    while self._running:
+                        if self.robot_id == "UNPROVISIONED":
+                            await asyncio.sleep(self.interval_seconds)
+                            continue
 
-                success = await self._send_heartbeat(client)
-                if not self._running:
-                    break
+                        success = await self._send_heartbeat(client)
+                        if not self._running:
+                            break
 
-                if success:
-                    await asyncio.sleep(self.interval_seconds)
-                else:
-                    # Connection failed: back off exponentially to avoid hammering
-                    logger.debug(
-                        "Waiting %.1fs backoff before next reconnection attempt...",
-                        self._current_backoff,
-                    )
-                    await asyncio.sleep(self._current_backoff)
-                    self._current_backoff = min(
-                        self._current_backoff * 2.0,
-                        self.max_backoff,
-                    )
+                        if success:
+                            self._current_backoff = self.min_backoff
+                            await asyncio.sleep(self.interval_seconds)
+                        else:
+                            # Connection failed: back off exponentially to avoid hammering
+                            logger.info(
+                                "Waiting %.1fs backoff before next heartbeat attempt...",
+                                self._current_backoff,
+                            )
+                            await asyncio.sleep(self._current_backoff)
+                            self._current_backoff = min(
+                                self._current_backoff * 1.5,
+                                self.max_backoff,
+                            )
+            except asyncio.CancelledError:
+                break
+            except Exception as loop_exc:
+                logger.error("Error in heartbeat loop; refreshing client in 5s: %s", loop_exc)
+                await asyncio.sleep(5.0)

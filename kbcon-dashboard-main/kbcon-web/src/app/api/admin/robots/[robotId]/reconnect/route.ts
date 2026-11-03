@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { authenticateFirebaseToken } from "@/lib/dh360/auth";
 import { getAdminFirestore, hasServerAdminCredentials, forwardAdminRequestToBackend } from "@/lib/server-admin";
-import { getDh360Config } from "@/lib/dh360/config";
 
 export async function POST(
   request: Request,
@@ -73,111 +72,166 @@ export async function POST(
     }
   }
 
-  // 4. Resolve edge API URL safely (anti-SSRF and no private LAN probing from cloud)
-  let apiUrl = "";
-  if (robotData.config && typeof robotData.config === "object" && "apiUrl" in robotData.config) {
-    apiUrl = String(robotData.config.apiUrl);
-  }
-  const isPrivateOrLocal =
-    !apiUrl ||
-    apiUrl.includes("192.168.") ||
-    apiUrl.includes("10.") ||
-    apiUrl.includes("172.16.") ||
-    apiUrl.includes("localhost") ||
-    apiUrl.includes("127.0.0.1") ||
-    apiUrl.includes("trycloudflare.com");
-
-  if (isPrivateOrLocal) {
-    try {
-      const config = getDh360Config();
-      apiUrl = config.apiUrl;
-    } catch {
-      apiUrl = "https://raspberrypi.tailacfb18.ts.net";
+  // 4. Inspect bound device and authenticated device-initiated heartbeat
+  // Raspberry Pi edge devices operate behind NAT and firewalls; cloud Vercel cannot make direct inbound LAN HTTP connections.
+  // The authoritative ground truth for connectivity is authenticated edge-initiated heartbeats.
+  const boundDeviceId = (typeof robotData.deviceId === "string" ? robotData.deviceId.trim() : null);
+  let devData: Record<string, unknown> | null = null;
+  if (boundDeviceId) {
+    const devSnap = await adminDb.collection("devices").doc(boundDeviceId).get();
+    if (devSnap.exists) {
+      devData = devSnap.data() || null;
     }
   }
 
-  // 5. Perform genuine health probe to the robot
-  const now = new Date().toISOString();
-  const probeTarget = apiUrl.replace(/\/+$/, "") + "/health";
-  let isReachable = false;
+  // 5. Evaluate heartbeat freshness
+  const now = new Date();
+  const nowIso = now.toISOString();
+
+  // Find most recent heartbeat timestamp between robot lastSeen and device lastHeartbeat
+  const candidateTimestamps: string[] = [];
+  if (typeof robotData.lastSeen === "string" && robotData.lastSeen) {
+    candidateTimestamps.push(robotData.lastSeen);
+  }
+  if (devData && typeof devData.lastHeartbeat === "string" && devData.lastHeartbeat) {
+    candidateTimestamps.push(devData.lastHeartbeat);
+  }
+
+  let lastHeartbeatIso: string | null = null;
+  let elapsedMs = Infinity;
+
+  if (candidateTimestamps.length > 0) {
+    candidateTimestamps.sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+    lastHeartbeatIso = candidateTimestamps[0];
+    const hbTime = new Date(lastHeartbeatIso).getTime();
+    if (!isNaN(hbTime)) {
+      elapsedMs = now.getTime() - hbTime;
+    }
+  }
+
+  // Telemetry threshold: robots report heartbeats every 15-20s. Allow 90s freshness window.
+  const freshnessThresholdMs = 90 * 1000;
+  const isHeartbeatFresh = elapsedMs <= freshnessThresholdMs;
+
+  let isReachable = isHeartbeatFresh;
+  let probeMethod = isHeartbeatFresh ? "heartbeat_verified" : "heartbeat_stale";
   let probeError = "";
 
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4500); // 4.5s probe timeout
-
-    const probeRes = await fetch(probeTarget, {
-      method: "GET",
-      signal: controller.signal,
-      headers: { Accept: "application/json" },
-    });
-    clearTimeout(timeoutId);
-
-    if (probeRes.ok) {
-      isReachable = true;
-    } else {
-      probeError = `Robot returned HTTP ${probeRes.status}`;
+  // Optional fallback probe ONLY if apiUrl is a public, non-private, routable HTTPS endpoint
+  if (!isReachable) {
+    let apiUrl = "";
+    if (robotData.config && typeof robotData.config === "object" && "apiUrl" in robotData.config) {
+      apiUrl = String(robotData.config.apiUrl);
     }
-  } catch (err: unknown) {
-    if (err instanceof Error) {
-      if (err.name === "AbortError") {
-        probeError = "Connection timed out after 4.5s.";
-      } else {
-        probeError = err.message;
+    const isPrivateOrLocal =
+      !apiUrl ||
+      apiUrl.includes("192.168.") ||
+      apiUrl.includes("10.") ||
+      apiUrl.includes("172.16.") ||
+      apiUrl.includes("localhost") ||
+      apiUrl.includes("127.0.0.1") ||
+      apiUrl.includes(".local") ||
+      apiUrl.includes("tailacfb18.ts.net");
+
+    if (!isPrivateOrLocal && (apiUrl.startsWith("https://") || apiUrl.startsWith("http://"))) {
+      try {
+        const probeTarget = apiUrl.replace(/\/+$/, "") + "/health";
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3500);
+        const probeRes = await fetch(probeTarget, {
+          method: "GET",
+          signal: controller.signal,
+          headers: { Accept: "application/json" },
+        });
+        clearTimeout(timeoutId);
+        if (probeRes.ok) {
+          isReachable = true;
+          probeMethod = "direct_http_probe";
+        } else {
+          probeError = `HTTP ${probeRes.status}`;
+        }
+      } catch (err: unknown) {
+        probeError = err instanceof Error ? err.message : "Network probe failed";
       }
-    } else {
-      probeError = "Network connection failed.";
     }
   }
 
   // 6. Update Firestore and respond according to REAL device status
-  let host = apiUrl;
-  try {
-    host = new URL(probeTarget).hostname || apiUrl;
-  } catch {
-    // Keep host
-  }
-
   if (isReachable) {
     await robotRef.set(
       {
         status: "online",
-        lastSeen: now,
+        lastSeen: nowIso,
         reconnectResult: {
           success: true,
-          timestamp: now,
-          probeTarget,
+          method: probeMethod,
+          timestamp: nowIso,
+          elapsedSeconds: Number.isFinite(elapsedMs) ? Math.round(elapsedMs / 1000) : 0,
+          lastHeartbeat: lastHeartbeatIso || nowIso,
         },
       },
       { merge: true }
     );
 
+    if (boundDeviceId) {
+      await adminDb.collection("devices").doc(boundDeviceId).set(
+        {
+          status: "paired",
+          bindingStatus: "bound",
+          isOnline: true,
+        },
+        { merge: true }
+      );
+    }
+
+    const elapsedSeconds = Number.isFinite(elapsedMs) ? Math.round(elapsedMs / 1000) : 0;
     return NextResponse.json({
       success: true,
       status: "online",
-      lastSeen: now,
-      message: `Robot ${robotData.name || robotId} reconnected successfully. Device is healthy.`,
+      lastSeen: nowIso,
+      deviceId: boundDeviceId || null,
+      assignedTenant: robotData.assignedAdminName || "Salute",
+      message: `Robot ${robotData.name || robotId} is verified online (${probeMethod === "heartbeat_verified" ? `active heartbeat received ${elapsedSeconds}s ago` : "direct probe successful"}).`,
     });
   } else {
     // Keep offline. Never falsely mark online without real device connectivity.
     await robotRef.set(
       {
+        status: "offline",
         reconnectResult: {
           success: false,
-          error: probeError,
-          timestamp: now,
-          probeTarget,
+          method: probeMethod,
+          timestamp: nowIso,
+          elapsedSeconds: Number.isFinite(elapsedMs) ? Math.round(elapsedMs / 1000) : null,
+          lastHeartbeat: lastHeartbeatIso,
+          error: probeError || "Heartbeat stale or missing",
         },
       },
       { merge: true }
     );
+
+    if (boundDeviceId) {
+      await adminDb.collection("devices").doc(boundDeviceId).set(
+        {
+          isOnline: false,
+        },
+        { merge: true }
+      );
+    }
+
+    const elapsedSeconds = Number.isFinite(elapsedMs) ? Math.round(elapsedMs / 1000) : null;
+    const errorDetail = lastHeartbeatIso
+      ? `Last authenticated heartbeat received ${elapsedSeconds}s ago (${new Date(lastHeartbeatIso).toLocaleTimeString()}). Ensure the Raspberry Pi is powered on, connected to internet, and dh360-backend is running.`
+      : `No authenticated heartbeats have been received from bound device ${boundDeviceId || "unknown"}. Verify edge daemon is running.`;
 
     return NextResponse.json(
       {
         success: false,
         status: "offline",
         error: "UNREACHABLE",
-        message: `Robot at ${host} is unreachable (${probeError}). Verify that the robot is powered on, connected to the local network, and dh360-backend is running.`,
+        lastSeen: lastHeartbeatIso,
+        deviceId: boundDeviceId || null,
+        message: `Robot ${robotData.name || robotId} is unreachable. ${errorDetail}`,
       },
       { status: 503 }
     );

@@ -10,6 +10,7 @@ import { useRobots } from "@/features/robots/use-robots";
 import { usePeople } from "./use-people";
 import { PeopleTable } from "./people-table";
 import { CreatePersonDialog } from "./create-person-dialog";
+import { DeletePersonDialog } from "./delete-person-dialog";
 import { ResetBiometricsDialog } from "./reset-biometrics-dialog";
 import { PersonDetailSheet } from "./person-detail-sheet";
 import { EnrollmentDialog } from "./enrollment-dialog";
@@ -32,6 +33,7 @@ export function PeoplePageContent() {
     updateConsent,
     getConsentHistory,
     resetBiometrics,
+    deletePerson,
   } = usePeople(selectedRobotFilter || undefined);
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -39,6 +41,8 @@ export function PeoplePageContent() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [personToReset, setPersonToReset] = useState<PersonProfile | null>(null);
   const [resetOpen, setResetOpen] = useState(false);
+  const [personToDelete, setPersonToDelete] = useState<PersonProfile | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [personToEnroll, setPersonToEnroll] = useState<PersonProfile | null>(null);
   const [enrollOpen, setEnrollOpen] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
@@ -46,6 +50,11 @@ export function PeoplePageContent() {
   const handleSelectPerson = (person: PersonProfile) => {
     setSelectedPerson(person);
     setSheetOpen(true);
+  };
+
+  const handleRequestDeletePerson = (person: PersonProfile) => {
+    setPersonToDelete(person);
+    setDeleteOpen(true);
   };
 
   const handleRequestResetBiometrics = (person: PersonProfile) => {
@@ -164,6 +173,7 @@ export function PeoplePageContent() {
         loading={loading}
         onSelectPerson={handleSelectPerson}
         onRequestResetBiometrics={handleRequestResetBiometrics}
+        onRequestDeletePerson={handleRequestDeletePerson}
         onRequestEnroll={handleRequestEnroll}
         onOpenAuthorization={() => setAuthOpen(true)}
         onRequestRegister={() => setCreateOpen(true)}
@@ -191,6 +201,16 @@ export function PeoplePageContent() {
         open={resetOpen}
         onOpenChange={setResetOpen}
         onConfirm={resetBiometrics}
+      />
+
+      <DeletePersonDialog
+        person={personToDelete}
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        onConfirm={async (personId) => {
+          await deletePerson(personId);
+          await refresh();
+        }}
       />
 
       <EnrollmentDialog

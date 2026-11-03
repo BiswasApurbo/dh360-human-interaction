@@ -162,7 +162,7 @@ export function usePeople(robotId?: string) {
 
       if (!res.ok) {
         if (res.status === 403) {
-          throw new Error("Super Admin role required to delete person profiles.");
+          throw new Error("You are not authorized to delete this person profile.");
         }
         const errData = await res.json().catch(() => null);
         throw new Error(

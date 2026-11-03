@@ -127,8 +127,8 @@ class RobotRegistry:
         """
         # 1. Device identity provisioning configuration (/etc/kbcon/device/device_config.json)
         for path in DEVICE_CONFIG_CANDIDATES:
-            if path.exists():
-                try:
+            try:
+                if path.exists():
                     data = json.loads(path.read_text(encoding="utf-8"))
                     if data.get("status") == "paired":
                         cand_id = (
@@ -138,8 +138,8 @@ class RobotRegistry:
                         )
                         if cand_id and str(cand_id).strip():
                             return str(cand_id).strip()
-                except Exception as exc:
-                    logger.warning("Failed to parse device config at %s: %s", path, exc)
+            except Exception as exc:
+                logger.warning("Failed to access device config at %s: %s", path, exc)
 
         # 2. Explicit default / override
         if self._default_robot_id and self._default_robot_id.strip():

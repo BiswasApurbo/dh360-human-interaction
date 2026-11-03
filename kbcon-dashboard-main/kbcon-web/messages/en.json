@@ -431,6 +431,7 @@
     "viewProfile": "View Profile",
     "resetBiometrics": "Reset Biometrics",
     "delete": "Delete",
+    "deletePerson": "Delete Person",
     "qaPairs": "Custom Q&A Pairs",
     "question": "Question",
     "answer": "Answer",
