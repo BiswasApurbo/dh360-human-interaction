@@ -12,6 +12,7 @@ import type { App } from "firebase-admin/app";
 import type { Auth } from "firebase-admin/auth";
 import type { Firestore } from "firebase-admin/firestore";
 import { getDh360Config } from "./dh360/config";
+import { getEmbeddedServiceAccount } from "./server-credentials";
 
 let adminApp: App | null = null;
 
@@ -76,7 +77,6 @@ function resolveServiceAccount(): Record<string, unknown> | null {
 
   // 5. Embedded server-only service account for production deployment
   try {
-    const { getEmbeddedServiceAccount } = require("./server-credentials");
     const sa = getEmbeddedServiceAccount();
     if (sa) return sa;
   } catch {
