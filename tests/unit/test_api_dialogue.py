@@ -405,10 +405,13 @@ def test_dialogue_transcribe_success(
 
     fake_audio = base64.b64encode(b"RIFFdummywavdata").decode("ascii")
 
-    with mock.patch(
-        "dh360_hi.api.routers.dialogue.transcribe_audio_payload",
-        return_value="বাংলাদেশ ইনোভেশন ফেয়ার",
-    ), TestClient(app) as client:
+    with (
+        mock.patch(
+            "dh360_hi.api.routers.dialogue.transcribe_audio_payload",
+            return_value="বাংলাদেশ ইনোভেশন ফেয়ার",
+        ),
+        TestClient(app) as client,
+    ):
         resp = client.post(
             "/dialogue/transcribe",
             headers={"Authorization": f"Bearer {token}"},
