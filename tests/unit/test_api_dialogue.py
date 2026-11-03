@@ -408,21 +408,20 @@ def test_dialogue_transcribe_success(
     with mock.patch(
         "dh360_hi.api.routers.dialogue.transcribe_audio_payload",
         return_value="বাংলাদেশ ইনোভেশন ফেয়ার",
-    ):
-        with TestClient(app) as client:
-            resp = client.post(
-                "/dialogue/transcribe",
-                headers={"Authorization": f"Bearer {token}"},
-                json={
-                    "audio_base64": fake_audio,
-                    "mime_type": "audio/webm",
-                    "language": "bn",
-                },
-            )
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["text"] == "বাংলাদেশ ইনোভেশন ফেয়ার"
-            assert data["language"] == "bn"
+    ), TestClient(app) as client:
+        resp = client.post(
+            "/dialogue/transcribe",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "audio_base64": fake_audio,
+                "mime_type": "audio/webm",
+                "language": "bn",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["text"] == "বাংলাদেশ ইনোভেশন ফেয়ার"
+        assert data["language"] == "bn"
 
 
 def test_dialogue_transcribe_unauthenticated(
