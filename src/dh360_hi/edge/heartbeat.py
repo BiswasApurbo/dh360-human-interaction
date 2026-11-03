@@ -176,7 +176,9 @@ class EdgeHeartbeatClient:
                 logger.info(
                     "Heartbeat acknowledged by central dashboard (robot '%s', tenant '%s')",
                     self.robot_id,
-                    data.get("tenantName") or data.get("tenant") if isinstance(data, dict) else "unknown",
+                    data.get("tenantName") or data.get("tenant")
+                    if isinstance(data, dict)
+                    else "unknown",
                 )
                 return True
 
