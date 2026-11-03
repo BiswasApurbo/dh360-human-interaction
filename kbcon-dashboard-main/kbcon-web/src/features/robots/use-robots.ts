@@ -26,6 +26,8 @@ export type RobotRow = {
   config: Record<string, unknown>;
   firmwareVersion: string | null;
   knowledgeBaseId: string | null;
+  deviceId?: string | null;
+  deviceStatus?: "paired" | "unpaired" | null;
 };
 
 export function useRobots(role: Role) {
@@ -68,6 +70,11 @@ export function useRobots(role: Role) {
               knowledgeBaseId:
                 typeof x.knowledgeBaseId === "string"
                   ? x.knowledgeBaseId
+                  : null,
+              deviceId: typeof x.deviceId === "string" ? x.deviceId : null,
+              deviceStatus:
+                typeof x.deviceStatus === "string"
+                  ? (x.deviceStatus as "paired" | "unpaired")
                   : null,
             };
           }),

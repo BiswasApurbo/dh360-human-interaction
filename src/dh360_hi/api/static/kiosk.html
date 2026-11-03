@@ -607,7 +607,16 @@
       const s = STRINGS[lang];
 
       // Update robot meta
-      document.getElementById("badge-robot-id").textContent = currentState.robot_id;
+      const robotBadge = document.getElementById("badge-robot-id");
+      if (currentState.robot_id === "UNPROVISIONED") {
+        robotBadge.textContent = "UNPAIRED (Run 'kbcon-device pair')";
+        robotBadge.style.backgroundColor = "rgba(239, 68, 68, 0.5)";
+        robotBadge.style.borderColor = "rgba(239, 68, 68, 0.8)";
+      } else {
+        robotBadge.textContent = currentState.robot_id;
+        robotBadge.style.backgroundColor = "rgba(14, 165, 233, 0.25)";
+        robotBadge.style.borderColor = "rgba(56, 189, 248, 0.5)";
+      }
       const modeEl = document.getElementById("badge-mode");
       modeEl.textContent = currentState.mode === "healthcare" ? s.modeHealthcare : s.modeEducation;
 

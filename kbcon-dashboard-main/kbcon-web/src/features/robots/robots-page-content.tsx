@@ -3,13 +3,14 @@
 import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { AnimatePresence, motion } from "motion/react";
-import { Check, Copy, KeyRound, Loader2, Plus, RefreshCw } from "lucide-react";
+import { Check, Copy, Cpu, KeyRound, Loader2, Plus, RefreshCw } from "lucide-react";
 import { auth } from "@/lib/firebase";
 import { useAuth } from "@/features/auth/use-auth";
 import { useRole } from "@/features/auth/use-role";
 import { useAdmins } from "@/features/admins/use-admins";
 import { useRobots } from "./use-robots";
 import { CreateRobotForm } from "./create-robot-form";
+import { PairDeviceForm } from "./pair-device-form";
 import { effectiveStatus } from "@/lib/robot-status";
 import { useNow } from "@/hooks/use-now";
 import { RobotConfigForm } from "./robot-config-form";
@@ -31,6 +32,7 @@ export function RobotsPageContent() {
   const { admins } = useAdmins(isSuper);
   const now = useNow();
   const [showForm, setShowForm] = useState(false);
+  const [showPairForm, setShowPairForm] = useState(false);
   const [secret, setSecret] = useState<{ id: string; key: string } | null>(
     null,
   );
@@ -134,24 +136,57 @@ export function RobotsPageContent() {
             {isSuper ? t("subtitle") : t("mySubtitle")}
           </p>
         </div>
-        {isSuper && !showForm && (
-          <motion.button
-            type="button"
-            onClick={() => {
-              setShowForm(true);
-              setMessage(null);
-            }}
-            whileHover={{ scale: 1.04 }}
-            whileTap={{ scale: 0.96 }}
-            className="flex h-10 items-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-sky-600 px-4 text-sm font-semibold text-white shadow-md shadow-sky-300/60"
-          >
-            <Plus className="size-4" />
-            {t("newRobot")}
-          </motion.button>
+        {isSuper && !showForm && !showPairForm && (
+          <div className="flex flex-wrap items-center gap-2">
+            <motion.button
+              type="button"
+              onClick={() => {
+                setShowPairForm(true);
+                setShowForm(false);
+                setMessage(null);
+              }}
+              whileHover={{ scale: 1.04 }}
+              whileTap={{ scale: 0.96 }}
+              className="flex h-10 items-center gap-2 rounded-xl border border-sky-300 bg-white px-3.5 text-sm font-semibold text-sky-800 shadow-sm hover:bg-sky-50"
+            >
+              <Cpu className="size-4 text-sky-600" />
+              Pair Device
+            </motion.button>
+            <motion.button
+              type="button"
+              onClick={() => {
+                setShowForm(true);
+                setShowPairForm(false);
+                setMessage(null);
+              }}
+              whileHover={{ scale: 1.04 }}
+              whileTap={{ scale: 0.96 }}
+              className="flex h-10 items-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-sky-600 px-4 text-sm font-semibold text-white shadow-md shadow-sky-300/60"
+            >
+              <Plus className="size-4" />
+              {t("newRobot")}
+            </motion.button>
+          </div>
         )}
       </div>
 
       <AnimatePresence>
+        {isSuper && showPairForm && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+          >
+            <PairDeviceForm
+              robots={robots}
+              onCancel={() => setShowPairForm(false)}
+              onDone={(msg) => {
+                setShowPairForm(false);
+                setMessage({ ok: true, text: msg });
+              }}
+            />
+          </motion.div>
+        )}
         {isSuper && showForm && (
           <motion.div
             initial={{ opacity: 0, y: -8 }}
@@ -292,11 +327,26 @@ export function RobotsPageContent() {
                 </td>
                 <td className="px-4 py-3 text-sky-800">{t(r.mode)}</td>
                 <td className="px-4 py-3">
-                  <span
-                    className={`rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyle[effectiveStatus(r, now)]}`}
-                  >
-                    {t(effectiveStatus(r, now))}
-                  </span>
+                  <div className="flex flex-col gap-1 items-start">
+                    <span
+                      className={`rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyle[effectiveStatus(r, now)]}`}
+                    >
+                      {t(effectiveStatus(r, now))}
+                    </span>
+                    {r.deviceId ? (
+                      <span
+                        className="inline-flex items-center gap-1 text-[10px] font-mono text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200"
+                        title={`Bound Device: ${r.deviceId}`}
+                      >
+                        <Cpu className="size-2.5 text-emerald-600" />
+                        Paired
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-mono text-slate-500 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200">
+                        Unpaired
+                      </span>
+                    )}
+                  </div>
                 </td>
                 {isSuper && (
                   <td className="px-4 py-3">

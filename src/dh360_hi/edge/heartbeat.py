@@ -102,9 +102,28 @@ class EdgeHeartbeatClient:
 
     async def _send_heartbeat(self, client: httpx.AsyncClient) -> bool:
         """Send a single heartbeat request to the central dashboard."""
+        # Check if local device identity exists and update robot_id dynamically
+        headers: dict[str, str] = {}
+        try:
+            from dh360_hi.device.identity import DeviceIdentity
+
+            dev = DeviceIdentity.load_or_create()
+            if dev.is_paired:
+                headers["X-Device-ID"] = dev.device_id
+                if dev.config.device_token:
+                    headers["Authorization"] = f"Bearer {dev.config.device_token}"
+                if dev.config.paired_robot_id:
+                    self.robot_id = dev.config.paired_robot_id
+        except Exception:
+            pass
+
+        if self.robot_id == "UNPROVISIONED":
+            logger.debug("Device is UNPROVISIONED; awaiting pairing before heartbeating.")
+            return False
+
         url = f"{self.central_url}/api/robot/heartbeat"
         temp = _read_cpu_temperature()
-        payload = {
+        payload: dict[str, Any] = {
             "robotId": self.robot_id,
             "telemetry": {
                 "battery": 100,
@@ -114,9 +133,11 @@ class EdgeHeartbeatClient:
             },
             "firmwareVersion": "1.0.0",
         }
+        if "X-Device-ID" in headers:
+            payload["deviceId"] = headers["X-Device-ID"]
 
         try:
-            resp = await client.post(url, json=payload, timeout=6.0)
+            resp = await client.post(url, json=payload, headers=headers, timeout=6.0)
             if resp.status_code == 200:
                 data = resp.json()
                 if self._was_offline:
@@ -153,6 +174,10 @@ class EdgeHeartbeatClient:
         """Continuous heartbeat and reconnection loop with exponential backoff."""
         async with httpx.AsyncClient(timeout=8.0) as client:
             while self._running:
+                if self.robot_id == "UNPROVISIONED":
+                    await asyncio.sleep(self.interval_seconds)
+                    continue
+
                 success = await self._send_heartbeat(client)
                 if not self._running:
                     break

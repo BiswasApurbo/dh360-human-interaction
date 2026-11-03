@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { motion } from "motion/react";
 import { doc, onSnapshot } from "firebase/firestore";
-import { ArrowLeft, CheckCircle2, Loader2, RefreshCw, ShieldAlert } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Cpu, Loader2, RefreshCw, ShieldAlert, Unlink } from "lucide-react";
 import { auth, db } from "@/lib/firebase";
 import { Link } from "@/i18n/navigation";
 import { useAuth } from "@/features/auth/use-auth";
@@ -13,6 +13,7 @@ import { useNow } from "@/hooks/use-now";
 import { effectiveStatus } from "@/lib/robot-status";
 import { useRobots } from "./use-robots";
 import { RobotConfigForm } from "./robot-config-form";
+import { PairDeviceForm } from "./pair-device-form";
 
 const statusStyle = {
   online: "bg-emerald-100 text-emerald-700",
@@ -61,10 +62,41 @@ export function RobotDetail({ robotId }: { robotId: string }) {
     ok: boolean;
     text: string;
   } | null>(null);
+  const [showPairForm, setShowPairForm] = useState(false);
+  const [revoking, setRevoking] = useState(false);
 
   const robot = robots.find((r) => r.id === robotId) ?? null;
   const isSuper = role === "superAdmin";
   const canReconnect = isSuper || (user && robot?.assignedAdminId === user.uid);
+
+  async function handleRevokeDevice() {
+    if (!robot?.deviceId) return;
+    if (!confirm(`Are you sure you want to unbind device ${robot.deviceId} from robot ${robotId}?`)) {
+      return;
+    }
+    setRevoking(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch("/api/admin/devices/revoke", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ robotId, deviceId: robot.deviceId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        setReconnectResult({ ok: true, text: "Device unlinked successfully." });
+      } else {
+        setReconnectResult({ ok: false, text: data.message || "Failed to unlink device." });
+      }
+    } catch (err: unknown) {
+      setReconnectResult({ ok: false, text: err instanceof Error ? err.message : "Error unlinking device." });
+    } finally {
+      setRevoking(false);
+    }
+  }
 
   async function handleReconnect() {
     setReconnecting(true);
@@ -230,6 +262,18 @@ export function RobotDetail({ robotId }: { robotId: string }) {
         </p>
       )}
 
+      {showPairForm && (
+        <PairDeviceForm
+          robots={robots}
+          preselectedRobotId={robotId}
+          onCancel={() => setShowPairForm(false)}
+          onDone={(msg) => {
+            setShowPairForm(false);
+            setReconnectResult({ ok: true, text: msg });
+          }}
+        />
+      )}
+
       <motion.section
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -248,7 +292,42 @@ export function RobotDetail({ robotId }: { robotId: string }) {
           <Field label={t("knowledgeBase")}>
             {kbId ? (kbName ?? "…") : t("notLinked")}
           </Field>
+          <Field label="Hardware Device">
+            {robot.deviceId ? (
+              <span className="inline-flex items-center gap-1 font-mono text-xs text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                <Cpu className="size-3 text-emerald-600" />
+                {robot.deviceId}
+              </span>
+            ) : (
+              <span className="text-xs text-slate-500 font-normal">None (Unpaired)</span>
+            )}
+          </Field>
         </div>
+
+        {isSuper && (
+          <div className="mt-4 pt-3 border-t border-sky-200/70 flex flex-wrap items-center gap-2">
+            {robot.deviceId ? (
+              <button
+                type="button"
+                disabled={revoking}
+                onClick={handleRevokeDevice}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50"
+              >
+                {revoking ? <Loader2 className="size-3 animate-spin" /> : <Unlink className="size-3" />}
+                Revoke Device Binding
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowPairForm(true)}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-sky-300 bg-white px-3 text-xs font-semibold text-sky-800 hover:bg-sky-50 shadow-sm"
+              >
+                <Cpu className="size-3 text-sky-600" />
+                Pair Physical Device
+              </button>
+            )}
+          </div>
+        )}
       </motion.section>
 
       <motion.section

@@ -18,6 +18,11 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Standard locations for local robot identification and offline configuration cache
+DEVICE_CONFIG_CANDIDATES = [
+    Path("/etc/kbcon/device/device_config.json"),
+    Path.home() / ".config" / "dh360" / "device" / "device_config.json",
+]
+
 ROBOT_ID_FILE_CANDIDATES = [
     Path("/home/eliva/.config/dh360/robot.json"),
     Path.home() / ".config" / "dh360" / "robot.json",
@@ -120,13 +125,32 @@ class RobotRegistry:
         3. Local configuration file (~/.config/dh360/robot.json)
         4. Fallback default 'KB001'
         """
+        # 1. Device identity provisioning configuration (/etc/kbcon/device/device_config.json)
+        for path in DEVICE_CONFIG_CANDIDATES:
+            if path.exists():
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    if data.get("status") == "paired":
+                        cand_id = (
+                            data.get("paired_robot_id")
+                            or data.get("robot_id")
+                            or data.get("robotId")
+                        )
+                        if cand_id and str(cand_id).strip():
+                            return str(cand_id).strip()
+                except Exception as exc:
+                    logger.warning("Failed to parse device config at %s: %s", path, exc)
+
+        # 2. Explicit default / override
         if self._default_robot_id and self._default_robot_id.strip():
             return self._default_robot_id.strip()
 
+        # 3. Environment variable KBCON_ROBOT_ID or ROBOT_ID
         env_id = os.getenv("KBCON_ROBOT_ID") or os.getenv("ROBOT_ID")
         if env_id and env_id.strip():
             return env_id.strip()
 
+        # 4. Local configuration file (~/.config/dh360/robot.json)
         for path in ROBOT_ID_FILE_CANDIDATES:
             if path.exists():
                 try:
@@ -137,6 +161,7 @@ class RobotRegistry:
                 except Exception as exc:
                     logger.warning("Failed to parse local robot ID file at %s: %s", path, exc)
 
+        # 5. Offline config cache
         for path in OFFLINE_CONFIG_CACHE_CANDIDATES:
             if path.exists():
                 try:
@@ -147,7 +172,8 @@ class RobotRegistry:
                 except Exception as exc:
                     logger.warning("Failed to parse offline config cache at %s: %s", path, exc)
 
-        return "Kb-001"
+        # 6. Unprovisioned fallback: unconfigured physical devices must not impersonate other robots
+        return "UNPROVISIONED"
 
     def _get_cache_path(self) -> Path:
         """Return the preferred path for offline configuration cache."""
@@ -184,6 +210,19 @@ class RobotRegistry:
     def resolve_authoritative_config(self, robot_id: str | None = None) -> RobotRecord:
         """Resolve authoritative robot configuration from Firestore or offline fallback."""
         target_id = robot_id or self.resolve_local_robot_id()
+
+        if target_id == "UNPROVISIONED":
+            logger.info("Device is UNPROVISIONED; returning unprovisioned status record.")
+            record = RobotRecord(
+                robot_id="UNPROVISIONED",
+                name="Unprovisioned Robot",
+                language="bn",
+                mode="education",
+                status="unprovisioned",
+                last_synced=datetime.now(UTC).isoformat(),
+            )
+            self._active_robot = record
+            return record
 
         # 1. Attempt Firestore live lookup if credentials / client available
         db = self._firestore_client

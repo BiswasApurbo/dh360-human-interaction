@@ -9,6 +9,7 @@ from collections.abc import Sequence
 
 from dh360_hi.cli.config_cmd import handle_config
 from dh360_hi.cli.config_cmd import register_subparser as register_config
+from dh360_hi.cli.device import register_subparser as register_device
 from dh360_hi.cli.enroll import handle_enroll
 from dh360_hi.cli.enroll import register_subparser as register_enroll
 from dh360_hi.cli.formatting import print_error
@@ -47,6 +48,7 @@ def create_parser() -> argparse.ArgumentParser:
     register_enroll(subparsers)
     register_session(subparsers)
     register_config(subparsers)
+    register_device(subparsers)
 
     return parser
 
@@ -71,6 +73,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "enroll": handle_enroll,
         "session": handle_session,
         "config": handle_config,
+        "device": lambda a: a.func(a),
     }
 
     handler = dispatch_map.get(args.command)

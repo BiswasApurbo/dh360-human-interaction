@@ -28,10 +28,12 @@ dependencies = [
     "opencv-python>=4.8.0",
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",
+    "cryptography>=41.0.0",
 ]
 
 [project.scripts]
 dh360-hi = "dh360_hi.cli.main:main"
+kbcon-device = "dh360_hi.cli.device:main"
 
 [project.optional-dependencies]
 dev = [
@@ -90,3 +92,12 @@ minversion = "8.0"
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-v --strict-markers"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "mypy>=2.4.0",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.10",
+]
