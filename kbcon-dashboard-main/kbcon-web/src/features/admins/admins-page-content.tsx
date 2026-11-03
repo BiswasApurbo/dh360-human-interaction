@@ -10,6 +10,7 @@ import {
   Loader2,
   LogOut,
   Plus,
+  RotateCw,
   Shield,
   ShieldAlert,
   ShieldCheck,
@@ -286,8 +287,22 @@ export function AdminsPageContent() {
             )}
             {!loading && error && (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-red-600">
-                  {t("loadFailed")}
+                <td colSpan={7} className="px-4 py-8 text-center">
+                  <div className="mx-auto flex max-w-md flex-col items-center justify-center gap-2">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-red-600">
+                      <AlertCircle className="size-5 shrink-0" />
+                      <span>{t("loadFailed")}</span>
+                    </div>
+                    <p className="text-xs text-red-500 font-mono">{error}</p>
+                    <button
+                      type="button"
+                      onClick={() => void refetch()}
+                      className="mt-2 inline-flex items-center gap-1.5 rounded-xl bg-sky-500 px-3.5 py-1.5 text-xs font-semibold text-white shadow hover:bg-sky-600 transition"
+                    >
+                      <RotateCw className="size-3.5" />
+                      <span>Retry</span>
+                    </button>
+                  </div>
                 </td>
               </tr>
             )}

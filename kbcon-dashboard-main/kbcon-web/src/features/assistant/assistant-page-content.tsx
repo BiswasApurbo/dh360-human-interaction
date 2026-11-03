@@ -68,17 +68,10 @@ export function AssistantPageContent() {
   const [turnError, setTurnError] = useState<string | null>(null);
 
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
-  const browserRecognitionRef = useRef<{
-    start: () => void;
-    stop: () => void;
-    lang: string;
-    interimResults: boolean;
-    maxAlternatives: number;
-    onstart: (() => void) | null;
-    onend: (() => void) | null;
-    onerror: (() => void) | null;
-    onresult: ((event: { results: Array<Array<{ transcript: string }>> }) => void) | null;
-  } | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const [isTranscribingBrowser, setIsTranscribingBrowser] = useState(false);
 
   // Privacy isolation callback: instantly clear personal messages when face or authorization is lost
   const handleAuthorizationLost = useCallback(() => {
@@ -146,7 +139,7 @@ export function AssistantPageContent() {
     [audioEnabled]
   );
 
-  // Stop active speech playback / interrupt robot backend
+  // Stop active speech playback / interrupt robot backend / cancel browser mic
   const interruptAudio = useCallback(async () => {
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       window.speechSynthesis.cancel();
@@ -154,6 +147,16 @@ export function AssistantPageContent() {
     setIsSpeaking(false);
     setIsListeningRobot(false);
     setIsListeningBrowser(false);
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch {}
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
 
     try {
       const headers = await getHeaders();
@@ -248,9 +251,16 @@ export function AssistantPageContent() {
     }
   };
 
-  // Trigger robot microphone listening via Soniox STT pipeline
+  // Trigger robot microphone listening via physical audio hardware & STT pipeline
   const handleRobotVoiceTurn = async () => {
-    if (isProcessing || isListeningRobot) return;
+    // If currently listening, clicking again immediately interrupts / cancels listening
+    if (isListeningRobot) {
+      await interruptAudio();
+      setIsListeningRobot(false);
+      return;
+    }
+
+    if (isProcessing || isListeningBrowser || isTranscribingBrowser) return;
 
     setTurnError(null);
     setIsListeningRobot(true);
@@ -278,7 +288,7 @@ export function AssistantPageContent() {
       const data: DialogueVoiceTurnResponse = await res.json();
       const isPrivilegedTurn = Boolean(data.metadata?.is_privileged);
 
-      if (data.user_text) {
+      if (data.user_text && data.user_text.trim()) {
         setMessages((prev) => [
           ...prev,
           {
@@ -301,6 +311,29 @@ export function AssistantPageContent() {
           },
         ]);
         playLocalSpeech(data.text, language);
+      } else {
+        // No utterance detected near the robot microphone
+        const promptNotice =
+          data.text ||
+          (language === "bn"
+            ? "রোবট মাইক্রোফোনে কোনো কথা শনাক্ত করা যায়নি। দয়া করে কাছে এসে আবার বলুন।"
+            : "No speech detected near the robot microphone. Please speak closer and try again.");
+        setTurnError(promptNotice);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: nextMessageId("model-prompt"),
+            role: "model",
+            text: promptNotice,
+            timestamp: data.timestamp || currentTimestamp(),
+            language,
+            isPersonal: false,
+            isVoice: true,
+          },
+        ]);
+        if (data.text) {
+          playLocalSpeech(data.text, language);
+        }
       }
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : t("errorOccurred");
@@ -310,48 +343,157 @@ export function AssistantPageContent() {
     }
   };
 
-  // Browser speech recognition (for remote dashboard operators)
-  const handleBrowserVoiceTurn = () => {
-    if (typeof window === "undefined") return;
-    const win = window as unknown as {
-      SpeechRecognition?: new () => NonNullable<typeof browserRecognitionRef.current>;
-      webkitSpeechRecognition?: new () => NonNullable<typeof browserRecognitionRef.current>;
-    };
-    const SpeechRecognition = win.SpeechRecognition || win.webkitSpeechRecognition;
-
-    if (!SpeechRecognition) {
-      alert("Browser Speech Recognition is not supported on this browser. Use Robot Mic.");
+  // Browser microphone audio capture and backend transcription
+  const handleBrowserVoiceTurn = async () => {
+    // If currently listening, clicking again stops recording and triggers transcription
+    if (isListeningBrowser) {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        try {
+          mediaRecorderRef.current.stop();
+        } catch {}
+      }
       return;
     }
 
-    if (isListeningBrowser && browserRecognitionRef.current) {
-      browserRecognitionRef.current.stop();
-      setIsListeningBrowser(false);
+    if (isProcessing || isListeningRobot || isTranscribingBrowser) return;
+
+    if (typeof window === "undefined" || !navigator?.mediaDevices?.getUserMedia) {
+      setTurnError(
+        language === "bn"
+          ? "এই ব্রাউজারে মাইক্রোফোন ব্যবহারের সুবিধা পাওয়া যাচ্ছে না।"
+          : "Microphone access is not supported by this browser or platform."
+      );
       return;
     }
+
+    setTurnError(null);
+    audioChunksRef.current = [];
 
     try {
-      const recognition = new SpeechRecognition();
-      recognition.lang = language === "bn" ? "bn-BD" : "en-US";
-      recognition.interimResults = false;
-      recognition.maxAlternatives = 1;
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      mediaStreamRef.current = stream;
 
-      recognition.onstart = () => setIsListeningBrowser(true);
-      recognition.onend = () => setIsListeningBrowser(false);
-      recognition.onerror = () => setIsListeningBrowser(false);
+      let mimeType = "audio/webm";
+      if (typeof MediaRecorder !== "undefined") {
+        if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
+          mimeType = "audio/webm;codecs=opus";
+        } else if (MediaRecorder.isTypeSupported("audio/webm")) {
+          mimeType = "audio/webm";
+        } else if (MediaRecorder.isTypeSupported("audio/mp4")) {
+          mimeType = "audio/mp4";
+        } else if (MediaRecorder.isTypeSupported("audio/ogg")) {
+          mimeType = "audio/ogg";
+        }
+      }
 
-      recognition.onresult = (event: { results: Array<Array<{ transcript: string }>> }) => {
-        const transcript = event.results[0]?.[0]?.transcript;
-        if (transcript) {
-          void handleSendText(transcript);
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event: BlobEvent) => {
+        if (event.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
         }
       };
 
-      browserRecognitionRef.current = recognition;
-      recognition.start();
-    } catch (err) {
-      console.warn("Speech recognition error:", err);
+      recorder.onstop = async () => {
+        // Stop all audio hardware tracks
+        if (mediaStreamRef.current) {
+          mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+          mediaStreamRef.current = null;
+        }
+        setIsListeningBrowser(false);
+
+        const chunks = audioChunksRef.current;
+        if (chunks.length === 0) return;
+
+        const recordedBlob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+        if (recordedBlob.size < 200) {
+          setTurnError(
+            language === "bn"
+              ? "কোনো স্পষ্ট কথা শোনা যায়নি। দয়া করে আবার বলুন।"
+              : "No speech detected in the recording. Please speak and try again."
+          );
+          return;
+        }
+
+        setIsTranscribingBrowser(true);
+        try {
+          const reader = new FileReader();
+          const base64Promise = new Promise<string>((resolve, reject) => {
+            reader.onloadend = () => {
+              const res = reader.result as string;
+              const commaIdx = res.indexOf(",");
+              resolve(commaIdx >= 0 ? res.substring(commaIdx + 1) : res);
+            };
+            reader.onerror = reject;
+          });
+          reader.readAsDataURL(recordedBlob);
+          const base64Audio = await base64Promise;
+
+          const baseHeaders = await getHeaders();
+          const headers = {
+            ...baseHeaders,
+            ...(activeRobot?.id ? { "X-Robot-ID": activeRobot.id } : {}),
+            "Content-Type": "application/json",
+          };
+
+          const transcribeRes = await fetch("/api/dh360/dialogue/transcribe", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              audio_base64: base64Audio,
+              mime_type: recordedBlob.type || "audio/webm",
+              language,
+            }),
+          });
+
+          if (!transcribeRes.ok) {
+            const errData = await transcribeRes.json().catch(() => ({}));
+            throw new Error(errData.detail || errData.message || `HTTP ${transcribeRes.status}`);
+          }
+
+          const transcribeData: { text: string; language: string } = await transcribeRes.json();
+          const recognizedText = (transcribeData.text || "").trim();
+
+          if (!recognizedText) {
+            setTurnError(
+              language === "bn"
+                ? "কোনো কথা শনাক্ত করা যায়নি। দয়া করে মাইক্রোফোনের কাছে এসে আবার বলুন।"
+                : "No intelligible speech detected. Please speak closer to your microphone."
+            );
+          } else {
+            // Automatically submit recognized query directly into the active conversation!
+            void handleSendText(recognizedText);
+          }
+        } catch (transcribeErr: unknown) {
+          const msg =
+            transcribeErr instanceof Error
+              ? transcribeErr.message
+              : "Audio transcription failed.";
+          setTurnError(msg);
+        } finally {
+          setIsTranscribingBrowser(false);
+        }
+      };
+
+      recorder.start(200);
+      setIsListeningBrowser(true);
+    } catch (err: unknown) {
       setIsListeningBrowser(false);
+      const isDenied =
+        err instanceof DOMException &&
+        (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+      setTurnError(
+        isDenied
+          ? "Microphone access was denied. Please allow microphone access in your browser settings and try again."
+          : `Failed to open microphone: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   };
 
@@ -704,36 +846,54 @@ export function AssistantPageContent() {
             }}
             className="flex items-center gap-2"
           >
-            {/* Robot Physical Microphone Button (Soniox) */}
+            {/* Robot Physical Microphone Button */}
             <button
               type="button"
               onClick={handleRobotVoiceTurn}
-              disabled={isProcessing || isListeningRobot}
+              disabled={isProcessing || isListeningBrowser || isTranscribingBrowser}
               className={`flex items-center gap-1.5 rounded-2xl px-3.5 py-3 text-xs font-bold shadow-sm transition-all disabled:opacity-50 ${
                 isListeningRobot
                   ? "bg-red-600 text-white animate-pulse"
                   : "bg-sky-50 text-sky-800 ring-1 ring-sky-300 hover:bg-sky-100"
               }`}
-              title={t("robotMicTooltip")}
+              title={isListeningRobot ? "Click to cancel/interrupt listening" : t("robotMicTooltip")}
             >
               <Mic className="size-4" />
-              <span className="hidden md:inline">{t("robotMic")}</span>
+              <span className="hidden md:inline">
+                {isListeningRobot ? "Listening..." : t("robotMic")}
+              </span>
             </button>
 
             {/* Browser Microphone Button */}
             <button
               type="button"
               onClick={handleBrowserVoiceTurn}
-              disabled={isProcessing || isListeningRobot}
+              disabled={isProcessing || isListeningRobot || isTranscribingBrowser}
               className={`flex items-center gap-1.5 rounded-2xl px-3.5 py-3 text-xs font-bold shadow-sm transition-all disabled:opacity-50 ${
                 isListeningBrowser
                   ? "bg-purple-600 text-white animate-pulse"
                   : "bg-purple-50 text-purple-800 ring-1 ring-purple-300 hover:bg-purple-100"
               }`}
-              title={t("browserMicTooltip")}
+              title={
+                isListeningBrowser
+                  ? "Click to finish speaking"
+                  : isTranscribingBrowser
+                  ? "Transcribing voice..."
+                  : t("browserMicTooltip")
+              }
             >
-              <Radio className="size-4" />
-              <span className="hidden md:inline">{t("browserMic")}</span>
+              {isTranscribingBrowser ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Radio className="size-4" />
+              )}
+              <span className="hidden md:inline">
+                {isListeningBrowser
+                  ? "Stop Recording"
+                  : isTranscribingBrowser
+                  ? "Transcribing..."
+                  : t("browserMic")}
+              </span>
             </button>
 
             {/* Query Input */}
@@ -742,7 +902,7 @@ export function AssistantPageContent() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder={t("inputPlaceholder")}
-              disabled={isProcessing || isListeningRobot}
+              disabled={isProcessing || isListeningRobot || isTranscribingBrowser}
               className="flex-1 rounded-2xl border border-sky-200 bg-sky-50/50 px-4 py-3 text-sm text-sky-950 placeholder-sky-400 shadow-inner outline-none transition focus:border-sky-400 focus:bg-white focus:ring-2 focus:ring-sky-300 disabled:opacity-60"
             />
 

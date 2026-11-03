@@ -15,7 +15,7 @@ import { checkPermission } from "./permissions.ts";
 
 export { resetConfigCacheForTesting };
 
-const MAX_BODY_BYTES = 1024 * 1024; // 1MB limit for JSON bodies
+const MAX_BODY_BYTES = 4 * 1024 * 1024; // 4MB limit for JSON bodies (supports audio uploads)
 
 /**
  * Handle incoming Next.js API requests to the DH360 BFF.

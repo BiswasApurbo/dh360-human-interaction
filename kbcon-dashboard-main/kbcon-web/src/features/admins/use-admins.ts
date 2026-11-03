@@ -28,12 +28,12 @@ export function useAdmins(enabled: boolean) {
   const { user } = useAuth();
   const [admins, setAdmins] = useState<AdminRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchAdmins = useCallback(async () => {
     if (!enabled || !user) return;
     setLoading(true);
-    setError(false);
+    setError(null);
     try {
       const token = await user.getIdToken();
       const res = await fetch("/api/admin/users", {
@@ -42,12 +42,13 @@ export function useAdmins(enabled: boolean) {
         },
       });
       if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.message || `Failed to load administrators (HTTP ${res.status})`);
       }
       const data = await res.json();
       setAdmins(data.users || []);
-    } catch {
-      setError(true);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to load administrators");
     } finally {
       setLoading(false);
     }

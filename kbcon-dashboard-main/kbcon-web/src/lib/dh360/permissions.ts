@@ -222,6 +222,13 @@ export const ALLOWED_DH360_RULES: RouteRule[] = [
     scope: "dialogue:interact",
   },
   {
+    name: "dialogue_transcribe",
+    pattern: /^\/dialogue\/transcribe\/?$/,
+    allowedMethods: ["POST"],
+    minRole: "admin",
+    scope: "dialogue:interact",
+  },
+  {
     name: "dialogue_interrupt",
     pattern: /^\/dialogue\/interrupt\/?$/,
     allowedMethods: ["POST"],

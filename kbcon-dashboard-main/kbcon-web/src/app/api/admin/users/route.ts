@@ -64,8 +64,22 @@ export async function GET(request: Request) {
     const adminAuth = await getAdminAuth();
     const adminDb = await getAdminFirestore();
 
-    // 1. Fetch users from Firebase Authentication
-    const listUsersResult = await adminAuth.listUsers(100);
+    // 1. Fetch users from Firebase Authentication (resilient try/catch)
+    let authUsers: Array<{
+      uid: string;
+      email?: string;
+      displayName?: string;
+      disabled?: boolean;
+      customClaims?: Record<string, unknown>;
+      metadata?: { creationTime?: string; lastSignInTime?: string };
+    }> = [];
+
+    try {
+      const listUsersResult = await adminAuth.listUsers(100);
+      authUsers = listUsersResult.users as typeof authUsers;
+    } catch (authErr) {
+      console.warn("adminAuth.listUsers failed; proceeding with Firestore users fallback:", authErr);
+    }
 
     // 2. Fetch users metadata from Firestore
     const firestoreDocs = await adminDb.collection("users").get();
@@ -89,11 +103,33 @@ export async function GET(request: Request) {
       }
     });
 
-    const accounts = listUsersResult.users.map((u) => {
+    const seenUids = new Set<string>();
+    const accounts: Array<{
+      uid: string;
+      name: string;
+      email: string;
+      role: "superAdmin" | "admin";
+      active: boolean;
+      mustChangePassword: boolean;
+      permissions: Record<string, boolean>;
+      assignedRobots: string[];
+      createdAt?: string;
+      lastSignInTime?: string;
+    }> = [];
+
+    // Merge Auth users first
+    for (const u of authUsers) {
+      seenUids.add(u.uid);
       const claims = (u.customClaims as Record<string, unknown>) || {};
       const fsData = firestoreMap.get(u.uid) || {};
 
-      const role = claims.role || fsData.role || (u.email === "superadmin@gmail.com" ? "superAdmin" : "admin");
+      const email = u.email || (fsData.email as string) || "";
+      const isSuperEmail =
+        email.toLowerCase() === "superadmin@gmail.com" ||
+        email.toLowerCase() === "apurbobiswas32@gmail.com";
+      const role = (claims.role || fsData.role || (isSuperEmail ? "superAdmin" : "admin")) as
+        | "superAdmin"
+        | "admin";
       const active = !u.disabled && fsData.active !== false;
       const permissions =
         role === "superAdmin"
@@ -114,19 +150,63 @@ export async function GET(request: Request) {
       const fromRobots = robotAssignmentsMap.get(u.uid) || [];
       const assignedRobots = Array.from(new Set([...docRobots, ...fromRobots]));
 
-      return {
+      accounts.push({
         uid: u.uid,
-        name: u.displayName || (fsData.name as string) || u.email?.split("@")[0] || "User",
-        email: u.email || "",
-        role: role as "superAdmin" | "admin",
+        name: u.displayName || (fsData.name as string) || email.split("@")[0] || "User",
+        email,
+        role,
         active,
         mustChangePassword: Boolean(claims.mustChangePassword || fsData.mustChangePassword),
         permissions,
         assignedRobots,
-        createdAt: u.metadata.creationTime,
-        lastSignInTime: u.metadata.lastSignInTime,
-      };
-    });
+        createdAt: u.metadata?.creationTime,
+        lastSignInTime: u.metadata?.lastSignInTime,
+      });
+    }
+
+    // Merge any Firestore user records not present in authUsers
+    for (const [uid, fsData] of firestoreMap.entries()) {
+      if (seenUids.has(uid)) continue;
+      seenUids.add(uid);
+
+      const email = (fsData.email as string) || "";
+      const isSuperEmail =
+        email.toLowerCase() === "superadmin@gmail.com" ||
+        email.toLowerCase() === "apurbobiswas32@gmail.com";
+      const role = ((fsData.role as string) || (isSuperEmail ? "superAdmin" : "admin")) as
+        | "superAdmin"
+        | "admin";
+      const active = fsData.active !== false;
+      const permissions =
+        role === "superAdmin"
+          ? {
+              dashboard: true,
+              robots: true,
+              assistant: true,
+              people: true,
+              knowledgeBase: true,
+              telemetry: true,
+              settings: true,
+            }
+          : (fsData.permissions as Record<string, boolean>) || DEFAULT_ADMIN_PERMS;
+
+      const docRobots = Array.isArray(fsData.assignedRobots) ? (fsData.assignedRobots as string[]) : [];
+      const fromRobots = robotAssignmentsMap.get(uid) || [];
+      const assignedRobots = Array.from(new Set([...docRobots, ...fromRobots]));
+
+      accounts.push({
+        uid,
+        name: (fsData.name as string) || email.split("@")[0] || "User",
+        email,
+        role,
+        active,
+        mustChangePassword: Boolean(fsData.mustChangePassword),
+        permissions,
+        assignedRobots,
+        createdAt: typeof fsData.createdAt === "string" ? fsData.createdAt : undefined,
+        lastSignInTime: typeof fsData.lastSignInTime === "string" ? fsData.lastSignInTime : undefined,
+      });
+    }
 
     return NextResponse.json({ users: accounts });
   } catch (err: unknown) {

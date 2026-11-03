@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import base64
+import logging
+import os
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from dh360_hi.api.dependencies import get_dialogue_coordinator
@@ -14,6 +17,8 @@ from dh360_hi.api.security import (
     require_scope,
 )
 from dh360_hi.contracts.dialogue import SupportedLanguage
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/dialogue", tags=["dialogue"])
 _dialogue_interact = Depends(require_scope(OperatorScope.DIALOGUE_INTERACT))
@@ -96,6 +101,89 @@ class DialogueVoiceTurnResponse(BaseModel):
         default_factory=dict,
         description="Sanitized non-sensitive turn metadata.",
     )
+
+
+class DialogueTranscribeRequest(BaseModel):
+    """Validated request body for transcribing client-recorded audio (e.g. from browser mic)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    audio_base64: StrictStr = Field(
+        ...,
+        min_length=1,
+        description="Base64-encoded audio data.",
+    )
+    mime_type: StrictStr = Field(
+        default="audio/webm",
+        description="MIME type of the audio stream.",
+    )
+    language: SupportedLanguage = Field(
+        default="bn",
+        description="Target dialogue language hint ('bn' or 'en').",
+    )
+
+
+class DialogueTranscribeResponse(BaseModel):
+    """Sanitized response representation of transcribed audio."""
+
+    text: str = Field(description="Transcribed plain text utterance.")
+    language: str = Field(description="Language of transcription.")
+
+
+def transcribe_audio_payload(
+    audio_bytes: bytes,
+    mime_type: str,
+    language_hint: str = "bn",
+) -> str:
+    """Transcribe audio bytes using Gemini multimodal STT or fallback, returning plain text."""
+    gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not gemini_key:
+        env_paths = [
+            "/home/eliva/.config/dh360/backend.env",
+            os.path.expanduser("~/.config/dh360/backend.env"),
+        ]
+        for p in env_paths:
+            if os.path.exists(p):
+                try:
+                    with open(p) as f:
+                        for line in f:
+                            if line.startswith("GEMINI_API_KEY="):
+                                gemini_key = line.strip().split("=", 1)[1].strip("\"'")
+                                break
+                except Exception:
+                    pass
+            if gemini_key:
+                break
+
+    if gemini_key:
+        try:
+            from google import genai
+            from google.genai import types
+
+            client = genai.Client(api_key=gemini_key)
+            lang_directive = "Bangla" if language_hint == "bn" else "English"
+            prompt = (
+                f"Transcribe the spoken audio verbatim in {lang_directive} or English. "
+                "Return ONLY the plain transcribed words. "
+                "Do NOT include explanations, timestamps, brackets, quotes, punctuation commentary, or markdown formatting. "
+                "If the audio contains silence, background noise, or no intelligible words, return an empty string."
+            )
+            clean_mime = mime_type.split(";")[0].strip() or "audio/webm"
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[
+                    types.Part.from_bytes(data=audio_bytes, mime_type=clean_mime),
+                    prompt,
+                ],
+            )
+            text = (response.text or "").strip()
+            if text.startswith('"') and text.endswith('"'):
+                text = text[1:-1].strip()
+            return text
+        except Exception as exc:
+            logger.warning("Gemini audio transcription failed: %s", exc)
+
+    return ""
 
 
 @router.post(
@@ -209,3 +297,44 @@ async def interrupt_dialogue(
     coordinator = get_dialogue_coordinator(request)
     coordinator.interrupt()
     return {"status": "interrupted"}
+
+
+@router.post(
+    "/transcribe",
+    response_model=DialogueTranscribeResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def handle_dialogue_transcribe(
+    payload: DialogueTranscribeRequest,
+    request: Request,
+    _operator: OperatorPrincipal = _dialogue_interact,
+) -> DialogueTranscribeResponse:
+    """Transcribe uploaded client audio (e.g. from browser mic) using backend STT.
+
+    Authenticates via bearer token requiring the `dialogue:interact` operator scope.
+    """
+    try:
+        audio_bytes = base64.b64decode(payload.audio_base64)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid base64 audio data: {exc}",
+        ) from exc
+
+    if len(audio_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Audio payload exceeds maximum 10MB limit.",
+        )
+
+    clean_mime = payload.mime_type.split(";")[0].strip() or "audio/webm"
+    transcription = transcribe_audio_payload(
+        audio_bytes=audio_bytes,
+        mime_type=clean_mime,
+        language_hint=payload.language,
+    )
+
+    return DialogueTranscribeResponse(
+        text=transcription,
+        language=payload.language,
+    )

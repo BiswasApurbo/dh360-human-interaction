@@ -391,3 +391,55 @@ def test_llm_provider_error_mapped_to_502(
         )
         assert resp.status_code == 502
         assert resp.json()["code"] == "LLM_PROVIDER_ERROR"
+
+
+def test_dialogue_transcribe_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /dialogue/transcribe decodes audio and returns transcription."""
+    import base64
+
+    token = _configure_operator(monkeypatch, "dialogue:interact")
+    coordinator = FakeDialogueCoordinator()
+    app = create_app(dialogue_coordinator=coordinator)  # type: ignore[arg-type]
+
+    fake_audio = base64.b64encode(b"RIFFdummywavdata").decode("ascii")
+
+    with mock.patch(
+        "dh360_hi.api.routers.dialogue.transcribe_audio_payload",
+        return_value="বাংলাদেশ ইনোভেশন ফেয়ার",
+    ):
+        with TestClient(app) as client:
+            resp = client.post(
+                "/dialogue/transcribe",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "audio_base64": fake_audio,
+                    "mime_type": "audio/webm",
+                    "language": "bn",
+                },
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["text"] == "বাংলাদেশ ইনোভেশন ফেয়ার"
+            assert data["language"] == "bn"
+
+
+def test_dialogue_transcribe_unauthenticated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /dialogue/transcribe requires authentication."""
+    _configure_operator(monkeypatch, "dialogue:interact")
+    coordinator = FakeDialogueCoordinator()
+    app = create_app(dialogue_coordinator=coordinator)  # type: ignore[arg-type]
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/dialogue/transcribe",
+            json={
+                "audio_base64": "ZHVtbXk=",
+                "mime_type": "audio/webm",
+                "language": "bn",
+            },
+        )
+        assert resp.status_code in (401, 403)
