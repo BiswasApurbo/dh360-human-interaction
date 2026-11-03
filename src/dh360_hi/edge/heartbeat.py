@@ -43,12 +43,20 @@ class EdgeHeartbeatClient:
         max_backoff_seconds: float = 60.0,
         on_config_synced: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
-        self.robot_id = (
-            robot_id
-            or os.environ.get("ROBOT_ID")
-            or os.environ.get("KBCON_ROBOT_ID")
-            or "R001"
-        )
+        if not robot_id:
+            try:
+                from dh360_hi.backend.robot_registry import RobotRegistry
+                resolved = RobotRegistry.get_instance().resolve_local_robot_id()
+            except Exception:
+                resolved = (
+                    os.environ.get("ROBOT_ID")
+                    or os.environ.get("KBCON_ROBOT_ID")
+                    or "KB001"
+                )
+        else:
+            resolved = robot_id
+
+        self.robot_id = resolved
         self.central_url = (
             central_url
             or os.environ.get("KBCON_CENTRAL_URL")
