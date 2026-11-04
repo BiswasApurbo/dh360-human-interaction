@@ -26,6 +26,8 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import shutil
+import subprocess
 import threading
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -1254,7 +1256,7 @@ class ElivaGoogleTTSAdapter(TTSProvider):
         self,
         credentials_file: str | None = None,
         credentials_json: str | None = None,
-        voice_bn: str = "bn-BD-Standard-A",
+        voice_bn: str = "bn-IN-Standard-A",
         voice_en: str = "en-US-Chirp3-HD-Charon",
         speak_fn: Callable[..., None] | None = None,
         interrupt_fn: Callable[[], None] | None = None,
@@ -1278,6 +1280,7 @@ class ElivaGoogleTTSAdapter(TTSProvider):
         self._on_playback_stop = on_playback_stop
         self._is_playing: bool = False
         self._interrupted: bool = False
+        self._current_player_proc: subprocess.Popen[bytes] | None = None
         self._lock = threading.Lock()
 
     def _notify_playback_start(self) -> None:
@@ -1305,6 +1308,9 @@ class ElivaGoogleTTSAdapter(TTSProvider):
                 return False
             if self._is_playing_fn is not None:
                 return self._is_playing_fn()
+            if self._current_player_proc is not None:
+                if self._current_player_proc.poll() is None:
+                    return True
             if self._is_playing:
                 return True
         try:
@@ -1320,7 +1326,14 @@ class ElivaGoogleTTSAdapter(TTSProvider):
         with self._lock:
             self._interrupted = True
             self._is_playing = False
+            proc = self._current_player_proc
+            self._current_player_proc = None
         logger.info("ElivaGoogleTTSAdapter: interrupt signal recorded")
+
+        if proc is not None:
+            with contextlib.suppress(Exception):
+                proc.terminate()
+                proc.kill()
 
         if self._interrupt_fn is not None:
             try:
@@ -1527,7 +1540,50 @@ class ElivaGoogleTTSAdapter(TTSProvider):
         # Before playing audio frames through physical speaker, pause microphone capture (half-duplex lock)
         self._notify_playback_start()
 
-        # Play audio buffer via sounddevice
+        # Prefer native system player (pw-play / aplay) to avoid PortAudio ALSA close deadlocks on Linux
+        player_bin = shutil.which("pw-play") or shutil.which("aplay")
+        if player_bin is not None:
+            cmd = [player_bin, "-"] if "pw-play" in player_bin else [player_bin, "-q", "-"]
+            proc = None
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                with self._lock:
+                    if self._interrupted:
+                        proc.terminate()
+                        return
+                    self._current_player_proc = proc
+
+                if blocking:
+                    proc.communicate(input=response.audio_content)
+                else:
+                    threading.Thread(
+                        target=proc.communicate,
+                        kwargs={"input": response.audio_content},
+                        daemon=True,
+                    ).start()
+            except Exception as exc:
+                with self._lock:
+                    if self._interrupted:
+                        return
+                raise HardwareUnavailableError(
+                    message="Audio playback output device failed.",
+                    device_type="speaker",
+                    provider_name="google_tts",
+                ) from exc
+            finally:
+                with self._lock:
+                    if self._current_player_proc is proc:
+                        self._current_player_proc = None
+                if blocking or self._interrupted:
+                    self._notify_playback_stop()
+            return
+
+        # Fallback to sounddevice for platforms without pw-play/aplay (macOS, Windows, test mocks)
         try:
             import numpy as np  # type: ignore[import-untyped]
 
