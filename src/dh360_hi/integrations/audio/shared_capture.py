@@ -86,6 +86,15 @@ class SharedMicrophoneCapture:
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
                 return
+            if self.wake_detector is not None and not getattr(
+                self.wake_detector, "_vosk_initialized", False
+            ):
+                try:
+                    self.wake_detector.initialize()
+                except Exception as exc:
+                    logger.warning(
+                        "SharedMicrophoneCapture: wake detector pre-init deferred: %s", exc
+                    )
             self._stop_event.clear()
             self._thread = threading.Thread(
                 target=self._capture_worker,

@@ -171,17 +171,54 @@ def render_tokens(final_tokens, non_final_tokens) -> str:
 # -----------------------
 # WebSocket receiver
 # -----------------------
-# -----------------------
-# WebSocket receiver
-# -----------------------
-def ws_receiver(ws, result_container):
+def ws_receiver(
+    ws,
+    result_container,
+    silence_timeout: float = 6.0,
+    post_speech_timeout: float = 2.0,
+    max_duration: float = 15.0,
+):
     final_tokens = []
     after_end = False
     empty_frames = 0
+    start_time = time.time()
+    last_speech_time = None
 
     try:
         while not _stop_event.is_set():
-            msg = json.loads(ws.recv())
+            now = time.time()
+            # 1. Check max overall duration
+            if now - start_time >= max_duration:
+                text = render_tokens(final_tokens, [])
+                result_container["text"] = text
+                _dispatch_event.set()
+                _stop_event.set()
+                break
+
+            # 2. Check silence timeout (no speech detected)
+            if last_speech_time is None and (now - start_time >= silence_timeout):
+                text = render_tokens(final_tokens, [])
+                result_container["text"] = text
+                _dispatch_event.set()
+                _stop_event.set()
+                break
+
+            # 3. Check post-speech silence timeout (speech ended)
+            if last_speech_time is not None and (now - last_speech_time >= post_speech_timeout):
+                text = render_tokens(final_tokens, [])
+                result_container["text"] = text
+                _dispatch_event.set()
+                _stop_event.set()
+                break
+
+            try:
+                raw_msg = ws.recv(timeout=0.3)
+            except TimeoutError:
+                continue
+            except Exception:
+                break
+
+            msg = json.loads(raw_msg)
             tokens = msg.get("tokens", [])
             non_final = []
 
@@ -192,6 +229,9 @@ def ws_receiver(ws, result_container):
                     non_final.append(t)
 
             text = render_tokens(final_tokens, non_final)
+
+            if tokens:
+                last_speech_time = time.time()
 
             # Update live callback if set (optional, for UI/Printing)
             if _live_callback:
@@ -207,19 +247,25 @@ def ws_receiver(ws, result_container):
             if after_end and empty_frames >= 1:
                 result_container["text"] = text
                 _dispatch_event.set()
+                _stop_event.set()
                 break
 
     except Exception:
         pass
+    finally:
+        _dispatch_event.set()
 
 
 # -----------------------
 # Blocking mic loop
 # -----------------------
-def mic_producer_loop(ws, device_index=None, audio_queue=None):
+def mic_producer_loop(ws, device_index=None, audio_queue=None, max_duration: float = 16.0):
+    start_time = time.time()
     if audio_queue is not None:
         try:
             while not _stop_event.is_set() and not _dispatch_event.is_set():
+                if time.time() - start_time >= max_duration:
+                    break
                 try:
                     chunk = audio_queue.get(timeout=0.2)
                 except Exception:
@@ -251,6 +297,8 @@ def mic_producer_loop(ws, device_index=None, audio_queue=None):
     stream.start()
     try:
         while not _stop_event.is_set() and not _dispatch_event.is_set():
+            if time.time() - start_time >= max_duration:
+                break
             # Always read to keep buffer clear and timing correct
             audio, _ = stream.read(MIC_CHUNK_SAMPLES)
 
@@ -286,15 +334,14 @@ def get_stt_hold():
 def listen_once(live_callback=None, audio_queue=None, api_key: str | None = None) -> str:
     """
     Connects to Soniox, listens for one utterance, and returns the final text.
-    Blocks until the utterance is complete.
+    Blocks until the utterance is complete or cleanly times out on silence.
     """
 
     _stop_event.clear()
+    _dispatch_event.clear()
     _hold_event.wait()
     global _live_callback
     _live_callback = live_callback
-
-    _dispatch_event.clear()
 
     alsa = get_wordforum_usb_index()
     device_index = alsa_card_to_sounddevice_index(alsa) if alsa is not None else None
@@ -304,19 +351,26 @@ def listen_once(live_callback=None, audio_queue=None, api_key: str | None = None
     try:
         with connect(SONIOX_WS_URL, timeout=20) as ws:
             ws.send(json.dumps(make_soniox_config(api_key=api_key)))
-            print("Listening...")
 
             recv_thread = threading.Thread(
-                target=ws_receiver, args=(ws, result_container), daemon=True
+                target=ws_receiver,
+                args=(ws, result_container),
+                daemon=True,
+                name="KBCON-SonioxReceiver",
             )
             recv_thread.start()
 
             mic_producer_loop(ws, device_index=device_index, audio_queue=audio_queue)
 
-            recv_thread.join(timeout=1.0)
+            _dispatch_event.wait(timeout=2.0)
+            _stop_event.set()
+            recv_thread.join(timeout=2.0)
 
     except WebSocketException as e:
         print("WS error:", e)
+    finally:
+        _stop_event.set()
+        _dispatch_event.set()
 
     return result_container["text"].replace("<end>", "").strip()
 

@@ -953,7 +953,17 @@ class DialogueCoordinator:
                         speak_response = False
 
                 should_speak = (
-                    speak_response and (self._tts_provider is not None) and (error_code is None)
+                    speak_response
+                    and (self._tts_provider is not None)
+                    and (
+                        error_code
+                        not in (
+                            "AUTHORIZATION_REVOKED",
+                            "MICROPHONE_MUTED",
+                            "SESSION_TERMINATED",
+                            "IDENTITY_CHANGED",
+                        )
+                    )
                 )
 
             # 6. Playback audio via TTSProvider (outside state lock)

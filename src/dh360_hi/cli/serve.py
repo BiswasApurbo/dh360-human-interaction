@@ -212,10 +212,12 @@ def handle_serve(args: argparse.Namespace) -> int:
             from dh360_hi.integrations.audio import SharedMicrophoneCapture, WakeWordDetector
 
             wake_detector = WakeWordDetector(wake_phrase="hey kb")
+            wake_detector.initialize()
             shared_capture = SharedMicrophoneCapture(wake_detector=wake_detector)
             shared_capture.start()
+            logger.info("Local Wake Engine and SharedMicrophoneCapture started successfully")
         except Exception as exc:
-            print(f"  Wake Engine  : DEFERRED ({exc})")
+            logger.warning("Wake Engine DEFERRED: %s", exc)
 
         if raw_mode == "mock" or (raw_mode == "auto" and not has_gemini_key):
             llm_provider = MockLLMProvider()
