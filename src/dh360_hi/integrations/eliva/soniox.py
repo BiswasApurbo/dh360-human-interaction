@@ -530,11 +530,13 @@ def transcribe_audio_with_soniox(
                 data = json.loads(raw_msg)
             except Exception:
                 continue
+            curr_non_final = []
             for t in data.get("tokens", []):
                 if t.get("is_final"):
                     final_tokens.append(t)
                 else:
-                    non_final.append(t)
+                    curr_non_final.append(t)
+            non_final = curr_non_final
             if data.get("finished", False):
                 break
 
