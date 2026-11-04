@@ -146,6 +146,7 @@ SAFE_PROVIDER_MESSAGES: dict[str, str] = {
     "TTS_PROVIDER_ERROR": "Text-to-speech synthesis provider failed.",
     "PROVIDER_TIMEOUT": "Provider operation timed out.",
     "PROVIDER_NETWORK_ERROR": "Provider network communication failed.",
+    "PROVIDER_QUOTA_EXHAUSTED": "Provider API credit or quota has been exhausted.",
     "HARDWARE_UNAVAILABLE": "Required audio hardware device is unavailable.",
 }
 
@@ -161,6 +162,7 @@ SAFE_DIAGNOSTIC_KEYS: frozenset[str] = frozenset(
         "audio_sample_rate",
         "audio_channels",
         "tokens",
+        "reason",
     }
 )
 
@@ -347,3 +349,25 @@ class HardwareUnavailableError(ProviderError):
             details=d,
         )
         self.device_type = device_type
+
+
+class ProviderQuotaExhaustedError(ProviderError):
+    """Raised when an AI or speech provider rejects requests due to depleted prepayment or quota limit (e.g. 402/429)."""
+
+    def __init__(
+        self,
+        message: str,
+        provider_name: str,
+        status_code: int = 402,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        d = dict(details or {})
+        d["status_code"] = status_code
+        super().__init__(
+            message=message,
+            provider_name=provider_name,
+            code="PROVIDER_QUOTA_EXHAUSTED",
+            details=d,
+        )
+        self.status_code = status_code
+

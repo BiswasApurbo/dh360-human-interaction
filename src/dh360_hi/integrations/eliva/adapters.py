@@ -40,6 +40,7 @@ from dh360_hi.contracts.errors import (
     HardwareUnavailableError,
     LLMProviderError,
     ProviderNetworkError,
+    ProviderQuotaExhaustedError,
     ProviderTimeoutError,
     STTProviderError,
     TTSProviderError,
@@ -97,9 +98,9 @@ def build_kbcon_system_instruction(
         )
         institution_rules = (
             "HEALTHCARE CLINIC GUIDELINES:\n"
-            "    - Base answers on verified clinical facilities (visiting hours, reception, OPD, emergency, pharmacy, diagnostic lab).\n"
+            "    - Facility Inquiries: Base answers about clinic timings, visiting hours, reception, OPD, emergency, pharmacy, diagnostic lab, and doctors on verified local knowledge.\n"
             "    - Never provide definitive medical diagnoses or clinical prescriptions. If a user asks for medical diagnosis or clinical treatment, politely direct them to consult on-duty healthcare professionals and doctors.\n"
-            "    - If specific hospital or clinic facts are missing from the provided context, explicitly direct the user to the reception or healthcare staff without inventing facts.\n"
+            "    - Facility-specific info gap: If specific hospital or clinic facts are missing from the provided context, explicitly direct the user to the reception or healthcare staff without inventing facts. Never use this disclaimer for general world questions.\n"
             "    - Never serve university facts in clinic mode."
         )
         greeting_bn = f"আসসালামু আলাইকুম। আমাদের স্বাস্থ্যসেবা কেন্দ্রে{inst_name_bn} আপনাকে স্বাগতম।"
@@ -121,9 +122,9 @@ def build_kbcon_system_instruction(
         )
         institution_rules = (
             "UNIVERSITY GUIDELINES:\n"
-            "    - Base answers on verified university facilities, academic programs, departments, admissions, and labs.\n"
+            "    - Campus Inquiries: Base answers about university facilities, academic programs, departments, admissions, and labs on verified local knowledge.\n"
             "    - Never serve hospital or clinical emergency facts in university mode.\n"
-            "    - If academic facts are missing from the provided context, politely direct the user to the information desk or admissions office."
+            "    - Campus-specific info gap: If academic or campus facts are missing from the provided context, politely direct the user to the information desk or admissions office. Never use this disclaimer for general world questions."
         )
         greeting_bn = f"আসসালামু আলাইকুম। আমাদের বিশ্ববিদ্যালয়ে{inst_name_bn} আপনাকে স্বাগতম।"
 
@@ -137,14 +138,18 @@ CORE IDENTITY & OVERVIEW
     - {purpose_rule}
     - NEVER give your identity response if the user asks about another person.
 
-KNOWLEDGE SOURCE HIERARCHY
+KNOWLEDGE SOURCE HIERARCHY & REASONING RULES
     1. Authorized Personal Context: Use the provided context under "অনুমোদিত ব্যক্তির তথ্য:" or "Authorized Person Context:"
        strictly for questions about the currently authorized individual (e.g. name, role, department, office room, working hours, bio, personal Q&A).
        If an authorized individual asks for a specific personal detail that says "প্রোফাইলে কোনো ... উল্লেখ নেই" or "Not recorded in profile",
        clearly state that this specific detail is not recorded in their profile. Never invent personal details.
-    2. Institutional Knowledge: Use the provided context under "প্রাতিষ্ঠানিক তথ্য:" or "Institutional Facts:".
-    3. General Questions & World Knowledge: For general questions about science, geography, history, mathematics, everyday topics,
-       and general world facts, answer directly and helpfully. Never refuse general questions.
+    2. Institutional Knowledge (Local CSV Facts): Use the provided local institutional facts under "প্রাতিষ্ঠানিক তথ্য:" or "Institutional Facts:"
+       for specific queries about the facility, campus, departments, clinic timings, doctors, admissions, or physical services. Never hallucinate unverified institutional details.
+    3. General Questions & World Knowledge: You possess extensive general world knowledge across science, technology, mathematics, history,
+       geography, languages, literature, culture, and general reasoning. For all general questions and conversations, you MUST answer
+       directly, accurately, politely, and helpfully using your broad general intelligence. Never refuse general questions.
+       CRITICAL: The presence of a local institutional dataset or missing local facts must NEVER cause you to refuse general questions.
+       NEVER reply with "এই তথ্য আমার প্রসঙ্গের মধ্যে নেই" or "This information is outside my context" for general world questions.
     4. Institution-Specific Uncertainty / Company-Specific Uncertainty: If asked a specific factual question about the institution that is NOT found in the provided facts,
        politely state that you do not have that specific information verified yet, instead of inventing facts. Never use this disclaimer for general world questions.
 
@@ -169,10 +174,9 @@ BEHAVIORAL BOUNDARIES
     - Maintain a warm, respectful, and professional tone.
     - Never break character. Your name is KBCON.
 
-CRITICAL LOCAL KNOWLEDGE RULE:
-    - If the user query is prefixed with "[LOCAL KNOWLEDGE MATCHES]" or contains local facts,
-      you MUST base your response STRICTLY on those facts.
-    - Do not mention phrases like "According to local knowledge" to the user."""
+LOCAL KNOWLEDGE RULE:
+    - If local institutional facts are provided, apply them faithfully for inquiries about this institution.
+    - For general knowledge questions, rely directly on your broad intelligence and never refuse the user."""
 
 
 DEFAULT_KBCON_SYSTEM_INSTRUCTION = build_kbcon_system_instruction(institution_type="university")
@@ -397,6 +401,19 @@ class ElivaGeminiAdapter(LLMProvider):
                 provider_name="gemini",
                 details={"model_name": self.model_name},
             ) from exc
+        except (
+            LLMProviderError,
+            ProviderTimeoutError,
+            ProviderNetworkError,
+            ProviderQuotaExhaustedError,
+        ):
+            raise
+        except TimeoutError as exc:
+            raise ProviderTimeoutError(
+                message="Gemini request timed out.",
+                provider_name="gemini",
+                details={"model_name": self.model_name},
+            ) from exc
         except ConnectionError as exc:
             raise ProviderNetworkError(
                 message="Gemini network communication failed.",
@@ -404,6 +421,22 @@ class ElivaGeminiAdapter(LLMProvider):
                 details={"model_name": self.model_name},
             ) from exc
         except Exception as exc:
+            err_msg = str(exc).upper()
+            if (
+                "402" in err_msg
+                or "RESOURCE_EXHAUSTED" in err_msg
+                or "PREPAYMENT" in err_msg
+                or "QUOTA" in err_msg
+            ):
+                logger.error(
+                    "ElivaGeminiAdapter: provider quota exhausted (402): %s", type(exc).__name__
+                )
+                raise ProviderQuotaExhaustedError(
+                    message="Gemini language model quota or credits exhausted.",
+                    provider_name="gemini",
+                    status_code=402,
+                    details={"model_name": self.model_name, "reason": "RESOURCE_EXHAUSTED"},
+                ) from exc
             logger.error(
                 "ElivaGeminiAdapter: generate_content failed: %s",
                 type(exc).__name__,
@@ -463,7 +496,12 @@ class ElivaGeminiAdapter(LLMProvider):
                 text_chunk = chunk.text or ""
                 if text_chunk:
                     yield text_chunk
-        except (LLMProviderError, ProviderTimeoutError, ProviderNetworkError):
+        except (
+            LLMProviderError,
+            ProviderTimeoutError,
+            ProviderNetworkError,
+            ProviderQuotaExhaustedError,
+        ):
             raise
         except TimeoutError as exc:
             raise ProviderTimeoutError(
@@ -478,6 +516,22 @@ class ElivaGeminiAdapter(LLMProvider):
                 details={"model_name": self.model_name},
             ) from exc
         except Exception as exc:
+            err_msg = str(exc).upper()
+            if (
+                "402" in err_msg
+                or "RESOURCE_EXHAUSTED" in err_msg
+                or "PREPAYMENT" in err_msg
+                or "QUOTA" in err_msg
+            ):
+                logger.error(
+                    "ElivaGeminiAdapter: streaming quota exhausted (402): %s", type(exc).__name__
+                )
+                raise ProviderQuotaExhaustedError(
+                    message="Gemini language model quota or credits exhausted.",
+                    provider_name="gemini",
+                    status_code=402,
+                    details={"model_name": self.model_name, "reason": "RESOURCE_EXHAUSTED"},
+                ) from exc
             logger.error(
                 "ElivaGeminiAdapter: generate_content_stream failed: %s",
                 type(exc).__name__,
@@ -497,7 +551,10 @@ class ElivaGeminiAdapter(LLMProvider):
         """Format user prompt with pre-filtered facts and language directive."""
         sections: list[str] = []
         if filtered_context and filtered_context.strip():
-            sections.append(f"[LOCAL KNOWLEDGE MATCHES]:\n{filtered_context.strip()}")
+            sections.append(
+                f"[LOCAL INSTITUTIONAL FACTS (Use for facility-specific queries)]:\n{filtered_context.strip()}\n"
+                "(Note: If the user's question is a general knowledge, science, or reasoning question, answer it directly using your general knowledge without being constrained by these local facts.)"
+            )
 
         if language == "en":
             sections.append(
@@ -678,11 +735,10 @@ class ElivaSonioxAdapter(STTProvider):
         try:
             import numpy as np  # type: ignore[import-untyped]  # noqa: F401
             import sounddevice as sd  # type: ignore[import-untyped]  # noqa: F401
-            import soxr  # type: ignore[import-untyped]  # noqa: F401
             from websockets.sync.client import connect  # type: ignore[import-untyped]  # noqa: F401
         except ImportError as exc:
             raise STTProviderError(
-                message="Required STT dependencies (sounddevice, soxr) are not installed.",
+                message="Required STT dependencies (sounddevice, websockets) are not installed.",
                 provider_name="soniox",
                 details={"reason": "SDK_NOT_INSTALLED"},
             ) from exc
@@ -690,6 +746,23 @@ class ElivaSonioxAdapter(STTProvider):
         # 4. Invoke staged Eliva Soniox listener if dependencies are met
         try:
             from dh360_hi.integrations.eliva import soniox  # type: ignore[import-not-found]
+
+            if self._shared_capture is not None:
+                if (
+                    hasattr(self._shared_capture, "is_hardware_available")
+                    and not self._shared_capture.is_hardware_available
+                ):
+                    raise HardwareUnavailableError(
+                        message="Microphone audio input device is unavailable.",
+                        device_type="microphone",
+                        provider_name="soniox",
+                    )
+            elif not soniox.has_capture_hardware():
+                raise HardwareUnavailableError(
+                    message="Microphone audio input device is unavailable.",
+                    device_type="microphone",
+                    provider_name="soniox",
+                )
 
             self._stt_module = soniox
             with self._lock:

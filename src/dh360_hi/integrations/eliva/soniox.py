@@ -9,6 +9,7 @@ Refactor notes:
 - Deterministic lifecycle
 """
 
+import contextlib
 import json
 import os
 import platform
@@ -125,12 +126,33 @@ def get_wordforum_usb_index() -> int | None:
                 print("Found USB Audio Input Device at card", card_index)
                 return card_index
 
+        # Secondary check: any USB capture device
+        for line in result.stdout.splitlines():
+            if "card" in line.lower() and "usb" in line.lower():
+                match = re.search(r"card (\d+):", line, re.IGNORECASE)
+                if match:
+                    card_index = int(match.group(1))
+                    print("Found USB capture card at", card_index)
+                    return card_index
+
         print("Did not find USB Audio Input Device")
 
     except Exception as e:
         print("Error detecting device:", e)
 
     return None
+
+
+def has_capture_hardware() -> bool:
+    """Return True if at least one audio capture hardware device is detected."""
+    if platform.system() != "Linux":
+        return True
+    try:
+        result = subprocess.run(["arecord", "-l"], capture_output=True, text=True, check=True)
+        lines = [ln for ln in result.stdout.splitlines() if "card" in ln.lower()]
+        return len(lines) > 0
+    except Exception:
+        return True
 
 
 def alsa_card_to_sounddevice_index(alsa_card: int) -> int | None:
@@ -148,17 +170,41 @@ def alsa_card_to_sounddevice_index(alsa_card: int) -> int | None:
 # -----------------------
 # Resampling
 # -----------------------
-def resample_chunk(in_int16: np.ndarray) -> np.ndarray:
-    x = in_int16.astype(np.float32) / 32768.0
-    res = pysoxr.resample(x, MIC_SAMPLE_RATE, TARGET_SAMPLE_RATE)
-    out = np.clip(res * 32767.0, -32768, 32767).astype(np.int16)
+def resample_chunk(
+    in_int16: np.ndarray,
+    in_rate: int = MIC_SAMPLE_RATE,
+    out_rate: int = TARGET_SAMPLE_RATE,
+) -> np.ndarray:
+    if in_rate == out_rate:
+        return in_int16
+    if pysoxr is not None:
+        x = in_int16.astype(np.float32) / 32768.0
+        res = pysoxr.resample(x, in_rate, out_rate)
+        out = np.clip(res * 32767.0, -32768, 32767).astype(np.int16)
+        if out.size != OUT_CHUNK_SAMPLES:
+            if out.size > OUT_CHUNK_SAMPLES:
+                out = out[:OUT_CHUNK_SAMPLES]
+            else:
+                out = np.pad(out, (0, OUT_CHUNK_SAMPLES - out.size))
+        return out
 
-    if out.size != OUT_CHUNK_SAMPLES:
-        if out.size > OUT_CHUNK_SAMPLES:
-            out = out[:OUT_CHUNK_SAMPLES]
+    # Pure numpy fallback (decimation or linear interpolation) without pysoxr dependency
+    if np is not None:
+        if in_rate % out_rate == 0:
+            factor = in_rate // out_rate
+            out = in_int16[::factor]
         else:
-            out = np.pad(out, (0, OUT_CHUNK_SAMPLES - out.size))
-    return out
+            num_out = int(round(len(in_int16) * out_rate / in_rate))
+            indices = np.linspace(0, len(in_int16) - 1, num_out)
+            out = np.interp(indices, np.arange(len(in_int16)), in_int16).astype(np.int16)
+        if out.size != OUT_CHUNK_SAMPLES:
+            if out.size > OUT_CHUNK_SAMPLES:
+                out = out[:OUT_CHUNK_SAMPLES]
+            else:
+                out = np.pad(out, (0, OUT_CHUNK_SAMPLES - out.size))
+        return out
+
+    return in_int16
 
 
 # -----------------------
@@ -179,6 +225,7 @@ def ws_receiver(
     max_duration: float = 15.0,
 ):
     final_tokens = []
+    latest_text = ""
     after_end = False
     empty_frames = 0
     start_time = time.time()
@@ -189,24 +236,21 @@ def ws_receiver(
             now = time.time()
             # 1. Check max overall duration
             if now - start_time >= max_duration:
-                text = render_tokens(final_tokens, [])
-                result_container["text"] = text
+                result_container["text"] = latest_text
                 _dispatch_event.set()
                 _stop_event.set()
                 break
 
             # 2. Check silence timeout (no speech detected)
             if last_speech_time is None and (now - start_time >= silence_timeout):
-                text = render_tokens(final_tokens, [])
-                result_container["text"] = text
+                result_container["text"] = ""
                 _dispatch_event.set()
                 _stop_event.set()
                 break
 
             # 3. Check post-speech silence timeout (speech ended)
             if last_speech_time is not None and (now - last_speech_time >= post_speech_timeout):
-                text = render_tokens(final_tokens, [])
-                result_container["text"] = text
+                result_container["text"] = latest_text
                 _dispatch_event.set()
                 _stop_event.set()
                 break
@@ -229,13 +273,14 @@ def ws_receiver(
                     non_final.append(t)
 
             text = render_tokens(final_tokens, non_final)
-
-            if tokens:
+            clean_text = text.replace("<end>", "").strip()
+            if clean_text:
+                latest_text = clean_text
                 last_speech_time = time.time()
 
             # Update live callback if set (optional, for UI/Printing)
-            if _live_callback:
-                _live_callback(text)
+            if _live_callback and clean_text:
+                _live_callback(clean_text)
 
             if "<end>" in text and not after_end:
                 after_end = True
@@ -244,8 +289,8 @@ def ws_receiver(
             if after_end:
                 empty_frames = empty_frames + 1 if not tokens else 0
 
-            if after_end and empty_frames >= 1:
-                result_container["text"] = text
+            if (after_end and empty_frames >= 1) or msg.get("finished", False):
+                result_container["text"] = latest_text
                 _dispatch_event.set()
                 _stop_event.set()
                 break
@@ -253,6 +298,8 @@ def ws_receiver(
     except Exception:
         pass
     finally:
+        if not result_container.get("text") and latest_text:
+            result_container["text"] = latest_text
         _dispatch_event.set()
 
 
@@ -274,8 +321,8 @@ def mic_producer_loop(ws, device_index=None, audio_queue=None, max_duration: flo
                     break
 
                 if not _hold_event.is_set():
-                    silent = np.zeros(OUT_CHUNK_SAMPLES, dtype=np.int16)
-                    ws.send(silent.tobytes())
+                    silent = np.zeros(OUT_CHUNK_SAMPLES, dtype=np.int16) if np is not None else b"\x00" * (OUT_CHUNK_SAMPLES * 2)
+                    ws.send(silent.tobytes() if hasattr(silent, "tobytes") else silent)
                     continue
 
                 if isinstance(chunk, (bytes, bytearray)):
@@ -283,7 +330,8 @@ def mic_producer_loop(ws, device_index=None, audio_queue=None, max_duration: flo
                 elif np is not None and isinstance(chunk, np.ndarray):
                     ws.send(chunk.astype(np.int16).tobytes())
         finally:
-            pass
+            with contextlib.suppress(Exception):
+                ws.send("")
         return
 
     stream = sd.InputStream(
@@ -305,13 +353,15 @@ def mic_producer_loop(ws, device_index=None, audio_queue=None, max_duration: flo
             # Check hold state
             if not _hold_event.is_set():
                 # Send silence to keep connection alive but ignore input
-                silent = np.zeros(OUT_CHUNK_SAMPLES, dtype=np.int16)
-                ws.send(silent.tobytes())
+                silent = np.zeros(OUT_CHUNK_SAMPLES, dtype=np.int16) if np is not None else b"\x00" * (OUT_CHUNK_SAMPLES * 2)
+                ws.send(silent.tobytes() if hasattr(silent, "tobytes") else silent)
                 continue
 
             out = resample_chunk(np.asarray(audio, dtype=np.int16).flatten())
             ws.send(out.tobytes())
     finally:
+        with contextlib.suppress(Exception):
+            ws.send("")
         stream.stop()
         stream.close()
 
@@ -373,6 +423,123 @@ def listen_once(live_callback=None, audio_queue=None, api_key: str | None = None
         _dispatch_event.set()
 
     return result_container["text"].replace("<end>", "").strip()
+
+
+def transcribe_audio_with_soniox(
+    audio_bytes: bytes,
+    mime_type: str = "audio/webm",
+    language_hint: str = "bn",
+    api_key: str | None = None,
+) -> str:
+    """Transcribe client-recorded audio bytes (e.g. from browser mic) using Soniox STT."""
+    resolved_key = (api_key or os.getenv("SONIOX_API_KEY", "") or SONIOX_API_KEY).strip()
+    if not resolved_key:
+        # Check backend.env paths
+        for p in (
+            "/home/eliva/.config/dh360/backend.env",
+            os.path.expanduser("~/.config/dh360/backend.env"),
+        ):
+            if os.path.exists(p):
+                try:
+                    with open(p) as f:
+                        for line in f:
+                            if line.startswith("SONIOX_API_KEY="):
+                                resolved_key = line.strip().split("=", 1)[1].strip("\"'")
+                                break
+                except Exception:
+                    pass
+            if resolved_key:
+                break
+
+    if not resolved_key:
+        raise ValueError("SONIOX_API_KEY is not configured.")
+
+    if connect is None:
+        raise RuntimeError("websockets client is not installed.")
+
+    import shutil
+
+    pcm_bytes = None
+    if shutil.which("ffmpeg"):
+        try:
+            proc = subprocess.Popen(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    "pipe:0",
+                    "-f",
+                    "s16le",
+                    "-acodec",
+                    "pcm_s16le",
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "16000",
+                    "pipe:1",
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            out, _ = proc.communicate(input=audio_bytes, timeout=12)
+            if proc.returncode == 0 and out:
+                pcm_bytes = out
+        except Exception:
+            pass
+
+    lang_hints = [language_hint, "en"] if language_hint != "en" else ["en"]
+
+    if pcm_bytes is not None:
+        config = {
+            "api_key": resolved_key,
+            "model": SONIOX_MODEL,
+            "audio_format": "pcm_s16le",
+            "sample_rate": 16000,
+            "num_channels": 1,
+            "language_hints": lang_hints,
+            "enable_endpoint_detection": True,
+        }
+        payload = pcm_bytes
+    else:
+        config = {
+            "api_key": resolved_key,
+            "model": SONIOX_MODEL,
+            "audio_format": "auto",
+            "language_hints": lang_hints,
+            "enable_endpoint_detection": True,
+        }
+        payload = audio_bytes
+
+    with connect(SONIOX_WS_URL, timeout=12) as ws:
+        ws.send(json.dumps(config))
+        chunk_size = 2048
+        for i in range(0, len(payload), chunk_size):
+            ws.send(payload[i : i + chunk_size])
+        ws.send("")
+
+        final_tokens = []
+        non_final = []
+        start_t = time.time()
+        while time.time() - start_t < 15.0:
+            try:
+                raw_msg = ws.recv(timeout=1.5)
+            except Exception:
+                break
+            try:
+                data = json.loads(raw_msg)
+            except Exception:
+                continue
+            for t in data.get("tokens", []):
+                if t.get("is_final"):
+                    final_tokens.append(t)
+                else:
+                    non_final.append(t)
+            if data.get("finished", False):
+                break
+
+        all_tokens = final_tokens + non_final
+        return "".join(t.get("text", "") for t in all_tokens).replace("<end>", "").strip()
 
 
 # -----------------------

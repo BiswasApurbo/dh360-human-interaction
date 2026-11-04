@@ -210,6 +210,18 @@ FALLBACK_MESSAGES: dict[str, dict[SupportedLanguage, str]] = {
         "bn": "আমি আপনার কথাটি স্পষ্টভাবে শুনতে পাইনি। অনুগ্রহ করে আবার বলুন।",
         "en": "I could not hear you clearly. Please say that again.",
     },
+    "silence_detected": {
+        "bn": "কোনো কথা শনাক্ত করা যায়নি। দয়া করে মাইক্রোফোনের কাছে এসে আবার বলুন।",
+        "en": "No intelligible speech detected. Please speak closer to your microphone.",
+    },
+    "hardware_unavailable": {
+        "bn": "মাইক্রোফোন ডিভাইসটি সংযুক্ত নেই বা খুঁজে পাওয়া যাচ্ছে না। অনুগ্রহ করে মাইক্রোফোন সংযোগ পরীক্ষা করুন।",
+        "en": "Microphone device is not connected or could not be found. Please check your microphone connection.",
+    },
+    "quota_exhausted": {
+        "bn": "এআই সেবাটির কোটা বা ক্রেডিট সমাপ্ত হয়েছে (402 Resource Exhausted)। অনুগ্রহ করে সেবা সরবরাহকারী অ্যাকাউন্টে ক্রেডিট রিচার্জ করুন।",
+        "en": "The AI service credits or quota have been exhausted (402 Resource Exhausted). Please recharge your provider account credits.",
+    },
     "llm_error": {
         "bn": "আমি বর্তমানে তথ্য প্রক্রিয়াকরণ করতে পারছি না। অনুগ্রহ করে কিছুক্ষণ পর চেষ্টা করুন।",
         "en": "I am currently unable to process your request. Please try again shortly.",

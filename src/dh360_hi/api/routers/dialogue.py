@@ -179,7 +179,22 @@ def transcribe_audio_payload(
     mime_type: str,
     language_hint: str = "bn",
 ) -> str:
-    """Transcribe audio bytes using Gemini multimodal STT or fallback, returning plain text."""
+    """Transcribe audio bytes using Soniox STT or Gemini fallback, returning plain text."""
+    # 1. Primary STT: Soniox real-time bilingual transcription
+    try:
+        from dh360_hi.integrations.eliva.soniox import transcribe_audio_with_soniox
+
+        soniox_text = transcribe_audio_with_soniox(
+            audio_bytes=audio_bytes,
+            mime_type=mime_type,
+            language_hint=language_hint,
+        )
+        if soniox_text:
+            return soniox_text
+    except Exception as exc:
+        logger.debug("Soniox audio payload transcription fallback: %s", exc)
+
+    # 2. Fallback STT: Gemini multimodal
     gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not gemini_key:
         env_paths = [

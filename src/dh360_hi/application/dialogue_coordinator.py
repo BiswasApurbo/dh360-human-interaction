@@ -55,9 +55,11 @@ from dh360_hi.contracts.dialogue import (
     get_fallback_message,
 )
 from dh360_hi.contracts.errors import (
+    HardwareUnavailableError,
     LLMProviderError,
     ProviderError,
     ProviderNetworkError,
+    ProviderQuotaExhaustedError,
     ProviderTimeoutError,
     STTProviderError,
     TTSProviderError,
@@ -636,6 +638,15 @@ class DialogueCoordinator:
                 try:
                     transcription = self._stt_provider.listen_utterance(language_hint=target_lang)
                     prompt_text = (transcription or "").strip()
+                except HardwareUnavailableError as exc:
+                    fallback = get_fallback_message("hardware_unavailable", target_lang)
+                    self._set_state("error", error="HARDWARE_UNAVAILABLE")
+                    return DialogueTurn(
+                        role="model",
+                        text=fallback,
+                        language=target_lang,
+                        metadata={"error": "HARDWARE_UNAVAILABLE"},
+                    )
                 except ProviderNetworkError as exc:
                     fallback = get_fallback_message("network_error", target_lang)
                     self._set_state("error", error=exc.code)
@@ -666,7 +677,7 @@ class DialogueCoordinator:
                     )
 
             if not prompt_text:
-                fallback = get_fallback_message("stt_error", target_lang)
+                fallback = get_fallback_message("silence_detected", target_lang)
                 with self._state_lock:
                     target_state = "muted" if self._is_microphone_muted else "idle"
                 self._set_state(target_state)
@@ -875,6 +886,12 @@ class DialogueCoordinator:
                         response_text = direct_response
                     else:
                         response_text = get_fallback_message("network_error", target_lang)
+                        error_code = exc.code
+                except ProviderQuotaExhaustedError as exc:
+                    if direct_response is not None:
+                        response_text = direct_response
+                    else:
+                        response_text = get_fallback_message("quota_exhausted", target_lang)
                         error_code = exc.code
                 except (LLMProviderError, ProviderError) as exc:
                     if direct_response is not None:
@@ -1178,7 +1195,56 @@ class DialogueCoordinator:
                 try:
                     transcription = self._stt_provider.listen_utterance(language_hint=target_lang)
                     prompt_text = (transcription or "").strip()
+                except HardwareUnavailableError as exc:
+                    fallback = get_fallback_message("hardware_unavailable", target_lang)
+                    self._set_state("error", error="HARDWARE_UNAVAILABLE")
+                    yield {
+                        "event": "error",
+                        "data": {"error": "HARDWARE_UNAVAILABLE", "message": fallback},
+                    }
+                    yield {
+                        "event": "done",
+                        "data": {
+                            "role": "model",
+                            "text": fallback,
+                            "language": target_lang,
+                            "timestamp": time.time(),
+                            "metadata": {"error": "HARDWARE_UNAVAILABLE"},
+                        },
+                    }
+                    return
+                except ProviderNetworkError as exc:
+                    fallback = get_fallback_message("network_error", target_lang)
+                    self._set_state("error", error=exc.code)
+                    yield {"event": "error", "data": {"error": exc.code, "message": fallback}}
+                    yield {
+                        "event": "done",
+                        "data": {
+                            "role": "model",
+                            "text": fallback,
+                            "language": target_lang,
+                            "timestamp": time.time(),
+                            "metadata": {"error": exc.code},
+                        },
+                    }
+                    return
+                except (STTProviderError, ProviderError) as exc:
+                    fallback = get_fallback_message("stt_error", target_lang)
+                    self._set_state("error", error=exc.code)
+                    yield {"event": "error", "data": {"error": exc.code, "message": fallback}}
+                    yield {
+                        "event": "done",
+                        "data": {
+                            "role": "model",
+                            "text": fallback,
+                            "language": target_lang,
+                            "timestamp": time.time(),
+                            "metadata": {"error": exc.code},
+                        },
+                    }
+                    return
                 except Exception as exc:
+                    logger.exception("DialogueCoordinator: unhandled error in STT: %s", exc)
                     fallback = get_fallback_message("stt_error", target_lang)
                     self._set_state("error", error="STT_ERROR")
                     yield {"event": "error", "data": {"error": "STT_ERROR", "message": fallback}}
@@ -1195,7 +1261,7 @@ class DialogueCoordinator:
                     return
 
             if not prompt_text:
-                fallback = get_fallback_message("stt_error", target_lang)
+                fallback = get_fallback_message("silence_detected", target_lang)
                 with self._state_lock:
                     target_state = "muted" if self._is_microphone_muted else "idle"
                 self._set_state(target_state)
@@ -1362,6 +1428,10 @@ class DialogueCoordinator:
                         yield {"event": "token", "data": {"token": full_response_text}}
                 except (ProviderNetworkError, ProviderTimeoutError) as exc:
                     full_response_text = get_fallback_message("network_error", target_lang)
+                    error_code = exc.code
+                    yield {"event": "token", "data": {"token": full_response_text}}
+                except ProviderQuotaExhaustedError as exc:
+                    full_response_text = get_fallback_message("quota_exhausted", target_lang)
                     error_code = exc.code
                     yield {"event": "token", "data": {"token": full_response_text}}
                 except (LLMProviderError, ProviderError) as exc:
