@@ -223,6 +223,87 @@ def test_gemini_no_shared_state_between_sessions() -> None:
     assert passed_histories[1][0].text == "Session 2 query"
 
 
+def test_gemini_fallback_api_key_sequence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify that if primary key hits 402/QUOTA, fallback key is attempted."""
+    from unittest.mock import MagicMock
+    from dh360_hi.contracts.errors import ProviderQuotaExhaustedError
+
+    monkeypatch.setenv("GEMINI_API_KEY", "primary-key")
+    monkeypatch.setenv("GEMINI_FALLBACK_API_KEY", "backup-key")
+
+    adapter = ElivaGeminiAdapter()
+
+    # Mock client for primary key that exhausts quota
+    mock_primary_client = MagicMock()
+    mock_primary_client.models.generate_content.side_effect = RuntimeError(
+        "402 RESOURCE_EXHAUSTED: Prepayment credits are depleted"
+    )
+
+    # Mock client for backup key that succeeds
+    mock_backup_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = "Response from backup key"
+    mock_backup_client.models.generate_content.return_value = mock_resp
+
+    adapter._clients["primary-key"] = mock_primary_client
+    adapter._clients["backup-key"] = mock_backup_client
+
+    result = adapter.generate_response("Test question", "", "en")
+    assert result == "Response from backup key"
+    assert mock_primary_client.models.generate_content.called
+    assert mock_backup_client.models.generate_content.called
+
+
+def test_gemini_fails_over_to_alternative_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify that when all Gemini keys fail with 402, alternative OpenAI-compatible provider is called."""
+    from unittest.mock import MagicMock
+
+    monkeypatch.setenv("GEMINI_API_KEY", "depleted-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-mini")
+
+    adapter = ElivaGeminiAdapter()
+
+    mock_client = MagicMock()
+    mock_client.models.generate_content.side_effect = RuntimeError(
+        "402 RESOURCE_EXHAUSTED: Prepayment credits are depleted"
+    )
+    adapter._clients["depleted-key"] = mock_client
+
+    # Mock _generate_openai_compatible
+    adapter._generate_openai_compatible = MagicMock(return_value="Response from alternative provider")
+
+    result = adapter.generate_response("What is AI?", "", "en")
+    assert result == "Response from alternative provider"
+    adapter._generate_openai_compatible.assert_called_once()
+
+
+def test_gemini_quota_exhausted_raises_typed_error_when_no_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify ProviderQuotaExhaustedError is raised when quota exhausted and no fallback is configured."""
+    from unittest.mock import MagicMock
+    from dh360_hi.contracts.errors import ProviderQuotaExhaustedError
+
+    monkeypatch.setenv("GEMINI_API_KEY", "depleted-key")
+    monkeypatch.delenv("GEMINI_FALLBACK_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_FALLBACK_API_KEY", raising=False)
+
+    adapter = ElivaGeminiAdapter()
+
+    mock_client = MagicMock()
+    mock_client.models.generate_content.side_effect = RuntimeError(
+        "402 RESOURCE_EXHAUSTED: Your prepayment credits are depleted."
+    )
+    adapter._clients["depleted-key"] = mock_client
+
+    with pytest.raises(ProviderQuotaExhaustedError) as exc_info:
+        adapter.generate_response("Hello", "", "en")
+
+    assert exc_info.value.code == "PROVIDER_QUOTA_EXHAUSTED"
+    assert exc_info.value.status_code == 402
+
+
 # ==============================================================================
 # 3. ElivaSonioxAdapter Tests
 # ==============================================================================

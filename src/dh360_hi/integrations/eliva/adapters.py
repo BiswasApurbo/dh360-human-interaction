@@ -217,48 +217,290 @@ class ElivaGeminiAdapter(LLMProvider):
         self.system_instruction = system_instruction
         self._client = client
         self._generator_fn = generator_fn
+        self._clients: dict[str, Any] = {}
 
     def update_system_instruction(self, instruction: str) -> None:
         """Update active system instruction and invalidate client cache."""
         self.system_instruction = instruction
         self._client = None
+        self._clients.clear()
 
     def _get_api_key(self) -> str:
-        key = (self._api_key or os.getenv("GEMINI_API_KEY") or "").strip()
-        return key
+        keys = self._get_available_gemini_keys()
+        return keys[0] if keys else ""
 
-    def _get_or_create_client(self) -> Any:
-        """Lazily initialize and cache the Google GenAI client across conversational turns."""
-        if self._client is not None:
-            return self._client
+    def _get_available_gemini_keys(self) -> list[str]:
+        """Collect all configured Gemini API keys preserving prioritization."""
+        keys: list[str] = []
+        if self._api_key:
+            keys.extend([k.strip() for k in self._api_key.split(",") if k.strip()])
+        env_primary = os.getenv("GEMINI_API_KEY", "")
+        if env_primary:
+            keys.extend([k.strip() for k in env_primary.split(",") if k.strip()])
+        for alt_var in (
+            "GEMINI_FALLBACK_API_KEY",
+            "GEMINI_BACKUP_API_KEY",
+            "GEMINI_SECONDARY_API_KEY",
+        ):
+            val = (os.getenv(alt_var) or "").strip()
+            if val:
+                keys.extend([k.strip() for k in val.split(",") if k.strip()])
 
-        api_key = self._get_api_key()
-        if not api_key:
-            raise LLMProviderError(
-                message="Gemini API key is not configured.",
-                provider_name="gemini",
-                details={"reason": "MISSING_API_KEY", "model_name": self.model_name},
-            )
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for k in keys:
+            if k not in seen:
+                seen.add(k)
+                deduped.append(k)
+        return deduped
+
+    def _get_alternative_provider_config(self) -> dict[str, str] | None:
+        """Resolve fallback LLM provider configuration if configured in environment."""
+        # 1. Check OpenAI
+        openai_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+        if openai_key:
+            return {
+                "provider": "openai",
+                "api_key": openai_key,
+                "base_url": (os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/"),
+                "model": os.getenv("OPENAI_MODEL") or "gpt-4o-mini",
+            }
+
+        # 2. Check Groq
+        groq_key = (os.getenv("GROQ_API_KEY") or "").strip()
+        if groq_key:
+            return {
+                "provider": "groq",
+                "api_key": groq_key,
+                "base_url": (os.getenv("GROQ_BASE_URL") or "https://api.groq.com/openai/v1").rstrip("/"),
+                "model": os.getenv("GROQ_MODEL") or "llama-3.3-70b-versatile",
+            }
+
+        # 3. Check generic LLM fallback endpoint
+        fallback_key = (os.getenv("LLM_FALLBACK_API_KEY") or "").strip()
+        fallback_url = (os.getenv("LLM_FALLBACK_BASE_URL") or "").strip()
+        if fallback_key and fallback_url:
+            return {
+                "provider": "fallback_llm",
+                "api_key": fallback_key,
+                "base_url": fallback_url.rstrip("/"),
+                "model": os.getenv("LLM_FALLBACK_MODEL") or "gpt-4o-mini",
+            }
+
+        return None
+
+    def _get_client_for_key(self, api_key: str) -> Any:
+        """Lazily initialize and cache genai.Client instance per API key."""
+        if api_key in self._clients:
+            return self._clients[api_key]
 
         try:
             from google import genai  # type: ignore[import-untyped]
 
-            self._client = genai.Client(api_key=api_key)
-            return self._client
+            client = genai.Client(api_key=api_key)
+            self._clients[api_key] = client
+            return client
         except ImportError as exc:
+            if self._get_alternative_provider_config() is not None:
+                return None
             raise LLMProviderError(
                 message="Optional dependency 'google-genai' is not installed.",
                 provider_name="gemini",
                 details={"reason": "SDK_NOT_INSTALLED", "model_name": self.model_name},
             ) from exc
         except Exception as exc:
-            logger.error(
-                "ElivaGeminiAdapter: client initialization failed: %s", type(exc).__name__
-            )
+            logger.error("ElivaGeminiAdapter: client initialization failed: %s", type(exc).__name__)
             raise LLMProviderError(
                 message="Failed to initialize Gemini client.",
                 provider_name="gemini",
                 details={"model_name": self.model_name},
+            ) from exc
+
+    def _get_or_create_client(self) -> Any:
+        """Lazily initialize and cache the Google GenAI client across conversational turns."""
+        if self._client is not None:
+            return self._client
+
+        keys = self._get_available_gemini_keys()
+        if not keys:
+            raise LLMProviderError(
+                message="Gemini API key is not configured.",
+                provider_name="gemini",
+                details={"reason": "MISSING_API_KEY", "model_name": self.model_name},
+            )
+
+        return self._get_client_for_key(keys[0])
+
+    def _build_openai_messages(
+        self,
+        prompt: str,
+        filtered_context: str,
+        language: SupportedLanguage,
+        session_history: list[DialogueTurn] | None = None,
+    ) -> list[dict[str, str]]:
+        """Assemble OpenAI-compatible messages format."""
+        target_instruction = self.system_instruction
+        if target_instruction:
+            if language == "en":
+                target_instruction = target_instruction.replace(
+                    "BANGLA as the authoritative response language",
+                    "ENGLISH as the authoritative response language",
+                ).replace(
+                    "clear Bangla script",
+                    "clear, natural English",
+                )
+            else:
+                target_instruction = target_instruction.replace(
+                    "ENGLISH as the authoritative response language",
+                    "BANGLA as the authoritative response language",
+                ).replace(
+                    "clear, natural English",
+                    "clear Bangla script",
+                )
+
+        messages: list[dict[str, str]] = []
+        if target_instruction:
+            messages.append({"role": "system", "content": target_instruction})
+
+        if session_history:
+            for turn in session_history:
+                role = "user" if turn.role == "user" else "assistant"
+                messages.append({"role": role, "content": turn.text})
+
+        assembled_prompt = self._assemble_prompt(prompt, filtered_context, language)
+        messages.append({"role": "user", "content": assembled_prompt})
+        return messages
+
+    def _generate_openai_compatible(
+        self,
+        config: dict[str, str],
+        prompt: str,
+        filtered_context: str,
+        language: SupportedLanguage,
+        session_history: list[DialogueTurn] | None = None,
+    ) -> str:
+        """Execute synchronous completion via alternative OpenAI-compatible provider."""
+        import httpx
+
+        messages = self._build_openai_messages(prompt, filtered_context, language, session_history)
+        url = f"{config['base_url']}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {config['api_key']}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": config["model"],
+            "messages": messages,
+            "temperature": 0.3,
+        }
+        try:
+            with httpx.Client(timeout=15.0) as http_client:
+                resp = http_client.post(url, headers=headers, json=payload)
+                if resp.status_code in (402, 429):
+                    raise ProviderQuotaExhaustedError(
+                        message=f"{config['provider']} quota or credits exhausted.",
+                        provider_name=config["provider"],
+                        status_code=resp.status_code,
+                    )
+                resp.raise_for_status()
+                data = resp.json()
+                return (
+                    data.get("choices", [{}])[0].get("message", {}).get("content") or ""
+                ).strip()
+        except (
+            LLMProviderError,
+            ProviderTimeoutError,
+            ProviderNetworkError,
+            ProviderQuotaExhaustedError,
+        ):
+            raise
+        except (httpx.ConnectError, httpx.NetworkError) as exc:
+            raise ProviderNetworkError(
+                message=f"{config['provider']} network connection failed.",
+                provider_name=config["provider"],
+            ) from exc
+        except httpx.TimeoutException as exc:
+            raise ProviderTimeoutError(
+                message=f"{config['provider']} request timed out.",
+                provider_name=config["provider"],
+            ) from exc
+        except Exception as exc:
+            raise LLMProviderError(
+                message=f"{config['provider']} inference failed.",
+                provider_name=config["provider"],
+            ) from exc
+
+    def _stream_openai_compatible(
+        self,
+        config: dict[str, str],
+        prompt: str,
+        filtered_context: str,
+        language: SupportedLanguage,
+        session_history: list[DialogueTurn] | None = None,
+    ) -> Any:
+        """Stream chunks from alternative OpenAI-compatible provider."""
+        import json
+        import httpx
+
+        messages = self._build_openai_messages(prompt, filtered_context, language, session_history)
+        url = f"{config['base_url']}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {config['api_key']}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": config["model"],
+            "messages": messages,
+            "temperature": 0.3,
+            "stream": True,
+        }
+        try:
+            with httpx.Client(timeout=20.0) as http_client:
+                with http_client.stream("POST", url, headers=headers, json=payload) as resp:
+                    if resp.status_code in (402, 429):
+                        raise ProviderQuotaExhaustedError(
+                            message=f"{config['provider']} quota or credits exhausted.",
+                            provider_name=config["provider"],
+                            status_code=resp.status_code,
+                        )
+                    resp.raise_for_status()
+                    for line in resp.iter_lines():
+                        line = line.strip()
+                        if not line.startswith("data:"):
+                            continue
+                        data_str = line[5:].strip()
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                            token = (
+                                chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                            )
+                            if token:
+                                yield token
+                        except Exception:
+                            continue
+        except (
+            LLMProviderError,
+            ProviderTimeoutError,
+            ProviderNetworkError,
+            ProviderQuotaExhaustedError,
+        ):
+            raise
+        except (httpx.ConnectError, httpx.NetworkError) as exc:
+            raise ProviderNetworkError(
+                message=f"{config['provider']} network connection failed.",
+                provider_name=config["provider"],
+            ) from exc
+        except httpx.TimeoutException as exc:
+            raise ProviderTimeoutError(
+                message=f"{config['provider']} streaming timed out.",
+                provider_name=config["provider"],
+            ) from exc
+        except Exception as exc:
+            raise LLMProviderError(
+                message=f"{config['provider']} streaming failed.",
+                provider_name=config["provider"],
             ) from exc
 
     def _build_request_config_and_contents(
@@ -269,7 +511,10 @@ class ElivaGeminiAdapter(LLMProvider):
         session_history: list[DialogueTurn] | None = None,
     ) -> tuple[list[Any], Any]:
         """Construct the types.GenerateContentConfig and contents payload."""
-        from google.genai import types  # type: ignore[import-untyped]
+        try:
+            from google.genai import types  # type: ignore[import-untyped]
+        except ImportError:
+            types = None
 
         target_instruction = self.system_instruction
         if target_instruction:
@@ -290,29 +535,35 @@ class ElivaGeminiAdapter(LLMProvider):
                     "clear Bangla script",
                 )
 
-        config = types.GenerateContentConfig(
-            system_instruction=target_instruction,
-        )
-
         assembled_prompt = self._assemble_prompt(prompt, filtered_context, language)
 
-        contents: list[Any] = []
-        if session_history:
-            for turn in session_history:
-                role_tag = "user" if turn.role == "user" else "model"
-                contents.append(
-                    types.Content(
-                        role=role_tag,
-                        parts=[types.Part.from_text(text=turn.text)],
-                    )
-                )
-        contents.append(
-            types.Content(
-                role="user",
-                parts=[types.Part.from_text(text=assembled_prompt)],
+        if types is not None:
+            config = types.GenerateContentConfig(
+                system_instruction=target_instruction,
             )
-        )
-        return contents, config
+
+            contents: list[Any] = []
+            if session_history:
+                for turn in session_history:
+                    role_tag = "user" if turn.role == "user" else "model"
+                    contents.append(
+                        types.Content(
+                            role=role_tag,
+                            parts=[types.Part.from_text(text=turn.text)],
+                        )
+                    )
+            contents.append(
+                types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=assembled_prompt)],
+                )
+            )
+            return contents, config
+        else:
+            # Fallback structures for testing or environments where google-genai SDK is omitted
+            config = {"system_instruction": target_instruction}
+            contents = [{"role": "user", "parts": [assembled_prompt]}]
+            return contents, config
 
     def generate_response(
         self,
@@ -374,79 +625,154 @@ class ElivaGeminiAdapter(LLMProvider):
                     details={"model_name": self.model_name},
                 ) from exc
 
-        # 2. Injected or lazily constructed Google GenAI client (cached)
-        client = self._get_or_create_client()
+        # 2. Check keys and alternative provider
+        gemini_keys = self._get_available_gemini_keys()
+        alt_config = self._get_alternative_provider_config()
 
-        # 3. Assemble prompt and payload
+        if not gemini_keys and not alt_config and self._client is None:
+            raise LLMProviderError(
+                message="Gemini API key is not configured.",
+                provider_name="gemini",
+                details={"reason": "MISSING_API_KEY", "model_name": self.model_name},
+            )
+
+        # 3. Assemble prompt and payload for Gemini
         contents, config = self._build_request_config_and_contents(
             prompt, filtered_context, language, session_history
         )
 
-        # 4. Generate content ephemerally (no persistent cross-session state)
-        try:
-            response = client.models.generate_content(
-                model=self.model_name,
-                contents=contents,
-                config=config,
-            )
+        last_quota_error: ProviderQuotaExhaustedError | None = None
 
-            response_text = (response.text or "").strip()
-            return response_text
-
-        except (LLMProviderError, ProviderTimeoutError, ProviderNetworkError):
-            raise
-        except TimeoutError as exc:
-            raise ProviderTimeoutError(
-                message="Gemini request timed out.",
-                provider_name="gemini",
-                details={"model_name": self.model_name},
-            ) from exc
-        except (
-            LLMProviderError,
-            ProviderTimeoutError,
-            ProviderNetworkError,
-            ProviderQuotaExhaustedError,
-        ):
-            raise
-        except TimeoutError as exc:
-            raise ProviderTimeoutError(
-                message="Gemini request timed out.",
-                provider_name="gemini",
-                details={"model_name": self.model_name},
-            ) from exc
-        except ConnectionError as exc:
-            raise ProviderNetworkError(
-                message="Gemini network communication failed.",
-                provider_name="gemini",
-                details={"model_name": self.model_name},
-            ) from exc
-        except Exception as exc:
-            err_msg = str(exc).upper()
-            if (
-                "402" in err_msg
-                or "RESOURCE_EXHAUSTED" in err_msg
-                or "PREPAYMENT" in err_msg
-                or "QUOTA" in err_msg
-            ):
-                logger.error(
-                    "ElivaGeminiAdapter: provider quota exhausted (402): %s", type(exc).__name__
+        # 4. Try injected client if present
+        if self._client is not None:
+            try:
+                response = self._client.models.generate_content(
+                    model=self.model_name,
+                    contents=contents,
+                    config=config,
                 )
-                raise ProviderQuotaExhaustedError(
-                    message="Gemini language model quota or credits exhausted.",
+                return (response.text or "").strip()
+            except (
+                LLMProviderError,
+                ProviderTimeoutError,
+                ProviderNetworkError,
+                ProviderQuotaExhaustedError,
+            ):
+                raise
+            except TimeoutError as exc:
+                raise ProviderTimeoutError(
+                    message="Gemini request timed out.",
                     provider_name="gemini",
-                    status_code=402,
-                    details={"model_name": self.model_name, "reason": "RESOURCE_EXHAUSTED"},
+                    details={"model_name": self.model_name},
                 ) from exc
-            logger.error(
-                "ElivaGeminiAdapter: generate_content failed: %s",
-                type(exc).__name__,
+            except ConnectionError as exc:
+                raise ProviderNetworkError(
+                    message="Gemini network communication failed.",
+                    provider_name="gemini",
+                    details={"model_name": self.model_name},
+                ) from exc
+            except Exception as exc:
+                err_msg = str(exc).upper()
+                if (
+                    "402" in err_msg
+                    or "RESOURCE_EXHAUSTED" in err_msg
+                    or "PREPAYMENT" in err_msg
+                    or "QUOTA" in err_msg
+                ):
+                    last_quota_error = ProviderQuotaExhaustedError(
+                        message="Gemini language model quota or credits exhausted.",
+                        provider_name="gemini",
+                        status_code=402,
+                        details={"model_name": self.model_name, "reason": "RESOURCE_EXHAUSTED"},
+                    )
+                else:
+                    raise LLMProviderError(
+                        message="Gemini language model inference failed.",
+                        provider_name="gemini",
+                        details={"model_name": self.model_name},
+                    ) from exc
+
+        # 5. Try Gemini keys in sequence
+        for key in gemini_keys:
+            try:
+                client = self._get_client_for_key(key)
+                if client is None:
+                    continue
+                response = client.models.generate_content(
+                    model=self.model_name,
+                    contents=contents,
+                    config=config,
+                )
+                return (response.text or "").strip()
+            except (
+                LLMProviderError,
+                ProviderTimeoutError,
+                ProviderNetworkError,
+                ProviderQuotaExhaustedError,
+            ):
+                raise
+            except TimeoutError as exc:
+                raise ProviderTimeoutError(
+                    message="Gemini request timed out.",
+                    provider_name="gemini",
+                    details={"model_name": self.model_name},
+                ) from exc
+            except ConnectionError as exc:
+                raise ProviderNetworkError(
+                    message="Gemini network communication failed.",
+                    provider_name="gemini",
+                    details={"model_name": self.model_name},
+                ) from exc
+            except Exception as exc:
+                err_msg = str(exc).upper()
+                if (
+                    "402" in err_msg
+                    or "RESOURCE_EXHAUSTED" in err_msg
+                    or "PREPAYMENT" in err_msg
+                    or "QUOTA" in err_msg
+                ):
+                    logger.warning(
+                        "ElivaGeminiAdapter: Gemini key exhausted (402/QUOTA). Trying fallback."
+                    )
+                    last_quota_error = ProviderQuotaExhaustedError(
+                        message="Gemini language model quota or credits exhausted.",
+                        provider_name="gemini",
+                        status_code=402,
+                        details={"model_name": self.model_name, "reason": "RESOURCE_EXHAUSTED"},
+                    )
+                    continue
+                if len(gemini_keys) > 1 and ("403" in err_msg or "INVALID_ARGUMENT" in err_msg):
+                    logger.warning("ElivaGeminiAdapter: key error; trying fallback key.")
+                    continue
+                raise LLMProviderError(
+                    message="Gemini language model inference failed.",
+                    provider_name="gemini",
+                    details={"model_name": self.model_name},
+                ) from exc
+
+        # 6. Fallback to alternative provider if configured
+        if alt_config is not None:
+            logger.info(
+                "ElivaGeminiAdapter: failing over to alternative provider: %s",
+                alt_config["provider"],
             )
-            # Guarantee raw error messages with sensitive parameters are never leaked
-            raise LLMProviderError(
-                message="Gemini language model inference failed.",
-                provider_name="gemini",
-                details={"model_name": self.model_name},
-            ) from exc
+            return self._generate_openai_compatible(
+                config=alt_config,
+                prompt=prompt,
+                filtered_context=filtered_context,
+                language=language,
+                session_history=session_history,
+            )
+
+        # 7. No alternative provider available, raise quota exhaustion
+        if last_quota_error is not None:
+            raise last_quota_error
+
+        raise LLMProviderError(
+            message="Gemini language model inference failed.",
+            provider_name="gemini",
+            details={"model_name": self.model_name},
+        )
 
     def generate_response_stream(
         self,
@@ -477,70 +803,160 @@ class ElivaGeminiAdapter(LLMProvider):
                 yield w + (" " if i < len(words) - 1 else "")
             return
 
-        # 2. Injected or lazily constructed Google GenAI client (cached)
-        client = self._get_or_create_client()
+        gemini_keys = self._get_available_gemini_keys()
+        alt_config = self._get_alternative_provider_config()
 
-        # 3. Assemble prompt and payload
+        if not gemini_keys and not alt_config and self._client is None:
+            raise LLMProviderError(
+                message="Gemini API key is not configured.",
+                provider_name="gemini",
+                details={"reason": "MISSING_API_KEY", "model_name": self.model_name},
+            )
+
         contents, config = self._build_request_config_and_contents(
             prompt, filtered_context, language, session_history
         )
 
-        # 4. Generate content stream
-        try:
-            stream = client.models.generate_content_stream(
-                model=self.model_name,
-                contents=contents,
-                config=config,
-            )
-            for chunk in stream:
-                text_chunk = chunk.text or ""
-                if text_chunk:
-                    yield text_chunk
-        except (
-            LLMProviderError,
-            ProviderTimeoutError,
-            ProviderNetworkError,
-            ProviderQuotaExhaustedError,
-        ):
-            raise
-        except TimeoutError as exc:
-            raise ProviderTimeoutError(
-                message="Gemini streaming request timed out.",
-                provider_name="gemini",
-                details={"model_name": self.model_name},
-            ) from exc
-        except ConnectionError as exc:
-            raise ProviderNetworkError(
-                message="Gemini network communication failed during streaming.",
-                provider_name="gemini",
-                details={"model_name": self.model_name},
-            ) from exc
-        except Exception as exc:
-            err_msg = str(exc).upper()
-            if (
-                "402" in err_msg
-                or "RESOURCE_EXHAUSTED" in err_msg
-                or "PREPAYMENT" in err_msg
-                or "QUOTA" in err_msg
-            ):
-                logger.error(
-                    "ElivaGeminiAdapter: streaming quota exhausted (402): %s", type(exc).__name__
+        last_quota_error: ProviderQuotaExhaustedError | None = None
+
+        if self._client is not None:
+            try:
+                stream = self._client.models.generate_content_stream(
+                    model=self.model_name,
+                    contents=contents,
+                    config=config,
                 )
-                raise ProviderQuotaExhaustedError(
-                    message="Gemini language model quota or credits exhausted.",
+                for chunk in stream:
+                    text_chunk = chunk.text or ""
+                    if text_chunk:
+                        yield text_chunk
+                return
+            except (
+                LLMProviderError,
+                ProviderTimeoutError,
+                ProviderNetworkError,
+                ProviderQuotaExhaustedError,
+            ):
+                raise
+            except TimeoutError as exc:
+                raise ProviderTimeoutError(
+                    message="Gemini streaming request timed out.",
                     provider_name="gemini",
-                    status_code=402,
-                    details={"model_name": self.model_name, "reason": "RESOURCE_EXHAUSTED"},
+                    details={"model_name": self.model_name},
                 ) from exc
-            logger.error(
-                "ElivaGeminiAdapter: generate_content_stream failed: %s",
-                type(exc).__name__,
+            except ConnectionError as exc:
+                raise ProviderNetworkError(
+                    message="Gemini network communication failed during streaming.",
+                    provider_name="gemini",
+                    details={"model_name": self.model_name},
+                ) from exc
+            except Exception as exc:
+                err_msg = str(exc).upper()
+                if (
+                    "402" in err_msg
+                    or "RESOURCE_EXHAUSTED" in err_msg
+                    or "PREPAYMENT" in err_msg
+                    or "QUOTA" in err_msg
+                ):
+                    last_quota_error = ProviderQuotaExhaustedError(
+                        message="Gemini language model quota or credits exhausted.",
+                        provider_name="gemini",
+                        status_code=402,
+                        details={"model_name": self.model_name, "reason": "RESOURCE_EXHAUSTED"},
+                    )
+                else:
+                    raise LLMProviderError(
+                        message="Gemini language model streaming failed.",
+                        provider_name="gemini",
+                        details={"model_name": self.model_name},
+                    ) from exc
+
+        for key in gemini_keys:
+            try:
+                client = self._get_client_for_key(key)
+                if client is None:
+                    continue
+                stream = client.models.generate_content_stream(
+                    model=self.model_name,
+                    contents=contents,
+                    config=config,
+                )
+                yielded_any = False
+                for chunk in stream:
+                    text_chunk = chunk.text or ""
+                    if text_chunk:
+                        yielded_any = True
+                        yield text_chunk
+                if yielded_any:
+                    return
+            except (
+                LLMProviderError,
+                ProviderTimeoutError,
+                ProviderNetworkError,
+                ProviderQuotaExhaustedError,
+            ):
+                raise
+            except TimeoutError as exc:
+                raise ProviderTimeoutError(
+                    message="Gemini streaming request timed out.",
+                    provider_name="gemini",
+                    details={"model_name": self.model_name},
+                ) from exc
+            except ConnectionError as exc:
+                raise ProviderNetworkError(
+                    message="Gemini network communication failed during streaming.",
+                    provider_name="gemini",
+                    details={"model_name": self.model_name},
+                ) from exc
+            except Exception as exc:
+                err_msg = str(exc).upper()
+                if (
+                    "402" in err_msg
+                    or "RESOURCE_EXHAUSTED" in err_msg
+                    or "PREPAYMENT" in err_msg
+                    or "QUOTA" in err_msg
+                ):
+                    logger.warning(
+                        "ElivaGeminiAdapter: streaming key exhausted (402/QUOTA). Trying fallback."
+                    )
+                    last_quota_error = ProviderQuotaExhaustedError(
+                        message="Gemini language model quota or credits exhausted.",
+                        provider_name="gemini",
+                        status_code=402,
+                        details={"model_name": self.model_name, "reason": "RESOURCE_EXHAUSTED"},
+                    )
+                    continue
+                if len(gemini_keys) > 1 and ("403" in err_msg or "INVALID_ARGUMENT" in err_msg):
+                    logger.warning("ElivaGeminiAdapter: streaming key error; trying fallback key.")
+                    continue
+                raise LLMProviderError(
+                    message="Gemini language model streaming failed.",
+                    provider_name="gemini",
+                    details={"model_name": self.model_name},
+                ) from exc
+
+        if alt_config is not None:
+            logger.info(
+                "ElivaGeminiAdapter: failing over streaming to alternative provider: %s",
+                alt_config["provider"],
             )
-            raise LLMProviderError(
-                message="Gemini language model streaming failed.",
-                provider_name="gemini",
-                details={"model_name": self.model_name},
-            ) from exc
+            yield from self._stream_openai_compatible(
+                config=alt_config,
+                prompt=prompt,
+                filtered_context=filtered_context,
+                language=language,
+                session_history=session_history,
+            )
+            return
+
+        if last_quota_error is not None:
+            raise last_quota_error
+
+        raise LLMProviderError(
+            message="Gemini language model streaming failed.",
+            provider_name="gemini",
+            details={"model_name": self.model_name},
+        )
 
     def _assemble_prompt(
         self,

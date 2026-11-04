@@ -219,8 +219,8 @@ FALLBACK_MESSAGES: dict[str, dict[SupportedLanguage, str]] = {
         "en": "Microphone device is not connected or could not be found. Please check your microphone connection.",
     },
     "quota_exhausted": {
-        "bn": "এআই সেবাটির কোটা বা ক্রেডিট সমাপ্ত হয়েছে (402 Resource Exhausted)। অনুগ্রহ করে সেবা সরবরাহকারী অ্যাকাউন্টে ক্রেডিট রিচার্জ করুন।",
-        "en": "The AI service credits or quota have been exhausted (402 Resource Exhausted). Please recharge your provider account credits.",
+        "bn": "এআই সেবাটির কোটা বা ক্রেডিট সমাপ্ত হয়েছে (402 Resource Exhausted)। অনুগ্রহ করে Google AI Studio-তে ক্রেডিট রিচার্জ করুন অথবা নতুন GEMINI_API_KEY যুক্ত করুন।",
+        "en": "The AI service credits or quota have been exhausted (402 Resource Exhausted). Please recharge your Google AI Studio credits or configure an active GEMINI_API_KEY.",
     },
     "llm_error": {
         "bn": "আমি বর্তমানে তথ্য প্রক্রিয়াকরণ করতে পারছি না। অনুগ্রহ করে কিছুক্ষণ পর চেষ্টা করুন।",
