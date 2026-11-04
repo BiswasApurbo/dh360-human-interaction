@@ -40,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import threading
 import time
 import uuid
@@ -126,6 +127,11 @@ class DialogueCoordinator:
         self._last_robot_response: str = ""
         self._state_callbacks: list[Callable[[str, dict[str, Any]], None]] = []
 
+        # Active 60-second voice conversation session state
+        self._is_active_voice_session: bool = False
+        self._session_worker_thread: threading.Thread | None = None
+        self._session_worker_lock = threading.Lock()
+
         # Inactivity timer for transitioning LISTENING -> IDLE
         self._inactivity_timer: threading.Timer | None = None
         self._inactivity_lock = threading.Lock()
@@ -208,9 +214,24 @@ class DialogueCoordinator:
                 self._inactivity_timer.cancel()
                 self._inactivity_timer = None
 
+    @staticmethod
+    def _strip_wake_phrase(text: str) -> str:
+        """Strip leading wake phrases ('Hey KB', 'Hi KB', 'Hey Kay Bee', 'কেবি', etc.)."""
+        if not text:
+            return ""
+        # Regex matching common wake word transcriptions at the start of an utterance
+        cleaned = re.sub(
+            r"^(?:(?:hey|hi|hello|ok|okay|হে|হ্যালো|ওকে)\s+)?(?:k\s*b|kb|kay\s*bee|কেবি|কে\s*বি)(?:[\s,!?:.-]+|$)",
+            "",
+            text.strip(),
+            flags=re.IGNORECASE,
+        ).strip()
+        return cleaned
+
     def _on_inactivity_timeout(self) -> None:
         """Invoked when 60 seconds have elapsed in listening state without interaction."""
         with self._state_lock:
+            self._is_active_voice_session = False
             if self._current_state != "listening":
                 return
             logger.info(
@@ -240,27 +261,141 @@ class DialogueCoordinator:
                 "DialogueCoordinator: 'Hey KB' detected! Transitioning from %s to LISTENING",
                 self._current_state,
             )
+            self._is_active_voice_session = True
             self._set_state("listening", wake_phrase=getattr(event, "phrase", "hey kb"))
             self._arm_inactivity_timer()
 
-        # Trigger voice conversation turn asynchronously
-        threading.Thread(
-            target=self._run_wake_turn_worker,
-            daemon=True,
-            name="KBCON-WakeTurnWorker",
-        ).start()
+        self._start_active_session_worker()
 
-    def _run_wake_turn_worker(self) -> None:
-        """Worker thread to execute spoken turn after 'Hey KB' wake trigger."""
-        try:
-            self.handle_turn(user_text=None, language=self._default_language)
-        except Exception as exc:
-            logger.warning("DialogueCoordinator: error executing wake turn: %s", exc)
+    def _start_active_session_worker(self) -> None:
+        """Ensure active voice conversation loop is running in background."""
+        with self._session_worker_lock:
+            if self._session_worker_thread is not None and self._session_worker_thread.is_alive():
+                return
+            self._session_worker_thread = threading.Thread(
+                target=self._run_active_session_worker,
+                daemon=True,
+                name="KBCON-ActiveVoiceSessionWorker",
+            )
+            self._session_worker_thread.start()
+
+    def _run_active_session_worker(self) -> None:
+        """Continuous worker maintaining the active 60-second voice conversation session.
+
+        Continuously captures utterances via STT, filters leading wake phrases,
+        executes dialogue turns with speech playback, and maintains listening state
+        for follow-up speech until the 60-second inactivity timer expires.
+        """
+        logger.info("DialogueCoordinator: active voice session worker started")
+        while True:
+            with self._state_lock:
+                if (
+                    not self._is_active_voice_session
+                    or self._is_microphone_muted
+                    or self._current_state == "idle"
+                ):
+                    break
+                state = self._current_state
+
+            if state in ("thinking", "answering", "speaking"):
+                time.sleep(0.1)
+                continue
+
+            # Ensure STT is unheld and ready
+            if self._stt_provider is not None:
+                with contextlib.suppress(Exception):
+                    self._stt_provider.release()
+
+            # Ensure state is listening
+            with self._state_lock:
+                if (
+                    self._current_state != "listening"
+                    and self._is_active_voice_session
+                    and not self._is_microphone_muted
+                ):
+                    self._current_state = "listening"
+                    callbacks = list(self._state_callbacks)
+                    for cb in callbacks:
+                        with contextlib.suppress(Exception):
+                            cb("listening", {})
+
+            # Listen for utterance from STT (blocks until endpoint detection or silence timeout)
+            raw_text = ""
+            if self._stt_provider is not None:
+                try:
+                    raw_text = (
+                        self._stt_provider.listen_utterance(language_hint=self._default_language)
+                        or ""
+                    )
+                except Exception as exc:
+                    logger.debug("DialogueCoordinator: voice session listen error: %s", exc)
+                    time.sleep(0.2)
+                    continue
+
+            with self._state_lock:
+                if (
+                    not self._is_active_voice_session
+                    or self._is_microphone_muted
+                    or self._current_state == "idle"
+                ):
+                    break
+
+            raw_text = raw_text.strip()
+            if not raw_text:
+                time.sleep(0.05)
+                continue
+
+            prompt = self._strip_wake_phrase(raw_text)
+            if not prompt:
+                # User only spoke the wake phrase; reset inactivity timer and keep listening
+                logger.info(
+                    "DialogueCoordinator: wake phrase detected alone; resetting timer and awaiting prompt"
+                )
+                self._arm_inactivity_timer()
+                time.sleep(0.05)
+                continue
+
+            logger.info("DialogueCoordinator: captured voice prompt: '%s'", prompt)
+
+            # Reset 60s inactivity timer on every detected user utterance (Requirement 11)
+            self._arm_inactivity_timer()
+
+            # Execute turn synchronously with blocking TTS
+            try:
+                self.handle_turn(
+                    user_text=prompt,
+                    language=self._default_language,
+                    speak_response=True,
+                    blocking_tts=True,
+                )
+            except Exception as exc:
+                logger.error("DialogueCoordinator: error executing voice turn: %s", exc)
+
+            with self._state_lock:
+                if (
+                    not self._is_active_voice_session
+                    or self._is_microphone_muted
+                    or self._current_state == "idle"
+                ):
+                    break
+                # Keep in listening state for follow-up questions (Requirement 9)
+                self._current_state = "listening"
+                callbacks = list(self._state_callbacks)
+                for cb in callbacks:
+                    with contextlib.suppress(Exception):
+                        cb("listening", {})
+
+            # Reset inactivity timer after answering so user has full 60s for follow-up
+            self._arm_inactivity_timer()
+            time.sleep(0.1)
+
+        logger.info("DialogueCoordinator: active voice session worker ended")
 
     def mute_microphone(self) -> bool:
         """Mute microphone input and update state."""
         self._cancel_inactivity_timer()
         with self._state_lock:
+            self._is_active_voice_session = False
             self._is_microphone_muted = True
         if self._shared_capture is not None:
             with contextlib.suppress(Exception):
@@ -276,6 +411,7 @@ class DialogueCoordinator:
         """Unmute microphone input and restore idle state."""
         self._cancel_inactivity_timer()
         with self._state_lock:
+            self._is_active_voice_session = False
             self._is_microphone_muted = False
         if self._shared_capture is not None:
             with contextlib.suppress(Exception):
@@ -366,6 +502,8 @@ class DialogueCoordinator:
     def close(self) -> None:
         """Unsubscribe from EventBus and release active session state. Idempotent."""
         self._cancel_inactivity_timer()
+        with self._state_lock:
+            self._is_active_voice_session = False
         if self._shared_capture is not None:
             with contextlib.suppress(Exception):
                 self._shared_capture.stop()
@@ -679,9 +817,13 @@ class DialogueCoordinator:
             if not prompt_text:
                 fallback = get_fallback_message("silence_detected", target_lang)
                 with self._state_lock:
-                    target_state = "muted" if self._is_microphone_muted else "idle"
+                    target_state = (
+                        "muted"
+                        if self._is_microphone_muted
+                        else ("listening" if self._is_active_voice_session else "idle")
+                    )
                 self._set_state(target_state)
-                if self._shared_capture is not None:
+                if not self._is_active_voice_session and self._shared_capture is not None:
                     self._shared_capture.end_active_session()
                 return DialogueTurn(
                     role="model",

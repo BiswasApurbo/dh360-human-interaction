@@ -389,7 +389,9 @@ def listen_once(live_callback=None, audio_queue=None, api_key: str | None = None
 
     _stop_event.clear()
     _dispatch_event.clear()
-    _hold_event.wait()
+    if not _hold_event.is_set():
+        if not _hold_event.wait(timeout=0.5):
+            return ""
     global _live_callback
     _live_callback = live_callback
 

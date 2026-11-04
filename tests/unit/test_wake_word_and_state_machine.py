@@ -24,8 +24,13 @@ from dh360_hi.integrations.audio.wake_detector import (
 class FakeSTTProvider:
     """Mock STT provider for testing coordinator voice turns."""
 
-    def __init__(self, transcription: str = "What are the visiting hours?") -> None:
+    def __init__(
+        self,
+        transcription: str = "What are the visiting hours?",
+        transcriptions: list[str] | None = None,
+    ) -> None:
         self.transcription = transcription
+        self.transcriptions = list(transcriptions) if transcriptions is not None else None
         self.listen_calls = 0
         self.is_held = False
 
@@ -37,6 +42,10 @@ class FakeSTTProvider:
 
     def listen_utterance(self, language_hint: str = "bn", on_partial_text: Any = None) -> str:
         self.listen_calls += 1
+        if self.transcriptions is not None:
+            if self.transcriptions:
+                return self.transcriptions.pop(0)
+            return ""
         return self.transcription
 
 
@@ -306,3 +315,63 @@ def test_coordinator_interruption_transitions_to_listening(mock_coordinator):
     # After inactivity timeout, state transitions to idle
     time.sleep(0.4)
     assert mock_coordinator.current_state == "idle"
+
+
+def test_coordinator_wake_word_and_follow_up_utterance_flow():
+    """Verify 'Hey KB' opens active voice session, strips wake words, captures
+    'Who are you?' and follow-up questions without re-triggering wake word,
+    and returns to IDLE after inactivity."""
+    bus = EventBus()
+    knowledge_svc = KnowledgeService(institution_type="education")
+    llm = MockLLMProvider()
+    stt = FakeSTTProvider(
+        transcriptions=[
+            "Hey KB",  # Pre-roll chunk alone -> stripped, continues listening
+            "Who are you?",  # Spoken prompt -> answered
+            "What is your purpose?",  # Follow-up question without wake word -> answered
+            "",  # Inactivity silence
+        ]
+    )
+    tts = FakeTTSProvider()
+    capture = SharedMicrophoneCapture(wake_detector=WakeWordDetector())
+
+    coord = DialogueCoordinator(
+        event_bus=bus,
+        knowledge_service=knowledge_svc,
+        llm_provider=llm,
+        stt_provider=stt,
+        tts_provider=tts,
+        default_language="en",
+        shared_capture=capture,
+        inactivity_timeout_seconds=0.3,  # Fast 300ms timeout for test
+    )
+    coord._set_state("idle")
+
+    state_transitions = []
+    coord.register_state_callback(lambda s, _meta: state_transitions.append(s))
+
+    try:
+        # 1. Trigger wake word
+        coord.on_wake_word_detected(WakeWordEvent(detected=True, phrase="hey kb"))
+        assert coord._is_active_voice_session is True
+
+        # Wait for worker thread to process turns
+        # 1st: "Hey KB" stripped -> continues
+        # 2nd: "Who are you?" answered -> speaks
+        # 3rd: "What is your purpose?" answered -> speaks
+        # 4th: "" silence -> wait for inactivity timeout (0.3s)
+        time.sleep(1.0)
+
+        # Verify spoken turns were delivered
+        assert len(tts.spoken_texts) == 2
+        assert any("Who are you?" in txt for txt in tts.spoken_texts)
+        assert any("What is your purpose?" in txt for txt in tts.spoken_texts)
+
+        # Verify state transitions: listening -> thinking -> answering -> listening -> thinking -> answering -> listening -> idle
+        assert "thinking" in state_transitions
+        assert "answering" in state_transitions
+        assert coord.current_state == "idle"
+        assert coord._is_active_voice_session is False
+
+    finally:
+        coord.close()
