@@ -223,6 +223,93 @@ class ElivaGeminiAdapter(LLMProvider):
         key = (self._api_key or os.getenv("GEMINI_API_KEY") or "").strip()
         return key
 
+    def _get_or_create_client(self) -> Any:
+        """Lazily initialize and cache the Google GenAI client across conversational turns."""
+        if self._client is not None:
+            return self._client
+
+        api_key = self._get_api_key()
+        if not api_key:
+            raise LLMProviderError(
+                message="Gemini API key is not configured.",
+                provider_name="gemini",
+                details={"reason": "MISSING_API_KEY", "model_name": self.model_name},
+            )
+
+        try:
+            from google import genai  # type: ignore[import-untyped]
+
+            self._client = genai.Client(api_key=api_key)
+            return self._client
+        except ImportError as exc:
+            raise LLMProviderError(
+                message="Optional dependency 'google-genai' is not installed.",
+                provider_name="gemini",
+                details={"reason": "SDK_NOT_INSTALLED", "model_name": self.model_name},
+            ) from exc
+        except Exception as exc:
+            logger.error(
+                "ElivaGeminiAdapter: client initialization failed: %s", type(exc).__name__
+            )
+            raise LLMProviderError(
+                message="Failed to initialize Gemini client.",
+                provider_name="gemini",
+                details={"model_name": self.model_name},
+            ) from exc
+
+    def _build_request_config_and_contents(
+        self,
+        prompt: str,
+        filtered_context: str,
+        language: SupportedLanguage,
+        session_history: list[DialogueTurn] | None = None,
+    ) -> tuple[list[Any], Any]:
+        """Construct the types.GenerateContentConfig and contents payload."""
+        from google.genai import types  # type: ignore[import-untyped]
+
+        target_instruction = self.system_instruction
+        if target_instruction:
+            if language == "en":
+                target_instruction = target_instruction.replace(
+                    "BANGLA as the authoritative response language",
+                    "ENGLISH as the authoritative response language",
+                ).replace(
+                    "clear Bangla script",
+                    "clear, natural English",
+                )
+            else:
+                target_instruction = target_instruction.replace(
+                    "ENGLISH as the authoritative response language",
+                    "BANGLA as the authoritative response language",
+                ).replace(
+                    "clear, natural English",
+                    "clear Bangla script",
+                )
+
+        config = types.GenerateContentConfig(
+            system_instruction=target_instruction,
+        )
+
+        assembled_prompt = self._assemble_prompt(prompt, filtered_context, language)
+
+        contents: list[Any] = []
+        if session_history:
+            for turn in session_history:
+                role_tag = "user" if turn.role == "user" else "model"
+                contents.append(
+                    types.Content(
+                        role=role_tag,
+                        parts=[types.Part.from_text(text=turn.text)],
+                    )
+                )
+        contents.append(
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=assembled_prompt)],
+            )
+        )
+        return contents, config
+
     def generate_response(
         self,
         prompt: str,
@@ -283,85 +370,16 @@ class ElivaGeminiAdapter(LLMProvider):
                     details={"model_name": self.model_name},
                 ) from exc
 
-        # 2. Injected or lazily constructed Google GenAI client
-        client = self._client
-        if client is None:
-            api_key = self._get_api_key()
-            if not api_key:
-                raise LLMProviderError(
-                    message="Gemini API key is not configured.",
-                    provider_name="gemini",
-                    details={"reason": "MISSING_API_KEY", "model_name": self.model_name},
-                )
+        # 2. Injected or lazily constructed Google GenAI client (cached)
+        client = self._get_or_create_client()
 
-            try:
-                from google import genai  # type: ignore[import-untyped]
-
-                client = genai.Client(api_key=api_key)
-            except ImportError as exc:
-                raise LLMProviderError(
-                    message="Optional dependency 'google-genai' is not installed.",
-                    provider_name="gemini",
-                    details={"reason": "SDK_NOT_INSTALLED", "model_name": self.model_name},
-                ) from exc
-            except Exception as exc:
-                logger.error(
-                    "ElivaGeminiAdapter: client initialization failed: %s", type(exc).__name__
-                )
-                raise LLMProviderError(
-                    message="Failed to initialize Gemini client.",
-                    provider_name="gemini",
-                    details={"model_name": self.model_name},
-                ) from exc
-
-        # 3. Assemble prompt with pre-filtered context and language directive
-        assembled_prompt = self._assemble_prompt(prompt, filtered_context, language)
+        # 3. Assemble prompt and payload
+        contents, config = self._build_request_config_and_contents(
+            prompt, filtered_context, language, session_history
+        )
 
         # 4. Generate content ephemerally (no persistent cross-session state)
         try:
-            from google.genai import types  # type: ignore[import-untyped]
-
-            target_instruction = self.system_instruction
-            if target_instruction:
-                if language == "en":
-                    target_instruction = target_instruction.replace(
-                        "BANGLA as the authoritative response language",
-                        "ENGLISH as the authoritative response language",
-                    ).replace(
-                        "clear Bangla script",
-                        "clear, natural English",
-                    )
-                else:
-                    target_instruction = target_instruction.replace(
-                        "ENGLISH as the authoritative response language",
-                        "BANGLA as the authoritative response language",
-                    ).replace(
-                        "clear, natural English",
-                        "clear Bangla script",
-                    )
-
-            config = types.GenerateContentConfig(
-                system_instruction=target_instruction,
-            )
-
-            # Pass history turns if provided for this specific session
-            contents: list[Any] = []
-            if session_history:
-                for turn in session_history:
-                    role_tag = "user" if turn.role == "user" else "model"
-                    contents.append(
-                        types.Content(
-                            role=role_tag,
-                            parts=[types.Part.from_text(text=turn.text)],
-                        )
-                    )
-            contents.append(
-                types.Content(
-                    role="user",
-                    parts=[types.Part.from_text(text=assembled_prompt)],
-                )
-            )
-
             response = client.models.generate_content(
                 model=self.model_name,
                 contents=contents,
@@ -393,6 +411,79 @@ class ElivaGeminiAdapter(LLMProvider):
             # Guarantee raw error messages with sensitive parameters are never leaked
             raise LLMProviderError(
                 message="Gemini language model inference failed.",
+                provider_name="gemini",
+                details={"model_name": self.model_name},
+            ) from exc
+
+    def generate_response_stream(
+        self,
+        prompt: str,
+        filtered_context: str,
+        language: SupportedLanguage,
+        session_history: list[DialogueTurn] | None = None,
+    ) -> Any:
+        """Stream conversational response chunks incrementally for minimal TTFT.
+
+        Args:
+            prompt: User query or utterance text.
+            filtered_context: Pre-filtered knowledge facts assembled by DH360 KnowledgeService.
+            language: Target language ('bn' or 'en').
+            session_history: Isolated turn history scoped only to the current person's session.
+
+        Yields:
+            Incremental text tokens as they are produced by the LLM.
+        """
+        if not prompt or not prompt.strip():
+            return
+
+        # 1. Injected generator callable (testing / custom runner)
+        if self._generator_fn is not None:
+            full_text = self.generate_response(prompt, filtered_context, language, session_history)
+            words = full_text.split(" ")
+            for i, w in enumerate(words):
+                yield w + (" " if i < len(words) - 1 else "")
+            return
+
+        # 2. Injected or lazily constructed Google GenAI client (cached)
+        client = self._get_or_create_client()
+
+        # 3. Assemble prompt and payload
+        contents, config = self._build_request_config_and_contents(
+            prompt, filtered_context, language, session_history
+        )
+
+        # 4. Generate content stream
+        try:
+            stream = client.models.generate_content_stream(
+                model=self.model_name,
+                contents=contents,
+                config=config,
+            )
+            for chunk in stream:
+                text_chunk = chunk.text or ""
+                if text_chunk:
+                    yield text_chunk
+        except (LLMProviderError, ProviderTimeoutError, ProviderNetworkError):
+            raise
+        except TimeoutError as exc:
+            raise ProviderTimeoutError(
+                message="Gemini streaming request timed out.",
+                provider_name="gemini",
+                details={"model_name": self.model_name},
+            ) from exc
+        except ConnectionError as exc:
+            raise ProviderNetworkError(
+                message="Gemini network communication failed during streaming.",
+                provider_name="gemini",
+                details={"model_name": self.model_name},
+            ) from exc
+        except Exception as exc:
+            logger.error(
+                "ElivaGeminiAdapter: generate_content_stream failed: %s",
+                type(exc).__name__,
+            )
+            raise LLMProviderError(
+                message="Gemini language model streaming failed.",
                 provider_name="gemini",
                 details={"model_name": self.model_name},
             ) from exc

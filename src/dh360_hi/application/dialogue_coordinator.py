@@ -43,7 +43,7 @@ import logging
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
 from dh360_hi.contracts.dialogue import (
@@ -1066,3 +1066,416 @@ class DialogueCoordinator:
             tenant_id=tenant_id,
             robot_id=robot_id,
         )
+
+    def handle_turn_stream(
+        self,
+        user_text: str | None = None,
+        language: SupportedLanguage | None = None,
+        speak_response: bool = False,
+        now: float | None = None,
+        tenant_id: str | None = None,
+        robot_id: str | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Stream a dialogue turn yielding incremental events (metadata, token, done).
+
+        Provides low Time-To-First-Token (TTFT) by yielding model tokens as they
+        arrive from the streaming LLM provider.
+        """
+        active_robot = None
+        try:
+            from dh360_hi.backend.robot_registry import RobotRegistry
+
+            active_robot = RobotRegistry.get_instance().get_active_robot()
+        except Exception:
+            pass
+
+        effective_robot_id = robot_id or (active_robot.robot_id if active_robot else None)
+        effective_tenant_id = tenant_id or (active_robot.tenant_id if active_robot else None)
+        robot_lang: SupportedLanguage = (
+            active_robot.language
+            if (active_robot and active_robot.language in VALID_LANGUAGES)
+            else self._default_language
+        )
+
+        if language is None:
+            target_lang = robot_lang
+        else:
+            base_lang = language or self._default_language
+            if base_lang not in VALID_LANGUAGES:
+                base_lang = "bn"
+            target_lang = base_lang
+            if user_text:
+                text_lower = user_text.lower()
+                if any(
+                    p in text_lower
+                    for p in (
+                        "in english",
+                        "answer in english",
+                        "speak in english",
+                        "reply in english",
+                        "please answer in english",
+                        "ইংরেজিতে বলো",
+                        "ইংরেজিতে বলুন",
+                        "ইংলিশে বলো",
+                    )
+                ):
+                    target_lang = "en"
+                elif any(
+                    p in text_lower
+                    for p in (
+                        "in bangla",
+                        "in bengali",
+                        "answer in bangla",
+                        "speak in bangla",
+                        "please answer in bangla",
+                        "বাংলায় বলো",
+                        "বাংলায় বলুন",
+                        "বাংলায় উত্তর দাও",
+                    )
+                ):
+                    target_lang = "bn"
+
+        with self._turn_lock:
+            if user_text is None and self.is_microphone_muted:
+                muted_msg = (
+                    "মাইক্রোফোন মিউট করা আছে।"
+                    if target_lang == "bn"
+                    else "Microphone is currently muted."
+                )
+                self._set_state("muted")
+                yield {"event": "error", "data": {"error": "MICROPHONE_MUTED", "message": muted_msg}}
+                yield {
+                    "event": "done",
+                    "data": {
+                        "role": "model",
+                        "text": muted_msg,
+                        "language": target_lang,
+                        "timestamp": time.time(),
+                        "metadata": {"error": "MICROPHONE_MUTED"},
+                    },
+                }
+                return
+
+            prompt_text = (user_text or "").strip() if user_text is not None else None
+            if prompt_text is None:
+                if self._stt_provider is None:
+                    fallback = get_fallback_message("stt_error", target_lang)
+                    self._set_state("error", error="STT_UNAVAILABLE")
+                    yield {"event": "error", "data": {"error": "STT_UNAVAILABLE", "message": fallback}}
+                    yield {
+                        "event": "done",
+                        "data": {
+                            "role": "model",
+                            "text": fallback,
+                            "language": target_lang,
+                            "timestamp": time.time(),
+                            "metadata": {"error": "STT_UNAVAILABLE"},
+                        },
+                    }
+                    return
+
+                self._set_state("listening")
+                try:
+                    transcription = self._stt_provider.listen_utterance(language_hint=target_lang)
+                    prompt_text = (transcription or "").strip()
+                except Exception as exc:
+                    fallback = get_fallback_message("stt_error", target_lang)
+                    self._set_state("error", error="STT_ERROR")
+                    yield {"event": "error", "data": {"error": "STT_ERROR", "message": fallback}}
+                    yield {
+                        "event": "done",
+                        "data": {
+                            "role": "model",
+                            "text": fallback,
+                            "language": target_lang,
+                            "timestamp": time.time(),
+                            "metadata": {"error": "STT_ERROR"},
+                        },
+                    }
+                    return
+
+            if not prompt_text:
+                fallback = get_fallback_message("stt_error", target_lang)
+                with self._state_lock:
+                    target_state = "muted" if self._is_microphone_muted else "idle"
+                self._set_state(target_state)
+                if self._shared_capture is not None:
+                    self._shared_capture.end_active_session()
+                yield {"event": "error", "data": {"error": "EMPTY_UTTERANCE", "message": fallback}}
+                yield {
+                    "event": "done",
+                    "data": {
+                        "role": "model",
+                        "text": fallback,
+                        "language": target_lang,
+                        "timestamp": time.time(),
+                        "metadata": {"error": "EMPTY_UTTERANCE"},
+                    },
+                }
+                return
+
+            with self._state_lock:
+                self._last_user_query = prompt_text
+            self._set_state("thinking", user_text=prompt_text)
+
+            active_auth = None
+            requested_person_id = None
+
+            with self._state_lock:
+                if self._session_state is None:
+                    self._session_state = DialogueSessionState(
+                        session_id=str(uuid.uuid4()),
+                        person_id=None,
+                        display_name=None,
+                        is_authorized=False,
+                        grace_period_seconds=self._grace_period_seconds,
+                    )
+                originating_session_id = self._session_state.session_id
+                originating_person_id = self._session_state.person_id
+                self._session_state.get_turns(now=now)
+
+                auth_snapshot = (
+                    self._auth_controller.get_current()
+                    if self._auth_controller is not None
+                    else None
+                )
+
+                if (
+                    auth_snapshot is not None
+                    and auth_snapshot.is_active
+                    and auth_snapshot.is_authorized
+                    and auth_snapshot.person_id is not None
+                ):
+                    if originating_person_id is None:
+                        self._session_state.person_id = auth_snapshot.person_id
+                        self._session_state.display_name = auth_snapshot.display_name
+                        self._session_state.is_authorized = True
+                        originating_person_id = auth_snapshot.person_id
+                        is_valid_auth = True
+                    elif originating_person_id == auth_snapshot.person_id:
+                        self._session_state.is_authorized = True
+                        is_valid_auth = True
+                    else:
+                        self._session_state.is_authorized = False
+                        is_valid_auth = False
+                else:
+                    self._session_state.is_authorized = False
+                    is_valid_auth = False
+
+                was_privileged = is_valid_auth
+                if is_valid_auth:
+                    active_auth = auth_snapshot
+                    requested_person_id = originating_person_id
+
+                history_snapshot = self._session_state.get_turns(now=now)
+
+                user_turn = DialogueTurn(
+                    role="user",
+                    text=prompt_text,
+                    language=target_lang,
+                    timestamp=now if now is not None else time.time(),
+                )
+                self._session_state.add_turn(user_turn, now=now)
+
+            # Emit metadata event immediately
+            yield {
+                "event": "metadata",
+                "data": {
+                    "user_text": prompt_text,
+                    "language": target_lang,
+                    "is_privileged": was_privileged,
+                    "session_id": originating_session_id,
+                },
+            }
+
+            knowledge_context = self._knowledge_service.build_knowledge_context(
+                query=prompt_text,
+                language=target_lang,
+                auth_session=active_auth,
+                requested_person_id=requested_person_id,
+                tenant_id=effective_tenant_id,
+                robot_id=effective_robot_id,
+            )
+
+            direct_response = None
+            if self._knowledge_service is not None:
+                direct_response = self._knowledge_service.resolve_direct_kbcon_inquiry(
+                    prompt_text, language=target_lang
+                )
+                ps = getattr(self._knowledge_service, "_person_service", None)
+                if (
+                    direct_response is None
+                    and requested_person_id is not None
+                    and active_auth is not None
+                    and ps is not None
+                    and hasattr(ps, "get_person_context")
+                ):
+                    person_ctx = ps.get_person_context(requested_person_id)
+                    if person_ctx is not None:
+                        direct_response = (
+                            self._knowledge_service.resolve_structured_profile_inquiry(
+                                query=prompt_text,
+                                context=person_ctx,
+                                language=target_lang,
+                            )
+                        )
+
+            full_response_text = ""
+            error_code: str | None = None
+
+            provider_cls = getattr(self._llm_provider, "__class__", None)
+            cls_name = provider_cls.__name__ if provider_cls is not None else ""
+            is_mock_llm = cls_name == "MockLLMProvider"
+
+            if direct_response is not None and not is_mock_llm:
+                full_response_text = direct_response
+                yield {"event": "token", "data": {"token": direct_response}}
+            elif self._llm_provider is None:
+                if direct_response is not None:
+                    full_response_text = direct_response
+                    yield {"event": "token", "data": {"token": direct_response}}
+                else:
+                    full_response_text = get_fallback_message("llm_error", target_lang)
+                    error_code = "LLM_UNAVAILABLE"
+                    yield {"event": "token", "data": {"token": full_response_text}}
+            else:
+                try:
+                    stream_fn = getattr(self._llm_provider, "generate_response_stream", None)
+                    if callable(stream_fn):
+                        stream_iter = stream_fn(
+                            prompt=prompt_text,
+                            filtered_context=knowledge_context,
+                            language=target_lang,
+                            session_history=history_snapshot,
+                        )
+                        for token in stream_iter:
+                            if token:
+                                full_response_text += token
+                                yield {"event": "token", "data": {"token": token}}
+                    else:
+                        full_response_text = self._llm_provider.generate_response(
+                            prompt=prompt_text,
+                            filtered_context=knowledge_context,
+                            language=target_lang,
+                            session_history=history_snapshot,
+                        )
+                        yield {"event": "token", "data": {"token": full_response_text}}
+                except (ProviderNetworkError, ProviderTimeoutError) as exc:
+                    full_response_text = get_fallback_message("network_error", target_lang)
+                    error_code = exc.code
+                    yield {"event": "token", "data": {"token": full_response_text}}
+                except (LLMProviderError, ProviderError) as exc:
+                    full_response_text = get_fallback_message("llm_error", target_lang)
+                    error_code = exc.code
+                    yield {"event": "token", "data": {"token": full_response_text}}
+                except Exception as exc:
+                    logger.exception("DialogueCoordinator: streaming generation failed: %s", exc)
+                    full_response_text = get_fallback_message("llm_error", target_lang)
+                    error_code = "LLM_ERROR"
+                    yield {"event": "token", "data": {"token": full_response_text}}
+
+            with self._state_lock:
+                session_alive = (
+                    self._session_state is not None
+                    and self._session_state.session_id == originating_session_id
+                )
+                person_unchanged = (
+                    session_alive and self._session_state.person_id == originating_person_id
+                )
+
+            if not session_alive or not person_unchanged:
+                full_response_text = get_fallback_message("llm_error", target_lang)
+                error_code = "SESSION_TERMINATED" if not session_alive else "PERSON_MISMATCH"
+
+            turn_metadata: dict[str, Any] = {
+                "session_id": originating_session_id,
+                "is_privileged": was_privileged,
+                "user_text": prompt_text,
+            }
+            if error_code:
+                turn_metadata["error"] = error_code
+
+            turn_ts = now if now is not None else time.time()
+            model_turn = DialogueTurn(
+                role="model",
+                text=full_response_text,
+                language=target_lang,
+                timestamp=turn_ts,
+                metadata=turn_metadata,
+            )
+
+            with self._state_lock:
+                self._last_robot_response = full_response_text
+                if (
+                    self._session_state is not None
+                    and self._session_state.session_id == originating_session_id
+                    and self._session_state.person_id == originating_person_id
+                ):
+                    self._session_state.add_turn(model_turn, now=now)
+                final_state = (
+                    "muted"
+                    if self._is_microphone_muted
+                    else ("error" if error_code else "listening")
+                )
+            self._set_state(final_state)
+            if final_state == "listening":
+                self._arm_inactivity_timer()
+
+            yield {
+                "event": "done",
+                "data": {
+                    "role": "model",
+                    "text": full_response_text,
+                    "language": target_lang,
+                    "timestamp": turn_ts,
+                    "metadata": turn_metadata,
+                },
+            }
+
+            if speak_response and not error_code and self._tts_provider:
+                threading.Thread(
+                    target=self._tts_provider.speak,
+                    args=(full_response_text, target_lang),
+                    daemon=True,
+                ).start()
+
+    async def handle_turn_stream_async(
+        self,
+        user_text: str | None = None,
+        language: SupportedLanguage | None = None,
+        speak_response: bool = False,
+        now: float | None = None,
+        tenant_id: str | None = None,
+        robot_id: str | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Asynchronously stream dialogue turn events without blocking the event loop."""
+        queue: asyncio.Queue[Any] = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+        sentinel = object()
+
+        def _worker() -> None:
+            try:
+                for item in self.handle_turn_stream(
+                    user_text=user_text,
+                    language=language,
+                    speak_response=speak_response,
+                    now=now,
+                    tenant_id=tenant_id,
+                    robot_id=robot_id,
+                ):
+                    loop.call_soon_threadsafe(queue.put_nowait, item)
+            except Exception as exc:
+                loop.call_soon_threadsafe(
+                    queue.put_nowait,
+                    {"event": "error", "data": {"error": "INTERNAL_ERROR", "message": str(exc)}},
+                )
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, sentinel)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+        while True:
+            item = await queue.get()
+            if item is sentinel:
+                break
+            yield item

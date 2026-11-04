@@ -169,7 +169,46 @@ export function AssistantPageContent() {
     }
   }, [getHeaders]);
 
-  // Submit a typed question to the DH360 dialogue coordinator
+  // Helper to consume Server-Sent Events (SSE) streams incrementally
+  const consumeSseStream = async (
+    response: Response,
+    onEvent: (event: string, data: Record<string, unknown>) => void
+  ): Promise<void> => {
+    if (!response.body) return;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      let currentEvent = "message";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          currentEvent = "message";
+          continue;
+        }
+        if (trimmed.startsWith("event:")) {
+          currentEvent = trimmed.slice(6).trim();
+        } else if (trimmed.startsWith("data:")) {
+          const dataStr = trimmed.slice(5).trim();
+          try {
+            const parsed = JSON.parse(dataStr);
+            onEvent(currentEvent, parsed);
+          } catch {
+            // ignore malformed SSE line
+          }
+        }
+      }
+    }
+  };
+
+  // Submit a typed question to the DH360 dialogue coordinator with low-latency streaming
   const handleSendText = async (textToSend?: string) => {
     const query = (textToSend ?? input).trim();
     if (!query || isProcessing) return;
@@ -186,7 +225,21 @@ export function AssistantPageContent() {
       isPersonal: false,
     };
 
-    setMessages((prev) => [...prev, userMessage]);
+    const modelMessageId = nextMessageId("model");
+    let modelText = "";
+    let modelLang = language;
+    let isPrivilegedTurn = false;
+
+    const initialModelMessage: ChatMessage = {
+      id: modelMessageId,
+      role: "model",
+      text: "",
+      timestamp: currentTimestamp(),
+      language,
+      isPersonal: false,
+    };
+
+    setMessages((prev) => [...prev, userMessage, initialModelMessage]);
     setIsProcessing(true);
 
     try {
@@ -194,8 +247,10 @@ export function AssistantPageContent() {
       const headers = {
         ...baseHeaders,
         ...(activeRobot?.id ? { "X-Robot-ID": activeRobot.id } : {}),
+        Accept: "text/event-stream",
+        "Content-Type": "application/json",
       };
-      const res = await fetch("/api/dh360/dialogue/turn", {
+      const res = await fetch("/api/dh360/dialogue/turn/stream", {
         method: "POST",
         headers,
         body: JSON.stringify({
@@ -210,42 +265,99 @@ export function AssistantPageContent() {
         throw new Error(errData.detail || errData.message || `HTTP ${res.status}`);
       }
 
-      const data: DialogueTurnResponse = await res.json();
-      const isPrivilegedTurn = Boolean(data.metadata?.is_privileged);
-
-      if (isPrivilegedTurn) {
+      const contentType = res.headers.get("content-type") || "";
+      if (contentType.includes("text/event-stream") && res.body) {
+        await consumeSseStream(res, (event, data) => {
+          if (event === "metadata") {
+            if (data.is_privileged) {
+              isPrivilegedTurn = true;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === userMessage.id || m.id === modelMessageId
+                    ? { ...m, isPersonal: true }
+                    : m
+                )
+              );
+            }
+            if (typeof data.language === "string") {
+              modelLang = data.language as AssistantLanguage;
+            }
+          } else if (event === "token") {
+            const token = typeof data.token === "string" ? data.token : "";
+            modelText += token;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === modelMessageId
+                  ? { ...m, text: modelText, language: modelLang }
+                  : m
+              )
+            );
+          } else if (event === "done") {
+            if (typeof data.text === "string" && data.text) {
+              modelText = data.text;
+            }
+            if (typeof data.language === "string") {
+              modelLang = data.language as AssistantLanguage;
+            }
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === modelMessageId
+                  ? {
+                      ...m,
+                      text: modelText,
+                      language: modelLang,
+                      isPersonal: isPrivilegedTurn,
+                    }
+                  : m
+              )
+            );
+          } else if (event === "error") {
+            if (typeof data.message === "string") {
+              setTurnError(data.message);
+            }
+          }
+        });
+      } else {
+        const data: DialogueTurnResponse = await res.json();
+        modelText = data.text || "";
+        modelLang = (data.language as AssistantLanguage) || language;
+        isPrivilegedTurn = Boolean(data.metadata?.is_privileged);
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === userMessage.id ? { ...m, isPersonal: true } : m
+            m.id === modelMessageId
+              ? {
+                  ...m,
+                  text: modelText,
+                  language: modelLang,
+                  isPersonal: isPrivilegedTurn,
+                }
+              : m.id === userMessage.id
+              ? { ...m, isPersonal: isPrivilegedTurn }
+              : m
           )
         );
       }
 
-      const modelMessage: ChatMessage = {
-        id: nextMessageId("model"),
-        role: "model",
-        text: data.text,
-        timestamp: data.timestamp,
-        language: (data.language as AssistantLanguage) || language,
-        isPersonal: isPrivilegedTurn,
-      };
-
-      setMessages((prev) => [...prev, modelMessage]);
-      playLocalSpeech(data.text, (data.language as AssistantLanguage) || language);
+      if (modelText) {
+        playLocalSpeech(modelText, modelLang || language);
+      }
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : t("errorOccurred");
       setTurnError(errMsg);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: nextMessageId("error"),
-          role: "system",
-          text: `${t("errorOccurred")}: ${errMsg}`,
-          timestamp: currentTimestamp(),
-          language,
-          error: errMsg,
-        },
-      ]);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === modelMessageId
+            ? {
+                id: modelMessageId,
+                role: "system" as const,
+                text: `${t("errorOccurred")}: ${errMsg}`,
+                timestamp: currentTimestamp(),
+                language,
+                error: errMsg,
+              }
+            : m
+        )
+      );
     } finally {
       setIsProcessing(false);
     }
@@ -440,36 +552,118 @@ export function AssistantPageContent() {
           const headers = {
             ...baseHeaders,
             ...(activeRobot?.id ? { "X-Robot-ID": activeRobot.id } : {}),
+            Accept: "text/event-stream",
             "Content-Type": "application/json",
           };
 
-          const transcribeRes = await fetch("/api/dh360/dialogue/transcribe", {
+          const streamRes = await fetch("/api/dh360/dialogue/turn/browser-voice-stream", {
             method: "POST",
             headers,
             body: JSON.stringify({
               audio_base64: base64Audio,
               mime_type: recordedBlob.type || "audio/webm",
               language,
+              speak_response: audioEnabled,
             }),
           });
 
-          if (!transcribeRes.ok) {
-            const errData = await transcribeRes.json().catch(() => ({}));
-            throw new Error(errData.detail || errData.message || `HTTP ${transcribeRes.status}`);
+          if (!streamRes.ok) {
+            const errData = await streamRes.json().catch(() => ({}));
+            throw new Error(errData.detail || errData.message || `HTTP ${streamRes.status}`);
           }
 
-          const transcribeData: { text: string; language: string } = await transcribeRes.json();
-          const recognizedText = (transcribeData.text || "").trim();
+          let userMsgId = "";
+          let modelMessageId = "";
+          let modelText = "";
+          let modelLang = language;
+          let isPrivilegedTurn = false;
 
-          if (!recognizedText) {
-            setTurnError(
-              language === "bn"
-                ? "কোনো কথা শনাক্ত করা যায়নি। দয়া করে মাইক্রোফোনের কাছে এসে আবার বলুন।"
-                : "No intelligible speech detected. Please speak closer to your microphone."
-            );
-          } else {
-            // Automatically submit recognized query directly into the active conversation!
-            void handleSendText(recognizedText);
+          await consumeSseStream(streamRes, (event, data) => {
+            if (event === "user_transcribed") {
+              const text = typeof data.text === "string" ? data.text.trim() : "";
+              if (text) {
+                userMsgId = nextMessageId("user-voice");
+                modelMessageId = nextMessageId("model");
+                const userMsg: ChatMessage = {
+                  id: userMsgId,
+                  role: "user",
+                  text,
+                  timestamp: currentTimestamp(),
+                  language,
+                  isPersonal: false,
+                  isVoice: true,
+                };
+                const modelMsg: ChatMessage = {
+                  id: modelMessageId,
+                  role: "model",
+                  text: "",
+                  timestamp: currentTimestamp(),
+                  language,
+                  isPersonal: false,
+                  isVoice: true,
+                };
+                setMessages((prev) => [...prev, userMsg, modelMsg]);
+                setIsTranscribingBrowser(false);
+                setIsProcessing(true);
+              }
+            } else if (event === "metadata") {
+              if (data.is_privileged) {
+                isPrivilegedTurn = true;
+                if (userMsgId && modelMessageId) {
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === userMsgId || m.id === modelMessageId
+                        ? { ...m, isPersonal: true }
+                        : m
+                    )
+                  );
+                }
+              }
+              if (typeof data.language === "string") {
+                modelLang = data.language as AssistantLanguage;
+              }
+            } else if (event === "token") {
+              const token = typeof data.token === "string" ? data.token : "";
+              modelText += token;
+              if (modelMessageId) {
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === modelMessageId
+                      ? { ...m, text: modelText, language: modelLang }
+                      : m
+                  )
+                );
+              }
+            } else if (event === "done") {
+              if (typeof data.text === "string" && data.text) {
+                modelText = data.text;
+              }
+              if (typeof data.language === "string") {
+                modelLang = data.language as AssistantLanguage;
+              }
+              if (modelMessageId) {
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === modelMessageId
+                      ? {
+                          ...m,
+                          text: modelText,
+                          language: modelLang,
+                          isPersonal: isPrivilegedTurn,
+                        }
+                      : m
+                  )
+                );
+              }
+            } else if (event === "error") {
+              if (typeof data.message === "string") {
+                setTurnError(data.message);
+              }
+            }
+          });
+
+          if (modelText) {
+            playLocalSpeech(modelText, modelLang || language);
           }
         } catch (transcribeErr: unknown) {
           const msg =

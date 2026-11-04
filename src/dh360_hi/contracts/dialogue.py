@@ -274,6 +274,16 @@ class LLMProvider(Protocol):
         """
         ...
 
+    def generate_response_stream(
+        self,
+        prompt: str,
+        filtered_context: str,
+        language: SupportedLanguage,
+        session_history: list[DialogueTurn] | None = None,
+    ) -> Any:
+        """Stream chunks of the generated response incrementally for low-latency TTFT."""
+        ...
+
 
 @runtime_checkable
 class STTProvider(Protocol):
@@ -359,3 +369,15 @@ class MockLLMProvider:
                 first_fact = filtered_context.splitlines()[0]
                 return f"{prefix} তথ্য: {first_fact} | উত্তর: {prompt_clean}"
             return f"{prefix} উত্তর: {prompt_clean}"
+
+    def generate_response_stream(
+        self,
+        prompt: str,
+        filtered_context: str,
+        language: SupportedLanguage,
+        session_history: list[DialogueTurn] | None = None,
+    ) -> Any:
+        full = self.generate_response(prompt, filtered_context, language, session_history)
+        words = full.split(" ")
+        for i, w in enumerate(words):
+            yield w + (" " if i < len(words) - 1 else "")

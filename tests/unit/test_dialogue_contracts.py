@@ -63,6 +63,18 @@ class ConcreteLLMProvider:
             return f"বাংলা উত্তর: {prompt}"
         return f"English response: {prompt}"
 
+    def generate_response_stream(
+        self,
+        prompt: str,
+        filtered_context: str,
+        language: SupportedLanguage,
+        session_history: list[DialogueTurn] | None = None,
+    ) -> Any:
+        full = self.generate_response(prompt, filtered_context, language, session_history)
+        words = full.split(" ")
+        for i, w in enumerate(words):
+            yield w + (" " if i < len(words) - 1 else "")
+
 
 class IncompleteLLMProvider:
     """Provider missing required methods to verify runtime protocol checks."""

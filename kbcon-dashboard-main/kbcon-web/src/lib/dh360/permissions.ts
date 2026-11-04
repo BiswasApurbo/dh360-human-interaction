@@ -215,6 +215,20 @@ export const ALLOWED_DH360_RULES: RouteRule[] = [
     scope: "dialogue:interact",
   },
   {
+    name: "dialogue_turn_stream",
+    pattern: /^\/dialogue\/turn\/stream\/?$/,
+    allowedMethods: ["POST"],
+    minRole: "admin",
+    scope: "dialogue:interact",
+  },
+  {
+    name: "dialogue_turn_browser_voice_stream",
+    pattern: /^\/dialogue\/turn\/browser-voice-stream\/?$/,
+    allowedMethods: ["POST"],
+    minRole: "admin",
+    scope: "dialogue:interact",
+  },
+  {
     name: "dialogue_turn_voice",
     pattern: /^\/dialogue\/turn\/voice\/?$/,
     allowedMethods: ["POST"],

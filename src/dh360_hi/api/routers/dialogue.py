@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import json
 import logging
 import os
+import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from dh360_hi.api.dependencies import get_dialogue_coordinator
@@ -130,6 +134,46 @@ class DialogueTranscribeResponse(BaseModel):
     language: str = Field(description="Language of transcription.")
 
 
+class DialogueBrowserVoiceStreamRequest(BaseModel):
+    """Payload for single-shot browser voice audio streaming."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    audio_base64: StrictStr = Field(
+        ...,
+        min_length=1,
+        description="Base64-encoded audio payload from browser microphone.",
+    )
+    mime_type: StrictStr = Field(
+        default="audio/webm",
+        description="MIME type of recorded audio data.",
+    )
+    language: SupportedLanguage = Field(
+        default="bn",
+        description="Requested interaction language ('bn' or 'en').",
+    )
+    speak_response: bool = Field(
+        default=False,
+        description="Whether the edge robot should speak the answer via TTS.",
+    )
+
+
+_cached_transcribe_client: Any | None = None
+_cached_transcribe_key: str | None = None
+
+
+def get_transcribe_client(api_key: str) -> Any:
+    """Retrieve or initialize the cached GenAI client for audio transcription."""
+    global _cached_transcribe_client, _cached_transcribe_key
+    if _cached_transcribe_client is not None and _cached_transcribe_key == api_key:
+        return _cached_transcribe_client
+    from google import genai
+
+    _cached_transcribe_client = genai.Client(api_key=api_key)
+    _cached_transcribe_key = api_key
+    return _cached_transcribe_client
+
+
 def transcribe_audio_payload(
     audio_bytes: bytes,
     mime_type: str,
@@ -157,10 +201,9 @@ def transcribe_audio_payload(
 
     if gemini_key:
         try:
-            from google import genai
             from google.genai import types
 
-            client = genai.Client(api_key=gemini_key)
+            client = get_transcribe_client(gemini_key)
             lang_directive = "Bangla" if language_hint == "bn" else "English"
             prompt = (
                 f"Transcribe the spoken audio verbatim in {lang_directive} or English. "
@@ -231,6 +274,120 @@ async def handle_dialogue_turn(
         timestamp=turn.timestamp,
         language=turn.language,
         metadata=turn.metadata,
+    )
+
+
+@router.post(
+    "/turn/stream",
+    status_code=status.HTTP_200_OK,
+)
+async def handle_dialogue_turn_stream(
+    payload: DialogueTurnRequest,
+    request: Request,
+    _operator: OperatorPrincipal = _dialogue_interact,
+) -> StreamingResponse:
+    """Stream conversational response tokens incrementally via Server-Sent Events (SSE)."""
+    coordinator = get_dialogue_coordinator(request)
+    tenant_id = request.headers.get("X-Tenant-ID")
+
+    async def sse_event_generator():
+        try:
+            async for evt in coordinator.handle_turn_stream_async(
+                user_text=payload.text,
+                language=payload.language,
+                speak_response=payload.speak_response,
+                tenant_id=tenant_id,
+            ):
+                event_type = evt.get("event", "message")
+                event_data = json.dumps(evt.get("data", {}), ensure_ascii=False)
+                yield f"event: {event_type}\ndata: {event_data}\n\n"
+        except Exception as exc:
+            logger.exception("Error during turn streaming: %s", exc)
+            err_data = json.dumps({"error": "STREAM_ERROR", "message": str(exc)})
+            yield f"event: error\ndata: {err_data}\n\n"
+
+    return StreamingResponse(
+        sse_event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post(
+    "/turn/browser-voice-stream",
+    status_code=status.HTTP_200_OK,
+)
+async def handle_dialogue_browser_voice_stream(
+    payload: DialogueBrowserVoiceStreamRequest,
+    request: Request,
+    _operator: OperatorPrincipal = _dialogue_interact,
+) -> StreamingResponse:
+    """Transcribe browser voice audio and stream model response tokens in a single request."""
+    coordinator = get_dialogue_coordinator(request)
+    tenant_id = request.headers.get("X-Tenant-ID")
+
+    try:
+        audio_bytes = base64.b64decode(payload.audio_base64)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid base64 audio payload: {exc}",
+        ) from exc
+
+    async def sse_voice_generator():
+        # 1. Transcribe audio payload
+        try:
+            recognized_text = await asyncio.to_thread(
+                transcribe_audio_payload,
+                audio_bytes,
+                payload.mime_type,
+                payload.language,
+            )
+        except Exception as exc:
+            logger.warning("Browser voice transcription failed: %s", exc)
+            recognized_text = ""
+
+        # Emit user_transcribed event immediately so UI displays what user said
+        yield f"event: user_transcribed\ndata: {json.dumps({'text': recognized_text}, ensure_ascii=False)}\n\n"
+
+        if not recognized_text:
+            err_msg = (
+                "কোনো কথা শনাক্ত করা যায়নি। দয়া করে মাইক্রোফোনের কাছে এসে আবার বলুন।"
+                if payload.language == "bn"
+                else "No intelligible speech detected. Please speak closer to your microphone."
+            )
+            yield f"event: error\ndata: {json.dumps({'error': 'NO_SPEECH_DETECTED', 'message': err_msg}, ensure_ascii=False)}\n\n"
+            yield f"event: done\ndata: {json.dumps({'role': 'model', 'text': err_msg, 'language': payload.language, 'timestamp': time.time(), 'metadata': {'error': 'NO_SPEECH_DETECTED'}}, ensure_ascii=False)}\n\n"
+            return
+
+        # 2. Stream conversational dialogue tokens
+        try:
+            async for evt in coordinator.handle_turn_stream_async(
+                user_text=recognized_text,
+                language=payload.language,
+                speak_response=payload.speak_response,
+                tenant_id=tenant_id,
+            ):
+                event_type = evt.get("event", "message")
+                event_data = json.dumps(evt.get("data", {}), ensure_ascii=False)
+                yield f"event: {event_type}\ndata: {event_data}\n\n"
+        except Exception as exc:
+            logger.exception("Error during voice turn streaming: %s", exc)
+            err_data = json.dumps({"error": "STREAM_ERROR", "message": str(exc)})
+            yield f"event: error\ndata: {err_data}\n\n"
+
+    return StreamingResponse(
+        sse_voice_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

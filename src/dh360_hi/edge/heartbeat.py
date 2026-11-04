@@ -38,9 +38,9 @@ class EdgeHeartbeatClient:
         self,
         robot_id: str | None = None,
         central_url: str | None = None,
-        interval_seconds: float = 20.0,
-        min_backoff_seconds: float = 5.0,
-        max_backoff_seconds: float = 60.0,
+        interval_seconds: float = 15.0,
+        min_backoff_seconds: float = 3.0,
+        max_backoff_seconds: float = 20.0,
         on_config_synced: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         if not robot_id:
@@ -71,6 +71,7 @@ class EdgeHeartbeatClient:
         self._current_backoff = self.min_backoff
         self._was_offline = False
         self._synced_config: dict[str, Any] = {}
+        self._consecutive_failures = 0
 
     @property
     def is_running(self) -> bool:
@@ -137,7 +138,12 @@ class EdgeHeartbeatClient:
             payload["deviceId"] = headers["X-Device-ID"]
 
         try:
-            resp = await client.post(url, json=payload, headers=headers, timeout=6.0)
+            resp = await client.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=httpx.Timeout(10.0, connect=5.0),
+            )
             if resp.status_code == 200:
                 data = resp.json()
                 if self._was_offline:
@@ -202,10 +208,11 @@ class EdgeHeartbeatClient:
             return False
 
     async def _run_loop(self) -> None:
-        """Continuous heartbeat and reconnection loop with exponential backoff."""
+        """Continuous heartbeat and reconnection loop with resilient client refresh and backoff."""
         while self._running:
             try:
-                async with httpx.AsyncClient(timeout=8.0) as client:
+                # Open fresh HTTP client session to discard broken sockets on network interruptions
+                async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
                     while self._running:
                         if self.robot_id == "UNPROVISIONED":
                             await asyncio.sleep(self.interval_seconds)
@@ -216,12 +223,15 @@ class EdgeHeartbeatClient:
                             break
 
                         if success:
+                            self._consecutive_failures = 0
                             self._current_backoff = self.min_backoff
                             await asyncio.sleep(self.interval_seconds)
                         else:
-                            # Connection failed: back off exponentially to avoid hammering
+                            self._consecutive_failures += 1
+                            # Break inner loop so client and its socket pool are completely refreshed
                             logger.info(
-                                "Waiting %.1fs backoff before next heartbeat attempt...",
+                                "Heartbeat attempt failed (streak: %d). Refreshing HTTP client after %.1fs backoff...",
+                                self._consecutive_failures,
                                 self._current_backoff,
                             )
                             await asyncio.sleep(self._current_backoff)
@@ -229,8 +239,9 @@ class EdgeHeartbeatClient:
                                 self._current_backoff * 1.5,
                                 self.max_backoff,
                             )
+                            break
             except asyncio.CancelledError:
                 break
             except Exception as loop_exc:
-                logger.error("Error in heartbeat loop; refreshing client in 5s: %s", loop_exc)
-                await asyncio.sleep(5.0)
+                logger.error("Error in heartbeat loop; refreshing client in 3s: %s", loop_exc)
+                await asyncio.sleep(3.0)

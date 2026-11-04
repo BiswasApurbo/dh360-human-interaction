@@ -187,7 +187,10 @@ export async function handleDh360ProxyRequest(
   }
 
   // 7. Execute upstream fetch with appropriate timeout and client disconnect linking
-  const isSse = subpath === "/interaction/events" || accept?.includes("text/event-stream");
+  const isSse =
+    subpath === "/interaction/events" ||
+    subpath.includes("/stream") ||
+    accept?.includes("text/event-stream");
   const timeoutController = new AbortController();
   const timeoutMs = isSse ? 0 : 30000;
   let timeoutId: NodeJS.Timeout | null = null;

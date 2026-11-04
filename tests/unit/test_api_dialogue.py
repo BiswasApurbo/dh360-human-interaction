@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import secrets
 from typing import Any
 from unittest import mock
@@ -53,6 +54,41 @@ class FakeDialogueCoordinator:
             language=self.last_language,
             metadata={"source": "fake"},
         )
+
+    async def handle_turn_stream_async(
+        self,
+        user_text: str | None = None,
+        language: SupportedLanguage | None = None,
+        speak_response: bool = False,
+        now: float | None = None,
+        tenant_id: str | None = None,
+        robot_id: str | None = None,
+    ):
+        if self.raise_error is not None:
+            raise self.raise_error
+
+        self.last_user_text = user_text
+        self.last_language = language or "bn"
+        reply_text = f"Response to: {user_text}" if language == "en" else f"উত্তর: {user_text}"
+
+        yield {
+            "event": "metadata",
+            "data": {"user_text": user_text, "language": self.last_language},
+        }
+        yield {
+            "event": "token",
+            "data": {"token": reply_text},
+        }
+        yield {
+            "event": "done",
+            "data": {
+                "role": "model",
+                "text": reply_text,
+                "language": self.last_language,
+                "timestamp": 123456.0,
+                "metadata": {"source": "fake"},
+            },
+        }
 
     def close(self) -> None:
         self.closed = True
@@ -445,3 +481,59 @@ def test_dialogue_transcribe_unauthenticated(
             },
         )
         assert resp.status_code in (401, 403)
+
+
+def test_dialogue_turn_stream_sse_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /dialogue/turn/stream returns text/event-stream chunks."""
+    token = _configure_operator(monkeypatch, "dialogue:interact")
+    coordinator = FakeDialogueCoordinator()
+    app = create_app(dialogue_coordinator=coordinator)  # type: ignore[arg-type]
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/dialogue/turn/stream",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"text": "hello streaming", "language": "en"},
+        )
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers["content-type"]
+        body = resp.text
+        assert "event: metadata" in body
+        assert "event: token" in body
+        assert "event: done" in body
+        assert "Response to: hello streaming" in body
+
+
+def test_dialogue_browser_voice_stream_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /dialogue/turn/browser-voice-stream transcribes and streams in one shot."""
+    token = _configure_operator(monkeypatch, "dialogue:interact")
+    coordinator = FakeDialogueCoordinator()
+    app = create_app(dialogue_coordinator=coordinator)  # type: ignore[arg-type]
+
+    fake_audio = base64.b64encode(b"RIFFdummydata").decode("ascii")
+
+    with mock.patch(
+        "dh360_hi.api.routers.dialogue.transcribe_audio_payload",
+        return_value="রোবট কথা শুনছে",
+    ):
+        with TestClient(app) as client:
+            resp = client.post(
+                "/dialogue/turn/browser-voice-stream",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "audio_base64": fake_audio,
+                    "mime_type": "audio/webm",
+                    "language": "bn",
+                },
+            )
+            assert resp.status_code == 200
+            assert "text/event-stream" in resp.headers["content-type"]
+            body = resp.text
+            assert "event: user_transcribed" in body
+            assert "রোবট কথা শুনছে" in body
+            assert "event: done" in body
+
