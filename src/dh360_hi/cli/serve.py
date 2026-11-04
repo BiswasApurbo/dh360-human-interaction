@@ -250,6 +250,7 @@ def handle_serve(args: argparse.Namespace) -> int:
             tts_provider = ElivaGoogleTTSAdapter(
                 credentials_json=gtts_json or os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON"),
                 credentials_file=os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),
+                shared_capture=shared_capture,
             )
             effective_mode = "live"
 

@@ -52,15 +52,27 @@ class FakeSTTProvider:
 class FakeTTSProvider:
     """Mock TTS provider tracking playback calls."""
 
-    def __init__(self) -> None:
+    def __init__(self, on_speak_fn: Any = None) -> None:
         self.spoken_texts: list[str] = []
         self.interrupted = False
+        self._is_playing = False
+        self.on_speak_fn = on_speak_fn
+
+    def is_playing(self) -> bool:
+        return self._is_playing
 
     def speak(self, text: str, language: str = "bn", blocking: bool = False) -> None:
-        self.spoken_texts.append(text)
+        self._is_playing = True
+        try:
+            self.spoken_texts.append(text)
+            if self.on_speak_fn is not None:
+                self.on_speak_fn(text)
+        finally:
+            self._is_playing = False
 
     def interrupt(self) -> None:
         self.interrupted = True
+        self._is_playing = False
 
 
 # ==============================================================================
@@ -372,6 +384,172 @@ def test_coordinator_wake_word_and_follow_up_utterance_flow():
         assert "answering" in state_transitions
         assert coord.current_state == "idle"
         assert coord._is_active_voice_session is False
+
+    finally:
+        coord.close()
+
+
+def test_shared_capture_half_duplex_pause_and_resume():
+    """Verify SharedMicrophoneCapture drops audio, disables wake detector,
+    and clears buffers while speaker playback is active."""
+    wake_events = []
+
+    def mock_detect(chunk: bytes) -> WakeWordEvent | None:
+        if b"WAKE_PHRASE" in chunk:
+            return WakeWordEvent(detected=True, phrase="hey kb")
+        return None
+
+    detector = WakeWordDetector(detect_fn=mock_detect, cooldown_seconds=0.01)
+    capture = SharedMicrophoneCapture(
+        wake_detector=detector,
+        on_wake_word=lambda evt: wake_events.append(evt),
+        chunk_ms=30,
+        pre_roll_seconds=0.3,
+    )
+
+    # 1. Normal idle audio feeds pre-roll buffer
+    capture.feed_simulated_chunk(b"chunk1")
+    capture.feed_simulated_chunk(b"chunk2")
+    assert len(capture._pre_roll_buffer) == 2
+
+    # 2. Pause for speaker playback (half-duplex lock engaged)
+    capture.pause_for_playback()
+    assert capture.is_playback_active is True
+    # Buffer is purged immediately
+    assert len(capture._pre_roll_buffer) == 0
+    assert detector.is_enabled is False
+
+    # 3. Audio arriving while speaker is playing is dropped (not buffered, no wake trigger)
+    event = capture.feed_simulated_chunk(b"chunk_during_playback_WAKE_PHRASE")
+    assert event is None
+    assert len(wake_events) == 0
+    assert len(capture._pre_roll_buffer) == 0
+
+    # 4. Resume after speaker playback completes (half-duplex lock released)
+    capture.resume_after_playback()
+    assert capture.is_playback_active is False
+    assert len(capture._pre_roll_buffer) == 0  # Stale echo buffer cleared
+    assert detector.is_enabled is True
+
+    # 5. Audio arriving after playback completes is captured normally
+    event = capture.feed_simulated_chunk(b"user_speech_WAKE_PHRASE")
+    assert event is not None
+    assert event.phrase == "hey kb"
+    assert len(wake_events) == 1
+    assert len(capture._pre_roll_buffer) == 1
+
+
+def test_coordinator_prevents_microphone_listening_during_tts_playback():
+    """Verify DialogueCoordinator engages half-duplex lock during TTS playback,
+    preventing wake detection, self-hearing, and manual Robot Mic activation."""
+    bus = EventBus()
+    knowledge_svc = KnowledgeService(institution_type="education")
+    llm = MockLLMProvider()
+    stt = FakeSTTProvider("User spoke")
+
+    playback_active_during_speak = []
+    capture_ref = None
+    coord_ref = None
+
+    def on_speak_hook(text: str) -> None:
+        # Check half-duplex state while TTS is actively speaking
+        playback_active_during_speak.append(capture_ref.is_playback_active)
+        playback_active_during_speak.append(coord_ref.is_speaker_active)
+
+        # Attempt to feed microphone audio containing wake word while robot speaks -> must be ignored!
+        wake_evt = capture_ref.feed_simulated_chunk(b"WAKE_PHRASE_DURING_TTS")
+        assert wake_evt is None
+
+        # Attempt manual Robot Mic activation while robot speaks -> must be rejected with SPEAKER_ACTIVE!
+        busy_turn = coord_ref.handle_turn(user_text=None, language="en")
+        assert busy_turn.metadata.get("error") == "SPEAKER_ACTIVE"
+
+    tts = FakeTTSProvider(on_speak_fn=on_speak_hook)
+
+    def mock_detect(chunk: bytes) -> WakeWordEvent | None:
+        if b"WAKE_PHRASE" in chunk:
+            return WakeWordEvent(detected=True, phrase="hey kb")
+        return None
+
+    detector = WakeWordDetector(detect_fn=mock_detect, cooldown_seconds=0.01)
+    capture = SharedMicrophoneCapture(wake_detector=detector)
+    capture_ref = capture
+
+    coord = DialogueCoordinator(
+        event_bus=bus,
+        knowledge_service=knowledge_svc,
+        llm_provider=llm,
+        stt_provider=stt,
+        tts_provider=tts,
+        default_language="en",
+        shared_capture=capture,
+        inactivity_timeout_seconds=0.5,
+    )
+    coord_ref = coord
+    coord._set_state("idle")
+
+    try:
+        # Execute turn with speech playback
+        turn = coord.handle_turn(user_text="Tell me something", speak_response=True)
+        assert turn.role == "model"
+
+        # Verify half-duplex state was active during speak hook
+        assert len(playback_active_during_speak) == 2
+        assert playback_active_during_speak[0] is True  # capture.is_playback_active
+        assert playback_active_during_speak[1] is True  # coord.is_speaker_active
+
+        # After playback finishes, half-duplex lock is released and capture resumes
+        assert capture.is_playback_active is False
+        assert coord.is_speaker_active is False
+        assert coord.current_state == "listening"
+
+    finally:
+        coord.close()
+
+
+def test_tts_failure_and_interrupt_safely_resumes_capture():
+    """Verify that if TTS fails with an exception or is interrupted,
+    the microphone half-duplex lock is never left permanently engaged."""
+    bus = EventBus()
+    knowledge_svc = KnowledgeService(institution_type="education")
+    llm = MockLLMProvider()
+    stt = FakeSTTProvider("User spoke")
+
+    class FailingTTSProvider:
+        def __init__(self) -> None:
+            self._is_playing = False
+
+        def is_playing(self) -> bool:
+            return self._is_playing
+
+        def speak(self, text: str, language: str = "bn", blocking: bool = False) -> None:
+            raise RuntimeError("Hardware speaker disconnected during playback")
+
+        def interrupt(self) -> None:
+            pass
+
+    tts = FailingTTSProvider()
+    capture = SharedMicrophoneCapture(wake_detector=WakeWordDetector())
+
+    coord = DialogueCoordinator(
+        event_bus=bus,
+        knowledge_service=knowledge_svc,
+        llm_provider=llm,
+        stt_provider=stt,
+        tts_provider=tts,
+        default_language="en",
+        shared_capture=capture,
+    )
+    coord._set_state("idle")
+
+    try:
+        # Execute turn where TTS raises RuntimeError
+        turn = coord.handle_turn(user_text="Hello", speak_response=True)
+        assert turn.metadata.get("tts_error") is True
+
+        # Half-duplex lock MUST be safely released despite TTS failure!
+        assert capture.is_playback_active is False
+        assert coord.is_speaker_active is False
 
     finally:
         coord.close()

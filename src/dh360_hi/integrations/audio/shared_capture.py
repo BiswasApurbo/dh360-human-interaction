@@ -62,6 +62,7 @@ class SharedMicrophoneCapture:
         self._active_consumer_queue: queue.Queue[bytes | None] | None = None
         self._is_active_session: bool = False
         self._is_muted: bool = False
+        self._is_playback_active: bool = False
         self._is_hardware_available: bool = False
 
     @property
@@ -74,6 +75,12 @@ class SharedMicrophoneCapture:
         """Whether audio capture is muted."""
         with self._lock:
             return self._is_muted
+
+    @property
+    def is_playback_active(self) -> bool:
+        """Whether robot speaker playback is actively playing audio (half-duplex lock)."""
+        with self._lock:
+            return self._is_playback_active
 
     @property
     def is_hardware_available(self) -> bool:
@@ -131,9 +138,44 @@ class SharedMicrophoneCapture:
         with self._lock:
             self._is_muted = False
             self._pre_roll_buffer.clear()
-            if self.wake_detector is not None:
+            if not self._is_playback_active and self.wake_detector is not None:
                 self.wake_detector.enable()
         logger.info("SharedMicrophoneCapture: unmuted")
+
+    def pause_for_playback(self) -> None:
+        """Pause microphone capture, drop incoming chunks, and disable wake detection.
+
+        Enforces half-duplex audio ownership before TTS speaker playback starts.
+        Clears pre-roll buffers and drains active consumer queues to prevent
+        capturing or buffering the robot's own speaker output.
+        """
+        with self._lock:
+            self._is_playback_active = True
+            self._pre_roll_buffer.clear()
+            if self._active_consumer_queue is not None:
+                while not self._active_consumer_queue.empty():
+                    with contextlib.suppress(Exception):
+                        self._active_consumer_queue.get_nowait()
+            if self.wake_detector is not None:
+                self.wake_detector.disable()
+        logger.info("SharedMicrophoneCapture: paused capture for speaker playback (half-duplex lock engaged)")
+
+    def resume_after_playback(self) -> None:
+        """Resume microphone capture after speaker playback has completely finished.
+
+        Clears pre-roll buffers again to eliminate trailing acoustic room echo/reverberation
+        and re-enables wake detection if not muted.
+        """
+        with self._lock:
+            self._pre_roll_buffer.clear()
+            if self._active_consumer_queue is not None:
+                while not self._active_consumer_queue.empty():
+                    with contextlib.suppress(Exception):
+                        self._active_consumer_queue.get_nowait()
+            self._is_playback_active = False
+            if not self._is_muted and not self._is_active_session and self.wake_detector is not None:
+                self.wake_detector.enable()
+        logger.info("SharedMicrophoneCapture: resumed capture after speaker playback (half-duplex lock released)")
 
     def begin_active_session(self) -> queue.Queue[bytes | None]:
         """Switch pipeline from idle wake detection to active speech recognition.
@@ -148,10 +190,11 @@ class SharedMicrophoneCapture:
 
             consumer_queue: queue.Queue[bytes | None] = queue.Queue(maxsize=120)
 
-            # Pre-load pre-roll buffer chunks
-            for chunk in self._pre_roll_buffer:
-                with contextlib.suppress(queue.Full):
-                    consumer_queue.put_nowait(chunk)
+            # Pre-load pre-roll buffer chunks if not in playback pause
+            if not self._is_playback_active:
+                for chunk in self._pre_roll_buffer:
+                    with contextlib.suppress(queue.Full):
+                        consumer_queue.put_nowait(chunk)
 
             self._active_consumer_queue = consumer_queue
             logger.info(
@@ -171,7 +214,7 @@ class SharedMicrophoneCapture:
                     q.put_nowait(None)
 
             self._pre_roll_buffer.clear()
-            if not self._is_muted and self.wake_detector is not None:
+            if not self._is_muted and not self._is_playback_active and self.wake_detector is not None:
                 self.wake_detector.enable()
 
             logger.info(
@@ -185,7 +228,7 @@ class SharedMicrophoneCapture:
     def _process_chunk(self, chunk: bytes) -> WakeWordEvent | None:
         """Route single audio chunk according to active state."""
         with self._lock:
-            if self._is_muted:
+            if self._is_muted or self._is_playback_active:
                 return None
 
             # 1. Maintain circular pre-roll buffer

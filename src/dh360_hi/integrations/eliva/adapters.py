@@ -1259,6 +1259,9 @@ class ElivaGoogleTTSAdapter(TTSProvider):
         interrupt_fn: Callable[[], None] | None = None,
         is_playing_fn: Callable[[], bool] | None = None,
         client: Any | None = None,
+        shared_capture: Any | None = None,
+        on_playback_start: Callable[[], None] | None = None,
+        on_playback_stop: Callable[[], None] | None = None,
     ) -> None:
         """Initialize ElivaGoogleTTSAdapter without opening audio hardware streams."""
         self._credentials_file = credentials_file
@@ -1269,9 +1272,30 @@ class ElivaGoogleTTSAdapter(TTSProvider):
         self._interrupt_fn = interrupt_fn
         self._is_playing_fn = is_playing_fn
         self._client = client
+        self._shared_capture = shared_capture
+        self._on_playback_start = on_playback_start
+        self._on_playback_stop = on_playback_stop
         self._is_playing: bool = False
         self._interrupted: bool = False
         self._lock = threading.Lock()
+
+    def _notify_playback_start(self) -> None:
+        """Pause capture and wake detection before the first audio frame is output to speaker."""
+        if self._shared_capture is not None and hasattr(self._shared_capture, "pause_for_playback"):
+            with contextlib.suppress(Exception):
+                self._shared_capture.pause_for_playback()
+        if self._on_playback_start is not None:
+            with contextlib.suppress(Exception):
+                self._on_playback_start()
+
+    def _notify_playback_stop(self) -> None:
+        """Resume capture and clear buffers after audio playback has completely finished or aborted."""
+        if self._shared_capture is not None and hasattr(self._shared_capture, "resume_after_playback"):
+            with contextlib.suppress(Exception):
+                self._shared_capture.resume_after_playback()
+        if self._on_playback_stop is not None:
+            with contextlib.suppress(Exception):
+                self._on_playback_stop()
 
     def is_playing(self) -> bool:
         """Return True if audio playback is currently in progress."""
@@ -1316,6 +1340,8 @@ class ElivaGoogleTTSAdapter(TTSProvider):
                 type(exc).__name__,
             )
 
+        self._notify_playback_stop()
+
     def speak(
         self,
         text: str,
@@ -1345,6 +1371,7 @@ class ElivaGoogleTTSAdapter(TTSProvider):
         try:
             # 1. Injected speak callable (testing / custom audio player)
             if self._speak_fn is not None:
+                self._notify_playback_start()
                 try:
                     self._speak_fn(
                         text=text,
@@ -1355,6 +1382,7 @@ class ElivaGoogleTTSAdapter(TTSProvider):
                     with self._lock:
                         if blocking or self._interrupted:
                             self._is_playing = False
+                    self._notify_playback_stop()
                 return
 
             # 2. Check dependencies lazily
@@ -1421,6 +1449,8 @@ class ElivaGoogleTTSAdapter(TTSProvider):
             with self._lock:
                 if blocking or self._interrupted:
                     self._is_playing = False
+            if blocking or self._interrupted:
+                self._notify_playback_stop()
 
     def _resolve_voice(self, language: SupportedLanguage) -> tuple[str, str]:
         """Resolve voice name and BCP-47 language code."""
@@ -1493,6 +1523,9 @@ class ElivaGoogleTTSAdapter(TTSProvider):
             if self._interrupted:
                 return
 
+        # Before playing audio frames through physical speaker, pause microphone capture (half-duplex lock)
+        self._notify_playback_start()
+
         # Play audio buffer via sounddevice
         try:
             import numpy as np  # type: ignore[import-untyped]
@@ -1510,3 +1543,6 @@ class ElivaGoogleTTSAdapter(TTSProvider):
                 device_type="speaker",
                 provider_name="google_tts",
             ) from exc
+        finally:
+            if blocking or self._interrupted:
+                self._notify_playback_stop()

@@ -425,6 +425,22 @@ async def handle_dialogue_voice_turn(
     coordinator = get_dialogue_coordinator(request)
     tenant_id = request.headers.get("X-Tenant-ID")
 
+    # Prevent manual Robot Mic activation while robot speaker is active (half-duplex guard)
+    if getattr(coordinator, "is_speaker_active", False):
+        busy_msg = (
+            "রোবট বর্তমানে কথা বলছে। অনুগ্রহ করে অপেক্ষা করুন।"
+            if (payload.language or "bn") == "bn"
+            else "Robot is currently speaking. Please wait until speech finishes."
+        )
+        return DialogueVoiceTurnResponse(
+            user_text="",
+            role="model",
+            text=busy_msg,
+            timestamp=time.time(),
+            language=payload.language or "bn",
+            metadata={"error": "SPEAKER_ACTIVE"},
+        )
+
     try:
         turn = await coordinator.handle_turn_async(
             user_text=None,

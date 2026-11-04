@@ -160,6 +160,24 @@ class DialogueCoordinator:
             return self._is_microphone_muted
 
     @property
+    def is_speaker_active(self) -> bool:
+        """Whether the robot speaker is currently active (playing audio or synthesizing)."""
+        with self._state_lock:
+            if self._current_state in ("answering", "speaking"):
+                return True
+        if self._shared_capture is not None:
+            with contextlib.suppress(Exception):
+                if getattr(self._shared_capture, "is_playback_active", False) is True:
+                    return True
+        if self._tts_provider is not None:
+            with contextlib.suppress(Exception):
+                if hasattr(self._tts_provider, "is_playing"):
+                    playing = self._tts_provider.is_playing()
+                    if playing is True:
+                        return True
+        return False
+
+    @property
     def last_user_query(self) -> str:
         """Most recent transcribed or received user prompt text."""
         with self._state_lock:
@@ -250,9 +268,9 @@ class DialogueCoordinator:
             if self._is_microphone_muted:
                 logger.debug("DialogueCoordinator: wake word detected but microphone is muted")
                 return
-            if self._current_state in ("thinking", "answering", "speaking"):
+            if self._current_state in ("thinking", "answering", "speaking") or self.is_speaker_active:
                 logger.debug(
-                    "DialogueCoordinator: wake word detected during active %s; ignoring",
+                    "DialogueCoordinator: wake word detected during active %s or speaker playback; ignoring",
                     self._current_state,
                 )
                 return
@@ -297,7 +315,7 @@ class DialogueCoordinator:
                     break
                 state = self._current_state
 
-            if state in ("thinking", "answering", "speaking"):
+            if state in ("thinking", "answering", "speaking") or self.is_speaker_active:
                 time.sleep(0.1)
                 continue
 
@@ -637,6 +655,9 @@ class DialogueCoordinator:
         if self._tts_provider is not None:
             with contextlib.suppress(Exception):
                 self._tts_provider.interrupt()
+        if self._shared_capture is not None and hasattr(self._shared_capture, "resume_after_playback"):
+            with contextlib.suppress(Exception):
+                self._shared_capture.resume_after_playback()
         if self._stt_provider is not None:
             with contextlib.suppress(Exception):
                 if hasattr(self._stt_provider, "interrupt"):
@@ -741,10 +762,9 @@ class DialogueCoordinator:
                 ):
                     target_lang = "bn"
 
-        # Fix F-02: Serialize turn execution to prevent concurrent interleaving
-        with self._turn_lock:
-            # 1. Check microphone mute state for voice turns
-            if user_text is None and self.is_microphone_muted:
+        # Fast non-blocking check: prevent voice turn if mic is muted or speaker is active
+        if user_text is None:
+            if self.is_microphone_muted:
                 muted_msg = (
                     "মাইক্রোফোন মিউট করা আছে।"
                     if target_lang == "bn"
@@ -757,6 +777,51 @@ class DialogueCoordinator:
                     language=target_lang,
                     metadata={"error": "MICROPHONE_MUTED"},
                 )
+            if self.is_speaker_active:
+                busy_msg = (
+                    "রোবট বর্তমানে কথা বলছে। অনুগ্রহ করে অপেক্ষা করুন।"
+                    if target_lang == "bn"
+                    else "Robot is currently speaking. Please wait until speech finishes."
+                )
+                logger.info("DialogueCoordinator: voice turn rejected because speaker is actively playing")
+                return DialogueTurn(
+                    role="model",
+                    text=busy_msg,
+                    language=target_lang,
+                    metadata={"error": "SPEAKER_ACTIVE"},
+                )
+
+        # Fix F-02: Serialize turn execution to prevent concurrent interleaving
+        with self._turn_lock:
+            # 1. Check microphone mute state and speaker active state for voice turns
+            if user_text is None:
+                if self.is_microphone_muted:
+                    muted_msg = (
+                        "মাইক্রোফোন মিউট করা আছে।"
+                        if target_lang == "bn"
+                        else "Microphone is currently muted."
+                    )
+                    self._set_state("muted")
+                    return DialogueTurn(
+                        role="model",
+                        text=muted_msg,
+                        language=target_lang,
+                        metadata={"error": "MICROPHONE_MUTED"},
+                    )
+
+                if self.is_speaker_active:
+                    busy_msg = (
+                        "রোবট বর্তমানে কথা বলছে। অনুগ্রহ করে অপেক্ষা করুন।"
+                        if target_lang == "bn"
+                        else "Robot is currently speaking. Please wait until speech finishes."
+                    )
+                    logger.info("DialogueCoordinator: voice turn rejected because speaker is actively playing")
+                    return DialogueTurn(
+                        role="model",
+                        text=busy_msg,
+                        language=target_lang,
+                        metadata={"error": "SPEAKER_ACTIVE"},
+                    )
 
             # 2. Obtain input text (STT transcription or direct text)
             prompt_text = (user_text or "").strip() if user_text is not None else None
@@ -1155,6 +1220,9 @@ class DialogueCoordinator:
                 if self._stt_provider is not None:
                     with contextlib.suppress(Exception):
                         self._stt_provider.hold()
+                if self._shared_capture is not None and hasattr(self._shared_capture, "pause_for_playback"):
+                    with contextlib.suppress(Exception):
+                        self._shared_capture.pause_for_playback()
 
                 try:
                     self._tts_provider.speak(
@@ -1168,6 +1236,9 @@ class DialogueCoordinator:
                     logger.exception("DialogueCoordinator: unhandled error in TTS: %s", exc)
                     metadata["tts_error"] = True
                 finally:
+                    if self._shared_capture is not None and hasattr(self._shared_capture, "resume_after_playback"):
+                        with contextlib.suppress(Exception):
+                            self._shared_capture.resume_after_playback()
                     if self._stt_provider is not None:
                         with contextlib.suppress(Exception):
                             self._stt_provider.release()
@@ -1645,10 +1716,35 @@ class DialogueCoordinator:
             }
 
             if speak_response and not error_code and self._tts_provider:
+                def _safe_stream_speak():
+                    if self._shared_capture is not None and hasattr(self._shared_capture, "pause_for_playback"):
+                        with contextlib.suppress(Exception):
+                            self._shared_capture.pause_for_playback()
+                    if self._stt_provider is not None:
+                        with contextlib.suppress(Exception):
+                            self._stt_provider.hold()
+                    self._set_state("answering", response_text=full_response_text)
+                    try:
+                        self._tts_provider.speak(full_response_text, target_lang, blocking=True)
+                    except Exception as e:
+                        logger.warning("Stream TTS speak failed: %s", e)
+                    finally:
+                        if self._shared_capture is not None and hasattr(self._shared_capture, "resume_after_playback"):
+                            with contextlib.suppress(Exception):
+                                self._shared_capture.resume_after_playback()
+                        if self._stt_provider is not None:
+                            with contextlib.suppress(Exception):
+                                self._stt_provider.release()
+                        with self._state_lock:
+                            final_st = "muted" if self._is_microphone_muted else "listening"
+                        self._set_state(final_st)
+                        if final_st == "listening":
+                            self._arm_inactivity_timer()
+
                 threading.Thread(
-                    target=self._tts_provider.speak,
-                    args=(full_response_text, target_lang),
+                    target=_safe_stream_speak,
                     daemon=True,
+                    name="KBCON-StreamTTS",
                 ).start()
 
     async def handle_turn_stream_async(
