@@ -860,18 +860,25 @@ class HumanInteractionService:
             except Exception:
                 logger.exception("Error releasing enrollment capture source")
 
-    def get_latest_enrollment_frame(self) -> Frame | None:
-        """Return the latest camera frame captured during an active enrollment session."""
+    def get_latest_camera_frame(self) -> Frame | None:
+        """Return the latest camera frame from the running perception runtime or enrollment controller."""
+        rt = getattr(self, "_runtime", None)
+        if rt is not None and getattr(rt, "is_running", False):
+            frame = rt.latest_frame
+            if frame is not None:
+                return frame
         with self._lock:
-            if self._enrollment_controller is None or not self._enrollment_controller.is_active:
-                return None
-            if self.runtime is not None and self.runtime.is_running:
-                frame = self.runtime.latest_frame
-                if frame is not None:
-                    return frame
-            if self._latest_enrollment_frame is not None:
-                return self._latest_enrollment_frame
-            return None
+            return self._latest_enrollment_frame
+
+    def get_latest_enrollment_frame(self) -> Frame | None:
+        """Return the latest camera frame captured during an active enrollment session or continuous runtime."""
+        rt = getattr(self, "_runtime", None)
+        if rt is not None and getattr(rt, "is_running", False):
+            frame = rt.latest_frame
+            if frame is not None:
+                return frame
+        with self._lock:
+            return self._latest_enrollment_frame
 
     def get_enrollment_progress(self) -> EnrollmentProgressDTO | None:
         """Retrieve current progress of the active enrollment session, if any."""

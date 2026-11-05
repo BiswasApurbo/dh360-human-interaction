@@ -65,6 +65,8 @@ function EnrollmentDialogContent({
   const [sessionActive, setSessionActive] = useState(false);
   const [progress, setProgress] = useState<EnrollmentProgress | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [useStream, setUseStream] = useState(true);
   const [loading, setLoading] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [committing, setCommitting] = useState(false);
@@ -74,6 +76,7 @@ function EnrollmentDialogContent({
 
   const prevUrlRef = useRef<string | null>(null);
   const isSteppingRef = useRef(false);
+  const inFlightRef = useRef(false);
   const stepTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isPausedRef = useRef(false);
   const sessionActiveRef = useRef(false);
@@ -107,9 +110,30 @@ function EnrollmentDialogContent({
     return headers;
   }, [user]);
 
-  // Fetch current camera preview frame
+  // Keep Firebase ID token synced for direct image stream authentication
+  useEffect(() => {
+    let active = true;
+    if (user) {
+      user
+        .getIdToken()
+        .then((tok) => {
+          if (active) setAuthToken(tok);
+        })
+        .catch(() => {});
+    }
+    return () => {
+      active = false;
+    };
+  }, [user]);
+
+  const streamUrl = authToken
+    ? `/api/dh360/persons/${person.person_id}/enrollment/sessions/stream?token=${encodeURIComponent(authToken)}`
+    : null;
+
+  // Fetch current camera preview frame (high-speed fallback)
   const fetchPreviewFrame = useCallback(async () => {
-    if (!user || authLoading || !sessionActiveRef.current) return;
+    if (!user || authLoading || inFlightRef.current) return;
+    inFlightRef.current = true;
     try {
       const headers = await getHeaders();
       const res = await fetch(
@@ -127,23 +151,21 @@ function EnrollmentDialogContent({
       }
     } catch {
       // Preview stream frame temporarily unavailable
+    } finally {
+      inFlightRef.current = false;
     }
   }, [user, authLoading, person.person_id, getHeaders]);
 
-  // Polling loop for live preview frames
+  // Fast polling fallback loop (25 FPS) when MJPEG stream is disabled or unsupported
   useEffect(() => {
-    if (!sessionActive || !user || authLoading) return;
-    const timeout = setTimeout(() => {
-      void fetchPreviewFrame();
-    }, 50);
+    if (useStream || !user || authLoading) return;
     const interval = setInterval(() => {
       void fetchPreviewFrame();
-    }, 600);
+    }, 40);
     return () => {
-      clearTimeout(timeout);
       clearInterval(interval);
     };
-  }, [sessionActive, user, authLoading, fetchPreviewFrame]);
+  }, [useStream, user, authLoading, fetchPreviewFrame]);
 
   // Cleanup preview object URLs on unmount
   useEffect(() => {
@@ -597,7 +619,18 @@ function EnrollmentDialogContent({
 
               {/* Live Camera Preview with Head-Up Display (HUD) */}
               <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-slate-950 border border-sky-300/60 shadow-inner flex items-center justify-center group">
-                {previewUrl ? (
+                {useStream && streamUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={streamUrl}
+                    alt="Robot camera live stream"
+                    className="h-full w-full object-cover"
+                    onError={() => {
+                      setUseStream(false);
+                      void fetchPreviewFrame();
+                    }}
+                  />
+                ) : previewUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={previewUrl}

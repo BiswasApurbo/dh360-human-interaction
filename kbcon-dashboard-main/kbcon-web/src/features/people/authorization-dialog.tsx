@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import {
   AlertCircle,
@@ -58,6 +58,30 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
   const [session, setSession] = useState<AuthorizationSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [useStream, setUseStream] = useState(true);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const prevUrlRef = useRef<string | null>(null);
+  const inFlightRef = useRef(false);
+
+  useEffect(() => {
+    let active = true;
+    if (user) {
+      user
+        .getIdToken()
+        .then((t) => {
+          if (active) setAuthToken(t);
+        })
+        .catch(() => {});
+    }
+    return () => {
+      active = false;
+    };
+  }, [user]);
+
+  const streamUrl = authToken
+    ? `/api/dh360/authorization/sessions/stream?token=${encodeURIComponent(authToken)}`
+    : null;
 
   const getHeaders = useCallback(async (): Promise<HeadersInit> => {
     const headers: Record<string, string> = {
@@ -108,6 +132,47 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
       clearInterval(interval);
     };
   }, [user, authLoading, fetchCurrentSession]);
+
+  const fetchPreviewFrame = useCallback(async () => {
+    if (!user || authLoading || inFlightRef.current) return;
+    inFlightRef.current = true;
+    try {
+      const headers = await getHeaders();
+      const res = await fetch("/api/dh360/authorization/sessions/preview", { headers });
+      if (res.ok) {
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        if (prevUrlRef.current) {
+          URL.revokeObjectURL(prevUrlRef.current);
+        }
+        prevUrlRef.current = url;
+        setPreviewUrl(url);
+      }
+    } catch {
+      // preview frame unavailable
+    } finally {
+      inFlightRef.current = false;
+    }
+  }, [user, authLoading, getHeaders]);
+
+  // Fast polling fallback loop (25 FPS) when MJPEG stream is disabled or unsupported
+  useEffect(() => {
+    if (useStream || !user || authLoading) return;
+    const interval = setInterval(() => {
+      void fetchPreviewFrame();
+    }, 40);
+    return () => {
+      clearInterval(interval);
+    };
+  }, [useStream, user, authLoading, fetchPreviewFrame]);
+
+  useEffect(() => {
+    return () => {
+      if (prevUrlRef.current) {
+        URL.revokeObjectURL(prevUrlRef.current);
+      }
+    };
+  }, []);
 
   const isSessionRunning = Boolean(
     session &&
@@ -324,6 +389,44 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
               <span>{error}</span>
             </div>
           )}
+
+          {/* Live Camera Viewport with Cybernetic Reticle */}
+          <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-slate-950 border border-sky-300/60 shadow-inner flex items-center justify-center group">
+            {useStream && streamUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={streamUrl}
+                alt="Live authorization camera stream"
+                className="h-full w-full object-cover"
+                onError={() => {
+                  setUseStream(false);
+                  void fetchPreviewFrame();
+                }}
+              />
+            ) : previewUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={previewUrl}
+                alt="Robot camera preview"
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <div className="text-center p-4">
+                <Loader2 className="mx-auto size-8 animate-spin text-sky-400 mb-2" />
+                <p className="text-xs font-medium text-sky-200">
+                  Connecting to live camera feed...
+                </p>
+              </div>
+            )}
+
+            {/* Live Indicator Badge */}
+            <div className="absolute top-3 left-3 flex items-center gap-1.5 rounded-xl bg-black/65 px-2.5 py-1 backdrop-blur-md pointer-events-auto border border-white/10 shadow-sm">
+              <span className="size-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-[11px] font-semibold text-white tracking-wide">
+                LIVE CAMERA (20+ FPS)
+              </span>
+            </div>
+          </div>
 
           <p className="text-sm text-sky-800/90 leading-relaxed">
             {t("authDesc")}

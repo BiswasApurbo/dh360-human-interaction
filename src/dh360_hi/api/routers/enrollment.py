@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
 from dh360_hi.api.security import (
@@ -214,6 +214,103 @@ def get_enrollment_preview_frame(
         content=encoded.tobytes(),
         media_type="image/jpeg",
         headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
+
+
+@router.get("/{person_id}/enrollment/sessions/stream")
+async def stream_enrollment_preview(
+    person_id: str,
+    request: Request,
+    _operator: OperatorPrincipal = _enrollment_manage,
+) -> StreamingResponse:
+    """Stream live server camera frames as multipart/x-mixed-replace JPEG stream (15-30 FPS)."""
+    import asyncio
+    import cv2
+
+    service = _get_service(request)
+    tenant_id = request.headers.get("X-Tenant-ID")
+    _require_person(service, person_id, tenant_id=tenant_id)
+
+    async def frame_generator():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+
+                frame_getter = getattr(service, "get_latest_camera_frame", None) or getattr(service, "get_latest_enrollment_frame", None)
+                frame = frame_getter() if callable(frame_getter) else None
+                if frame is not None and getattr(frame, "image", None) is not None:
+                    img = frame.image.copy()
+                    h, w = img.shape[:2]
+                    if w > 640:
+                        new_w = 640
+                        new_h = int(h * (640 / w))
+                        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+                        sx = new_w / w
+                        sy = new_h / h
+                    else:
+                        sx = 1.0
+                        sy = 1.0
+
+                    # Draw face detection bounding box and HUD guide if detected
+                    progress = service.get_enrollment_progress()
+                    if progress is not None and progress.face_detected and progress.face_bbox:
+                        try:
+                            bx, by, bw, bh = progress.face_bbox
+                            rx = int(bx * sx)
+                            ry = int(by * sy)
+                            rw = int(bw * sx)
+                            rh = int(bh * sy)
+
+                            corner_len = max(10, int(min(rw, rh) * 0.18))
+                            color = (248, 189, 56)  # High-visibility sky blue
+                            thickness = 2
+
+                            cv2.line(img, (rx, ry), (rx + corner_len, ry), color, thickness)
+                            cv2.line(img, (rx, ry), (rx, ry + corner_len), color, thickness)
+                            cv2.line(img, (rx + rw, ry), (rx + rw - corner_len, ry), color, thickness)
+                            cv2.line(img, (rx + rw, ry), (rx + rw, ry + corner_len), color, thickness)
+                            cv2.line(img, (rx, ry + rh), (rx + corner_len, ry + rh), color, thickness)
+                            cv2.line(img, (rx, ry + rh), (rx, ry + rh - corner_len), color, thickness)
+                            cv2.line(img, (rx + rw, ry + rh), (rx + rw - corner_len, ry + rh), color, thickness)
+                            cv2.line(img, (rx + rw, ry + rh), (rx + rw, ry + rh - corner_len), color, thickness)
+
+                            stage = (progress.current_direction or "front").upper()
+                            tag = f"FACE DETECTED [{stage}]"
+                            cv2.putText(
+                                img,
+                                tag,
+                                (rx + 4, max(18, ry - 6)),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.45,
+                                color,
+                                1,
+                                cv2.LINE_AA,
+                            )
+                        except Exception:
+                            pass
+
+                    success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 68])
+                    if success:
+                        chunk = (
+                            b"--frame\r\n"
+                            b"Content-Type: image/jpeg\r\n\r\n"
+                            + encoded.tobytes()
+                            + b"\r\n"
+                        )
+                        yield chunk
+                await asyncio.sleep(0.04)  # ~25 FPS delivery rate
+        except asyncio.CancelledError:
+            pass
+
+    return StreamingResponse(
+        frame_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

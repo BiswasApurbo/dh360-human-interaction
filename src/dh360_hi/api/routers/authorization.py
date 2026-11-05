@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import Response, StreamingResponse
 
 from dh360_hi.api.security import OperatorPrincipal, OperatorScope, require_scope
 from dh360_hi.edge.authorization_controller import AuthorizationController
@@ -25,6 +26,178 @@ def _get_controller(request: Request) -> AuthorizationController:
             detail="Authorization controller is not enabled or initialized",
         )
     return controller
+
+
+def _render_auth_hud(img: Any, session: Any) -> None:
+    """Render high-tech cybernetic reticle and authorization status badge onto frame."""
+    import cv2
+
+    h, w = img.shape[:2]
+    cx, cy = w // 2, h // 2
+
+    # Center cybernetic crosshair reticle
+    reticle_color = (255, 200, 100)  # Subtle cyan-blue
+    reticle_len = 16
+    reticle_gap = 6
+    cv2.line(img, (cx - reticle_len - reticle_gap, cy), (cx - reticle_gap, cy), reticle_color, 1)
+    cv2.line(img, (cx + reticle_gap, cy), (cx + reticle_len + reticle_gap, cy), reticle_color, 1)
+    cv2.line(img, (cx, cy - reticle_len - reticle_gap), (cx, cy - reticle_gap), reticle_color, 1)
+    cv2.line(img, (cx, cy + reticle_gap), (cx, cy + reticle_len + reticle_gap), reticle_color, 1)
+    cv2.circle(img, (cx, cy), 28, reticle_color, 1)
+
+    status_str = "STANDBY"
+    tag_color = (200, 200, 200)
+    if session is not None:
+        status_val = getattr(session, "status", None)
+        status_name = status_val.value if hasattr(status_val, "value") else str(status_val)
+        if status_name in ("active", "searching"):
+            status_str = "SEARCHING FOR FACE"
+            tag_color = (248, 189, 56)
+        elif status_name == "processing_face":
+            status_str = "ANALYZING BIOMETRICS"
+            tag_color = (0, 215, 255)
+        elif status_name == "authorized":
+            name = getattr(session, "display_name", None) or "AUTHORIZED PERSONNEL"
+            status_str = f"AUTHORIZED: {name.upper()}"
+            tag_color = (46, 204, 113)
+        elif status_name in ("unknown", "uncertain", "not_authorized"):
+            status_str = "ACCESS RESTRICTED: UNKNOWN"
+            tag_color = (70, 70, 235)
+        elif status_name == "no_face":
+            status_str = "NO FACE IN FIELD OF VIEW"
+            tag_color = (180, 180, 180)
+        else:
+            status_str = status_name.upper()
+
+    overlay = img.copy()
+    cv2.rectangle(overlay, (0, 0), (w, 36), (20, 24, 33), -1)
+    cv2.addWeighted(overlay, 0.65, img, 0.35, 0, img)
+
+    cv2.putText(
+        img,
+        "KBCON BIOMETRIC SECURITY",
+        (12, 23),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.48,
+        (220, 220, 220),
+        1,
+        cv2.LINE_AA,
+    )
+    badge_text = f"[{status_str}]"
+    text_size = cv2.getTextSize(badge_text, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)[0]
+    badge_x = max(w - text_size[0] - 12, 200)
+    cv2.putText(
+        img,
+        badge_text,
+        (badge_x, 23),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.45,
+        tag_color,
+        1,
+        cv2.LINE_AA,
+    )
+
+
+@router.get("/authorization/sessions/preview")
+def get_authorization_preview_frame(
+    request: Request,
+    _operator: OperatorPrincipal = _authorization_manage,
+) -> Response:
+    """Return the latest camera frame as a JPEG preview for authorization."""
+    service = getattr(request.app.state, "service", None)
+    if service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Application service is not initialized",
+        )
+    frame_getter = getattr(service, "get_latest_camera_frame", None) or getattr(service, "get_latest_enrollment_frame", None)
+    frame = frame_getter() if callable(frame_getter) else None
+    if frame is None or getattr(frame, "image", None) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No preview frame available",
+        )
+    import cv2
+
+    img = frame.image.copy()
+    h, w = img.shape[:2]
+    if w > 640:
+        new_w = 640
+        new_h = int(h * (640 / w))
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    controller = getattr(request.app.state, "authorization_controller", None)
+    current_session = controller.get_current() if controller else None
+    _render_auth_hud(img, current_session)
+
+    success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to encode preview frame",
+        )
+    return Response(
+        content=encoded.tobytes(),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
+
+
+@router.get("/authorization/sessions/stream")
+async def stream_authorization_preview(
+    request: Request,
+    _operator: OperatorPrincipal = _authorization_manage,
+) -> StreamingResponse:
+    """Stream live server camera frames with authorization HUD as multipart/x-mixed-replace (15-30 FPS)."""
+    service = getattr(request.app.state, "service", None)
+    if service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Application service is not initialized",
+        )
+    import asyncio
+    import cv2
+
+    controller = getattr(request.app.state, "authorization_controller", None)
+
+    async def frame_generator():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                frame_getter = getattr(service, "get_latest_camera_frame", None) or getattr(service, "get_latest_enrollment_frame", None)
+                frame = frame_getter() if callable(frame_getter) else None
+                if frame is not None and getattr(frame, "image", None) is not None:
+                    img = frame.image.copy()
+                    h, w = img.shape[:2]
+                    if w > 640:
+                        new_w = 640
+                        new_h = int(h * (640 / w))
+                        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+                    current_session = controller.get_current() if controller else None
+                    _render_auth_hud(img, current_session)
+                    success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 68])
+                    if success:
+                        chunk = (
+                            b"--frame\r\n"
+                            b"Content-Type: image/jpeg\r\n\r\n"
+                            + encoded.tobytes()
+                            + b"\r\n"
+                        )
+                        yield chunk
+                await asyncio.sleep(0.04)  # ~25 FPS
+        except asyncio.CancelledError:
+            pass
+
+    return StreamingResponse(
+        frame_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post(

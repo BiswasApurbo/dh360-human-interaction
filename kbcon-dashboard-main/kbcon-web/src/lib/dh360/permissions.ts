@@ -100,6 +100,13 @@ export const ALLOWED_DH360_RULES: RouteRule[] = [
     scope: "enrollment:manage",
   },
   {
+    name: "enrollment_stream",
+    pattern: /^\/persons\/([A-Za-z0-9_-]+)\/enrollment\/sessions\/stream\/?$/,
+    allowedMethods: ["GET"],
+    minRole: "admin",
+    scope: "enrollment:manage",
+  },
+  {
     name: "enrollment_session_step",
     pattern: /^\/persons\/([A-Za-z0-9_-]+)\/enrollment\/sessions\/step\/?$/,
     allowedMethods: ["POST"],
@@ -170,6 +177,20 @@ export const ALLOWED_DH360_RULES: RouteRule[] = [
   },
 
   // Authorization Sessions
+  {
+    name: "authorization_preview",
+    pattern: /^\/authorization\/sessions\/preview\/?$/,
+    allowedMethods: ["GET"],
+    minRole: "admin",
+    scope: "authorization:manage",
+  },
+  {
+    name: "authorization_stream",
+    pattern: /^\/authorization\/sessions\/stream\/?$/,
+    allowedMethods: ["GET"],
+    minRole: "admin",
+    scope: "authorization:manage",
+  },
   {
     name: "authorization_sessions",
     pattern: /^\/authorization\/sessions\/?$/,

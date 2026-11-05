@@ -36,7 +36,13 @@ export async function handleDh360ProxyRequest(
   }
 
   // 2. Authenticate the caller's Firebase identity
-  const authHeader = request.headers.get("authorization");
+  const incomingUrl = new URL(request.url);
+  const tokenParam =
+    incomingUrl.searchParams.get("token") ||
+    incomingUrl.searchParams.get("access_token");
+  const authHeader =
+    request.headers.get("authorization") ||
+    (tokenParam ? `Bearer ${tokenParam}` : null);
   const authResult = await authenticateFirebaseToken(authHeader);
   if (!authResult.success) {
     return Response.json(
@@ -136,7 +142,6 @@ export async function handleDh360ProxyRequest(
     );
   }
 
-  const incomingUrl = new URL(request.url);
   const upstreamUrl = new URL(subpath, config.apiUrl);
   upstreamUrl.search = incomingUrl.search; // Preserve query parameters safely
 
@@ -190,7 +195,8 @@ export async function handleDh360ProxyRequest(
   const isSse =
     subpath === "/interaction/events" ||
     subpath.includes("/stream") ||
-    accept?.includes("text/event-stream");
+    accept?.includes("text/event-stream") ||
+    accept?.includes("multipart/x-mixed-replace");
   const timeoutController = new AbortController();
   const timeoutMs = isSse ? 0 : 30000;
   let timeoutId: NodeJS.Timeout | null = null;
@@ -224,6 +230,19 @@ export async function handleDh360ProxyRequest(
         headers: {
           "Content-Type": "text/event-stream; charset=utf-8",
           "Cache-Control": "no-cache, no-transform",
+          "Connection": "keep-alive",
+          "X-Accel-Buffering": "no",
+        },
+      });
+    }
+
+    // MJPEG Video Stream forwarding (15-30 FPS multipart stream)
+    if (contentType.includes("multipart/x-mixed-replace")) {
+      return new Response(upstreamResponse.body, {
+        status: upstreamResponse.status,
+        headers: {
+          "Content-Type": contentType,
+          "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
           "Connection": "keep-alive",
           "X-Accel-Buffering": "no",
         },
