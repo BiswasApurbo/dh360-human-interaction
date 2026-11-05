@@ -161,13 +161,15 @@ async def stream_authorization_preview(
     controller = getattr(request.app.state, "authorization_controller", None)
 
     async def frame_generator():
+        last_frame_id = -1
         try:
             while True:
                 if await request.is_disconnected():
                     break
                 frame_getter = getattr(service, "get_latest_camera_frame", None) or getattr(service, "get_latest_enrollment_frame", None)
                 frame = frame_getter() if callable(frame_getter) else None
-                if frame is not None and getattr(frame, "image", None) is not None:
+                if frame is not None and getattr(frame, "image", None) is not None and frame.frame_id != last_frame_id:
+                    last_frame_id = frame.frame_id
                     img = frame.image.copy()
                     h, w = img.shape[:2]
                     if w > 640:
@@ -185,7 +187,7 @@ async def stream_authorization_preview(
                             + b"\r\n"
                         )
                         yield chunk
-                await asyncio.sleep(0.04)  # ~25 FPS
+                await asyncio.sleep(0.015)  # Responsive check for next captured frame (up to 30 FPS)
         except asyncio.CancelledError:
             pass
 
