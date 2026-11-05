@@ -263,6 +263,9 @@ def handle_serve(args: argparse.Namespace) -> int:
             tts_provider=tts_provider,
             default_language=robot_default_lang,
             shared_capture=shared_capture,
+            inactivity_timeout_seconds=float(
+                os.getenv("KBCON_LISTENING_TIMEOUT_SECONDS", "10.0")
+            ),
         )
         dialogue_coord._set_state("idle")
 

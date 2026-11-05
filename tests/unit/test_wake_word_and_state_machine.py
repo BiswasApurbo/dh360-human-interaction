@@ -1,5 +1,5 @@
 """Unit tests for local wake-word detection ("Hey KB"), shared audio capture pipeline,
-and 8-state conversation lifecycle with 60-second inactivity timeout.
+and 8-state conversation lifecycle with 10-second inactivity timeout.
 """
 
 from __future__ import annotations
@@ -553,3 +553,46 @@ def test_tts_failure_and_interrupt_safely_resumes_capture():
 
     finally:
         coord.close()
+
+
+def test_coordinator_default_inactivity_timeout_is_10_seconds():
+    """Verify that the coordinator defaults to 10 seconds listening inactivity timeout."""
+    bus = EventBus()
+    knowledge_svc = KnowledgeService(institution_type="education")
+    coord = DialogueCoordinator(
+        event_bus=bus,
+        knowledge_service=knowledge_svc,
+    )
+    try:
+        assert coord.inactivity_timeout_seconds == 10.0
+    finally:
+        coord.close()
+
+
+def test_coordinator_env_override_inactivity_timeout(monkeypatch):
+    """Verify that KBCON_LISTENING_TIMEOUT_SECONDS overrides default, but explicit kwarg takes precedence."""
+    bus = EventBus()
+    knowledge_svc = KnowledgeService(institution_type="education")
+
+    # Env override
+    monkeypatch.setenv("KBCON_LISTENING_TIMEOUT_SECONDS", "15.5")
+    coord_env = DialogueCoordinator(
+        event_bus=bus,
+        knowledge_service=knowledge_svc,
+    )
+    try:
+        assert coord_env.inactivity_timeout_seconds == 15.5
+    finally:
+        coord_env.close()
+
+    # Explicit parameter takes precedence over env
+    coord_explicit = DialogueCoordinator(
+        event_bus=bus,
+        knowledge_service=knowledge_svc,
+        inactivity_timeout_seconds=5.0,
+    )
+    try:
+        assert coord_explicit.inactivity_timeout_seconds == 5.0
+    finally:
+        coord_explicit.close()
+

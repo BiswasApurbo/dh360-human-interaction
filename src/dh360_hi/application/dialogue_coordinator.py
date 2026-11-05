@@ -40,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import re
 import threading
 import time
@@ -96,7 +97,7 @@ class DialogueCoordinator:
         default_language: SupportedLanguage = "bn",
         grace_period_seconds: float = 60.0,
         shared_capture: Any | None = None,
-        inactivity_timeout_seconds: float = 60.0,
+        inactivity_timeout_seconds: float = 10.0,
     ) -> None:
         self._event_bus = event_bus
         self._knowledge_service = knowledge_service
@@ -107,6 +108,12 @@ class DialogueCoordinator:
         self._default_language: SupportedLanguage = default_language
         self._grace_period_seconds = grace_period_seconds
         self._shared_capture = shared_capture
+
+        if "KBCON_LISTENING_TIMEOUT_SECONDS" in os.environ and inactivity_timeout_seconds == 10.0:
+            try:
+                inactivity_timeout_seconds = float(os.environ["KBCON_LISTENING_TIMEOUT_SECONDS"])
+            except ValueError:
+                pass
         self._inactivity_timeout_seconds = inactivity_timeout_seconds
 
         # Lock hierarchy:
@@ -127,12 +134,12 @@ class DialogueCoordinator:
         self._last_robot_response: str = ""
         self._state_callbacks: list[Callable[[str, dict[str, Any]], None]] = []
 
-        # Active 60-second voice conversation session state
+        # Active voice conversation session state
         self._is_active_voice_session: bool = False
         self._session_worker_thread: threading.Thread | None = None
         self._session_worker_lock = threading.Lock()
 
-        # Inactivity timer for transitioning LISTENING -> IDLE
+        # Inactivity timer for transitioning LISTENING -> IDLE (default 10s)
         self._inactivity_timer: threading.Timer | None = None
         self._inactivity_lock = threading.Lock()
 
@@ -144,6 +151,11 @@ class DialogueCoordinator:
     # ------------------------------------------------------------------
     # Properties & Kiosk State
     # ------------------------------------------------------------------
+
+    @property
+    def inactivity_timeout_seconds(self) -> float:
+        """Inactivity timeout duration in seconds before returning from LISTENING to IDLE."""
+        return self._inactivity_timeout_seconds
 
     @property
     def current_state(self) -> str:
@@ -214,7 +226,7 @@ class DialogueCoordinator:
                 logger.debug("DialogueCoordinator: state callback error: %s", exc)
 
     def _arm_inactivity_timer(self) -> None:
-        """Arm or reset the 60-second inactivity timer in LISTENING mode."""
+        """Arm or reset the inactivity timer (default 10s) in LISTENING mode."""
         with self._inactivity_lock:
             if self._inactivity_timer is not None:
                 self._inactivity_timer.cancel()
@@ -247,13 +259,14 @@ class DialogueCoordinator:
         return cleaned
 
     def _on_inactivity_timeout(self) -> None:
-        """Invoked when 60 seconds have elapsed in listening state without interaction."""
+        """Invoked when inactivity timeout has elapsed in listening state without interaction."""
         with self._state_lock:
             self._is_active_voice_session = False
             if self._current_state != "listening":
                 return
             logger.info(
-                "DialogueCoordinator: 60s inactivity reached in LISTENING; returning to IDLE"
+                "DialogueCoordinator: %.1fs inactivity reached in LISTENING; returning to IDLE",
+                self._inactivity_timeout_seconds,
             )
             if self._stt_provider is not None:
                 with contextlib.suppress(Exception):
@@ -298,11 +311,11 @@ class DialogueCoordinator:
             self._session_worker_thread.start()
 
     def _run_active_session_worker(self) -> None:
-        """Continuous worker maintaining the active 60-second voice conversation session.
+        """Continuous worker maintaining the active voice conversation session.
 
         Continuously captures utterances via STT, filters leading wake phrases,
         executes dialogue turns with speech playback, and maintains listening state
-        for follow-up speech until the 60-second inactivity timer expires.
+        for follow-up speech until the 10-second inactivity timer expires.
         """
         logger.info("DialogueCoordinator: active voice session worker started")
         while True:
@@ -375,7 +388,7 @@ class DialogueCoordinator:
 
             logger.info("DialogueCoordinator: captured voice prompt: '%s'", prompt)
 
-            # Reset 60s inactivity timer on every detected user utterance (Requirement 11)
+            # Reset inactivity timer on every detected user utterance
             self._arm_inactivity_timer()
 
             # Execute turn synchronously with blocking TTS
@@ -396,14 +409,14 @@ class DialogueCoordinator:
                     or self._current_state == "idle"
                 ):
                     break
-                # Keep in listening state for follow-up questions (Requirement 9)
+                # Keep in listening state for follow-up questions
                 self._current_state = "listening"
                 callbacks = list(self._state_callbacks)
                 for cb in callbacks:
                     with contextlib.suppress(Exception):
                         cb("listening", {})
 
-            # Reset inactivity timer after answering so user has full 60s for follow-up
+            # Reset inactivity timer after answering so user has full timeout for follow-up
             self._arm_inactivity_timer()
             time.sleep(0.1)
 
