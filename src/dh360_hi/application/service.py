@@ -865,10 +865,12 @@ class HumanInteractionService:
         with self._lock:
             if self._enrollment_controller is None or not self._enrollment_controller.is_active:
                 return None
+            if self.runtime is not None and self.runtime.is_running:
+                frame = self.runtime.latest_frame
+                if frame is not None:
+                    return frame
             if self._latest_enrollment_frame is not None:
                 return self._latest_enrollment_frame
-            if self.runtime is not None and self.runtime.is_running:
-                return self.runtime.latest_frame
             return None
 
     def get_enrollment_progress(self) -> EnrollmentProgressDTO | None:

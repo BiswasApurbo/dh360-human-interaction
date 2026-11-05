@@ -152,9 +152,13 @@ class AuthorizationController:
 
             if self._session is not None and self._session.is_active:
                 if self._auto_start and not self._session.is_authorized:
-                    self._deadline = now + self._timeout_seconds
-                    return self._session
-                raise ValueError("An active authorization session already exists")
+                    try:
+                        self._session = self._session.complete(AuthorizationStatus.CANCELLED)
+                        session_to_notify = self._session
+                    except Exception:
+                        pass
+                else:
+                    raise ValueError("An active authorization session already exists")
 
             new_session = AuthorizationSession()
             self._session = new_session
@@ -241,11 +245,12 @@ class AuthorizationController:
         now = time.monotonic()
         with self._lock:
             if self._session is not None and self._session.is_active:
+                camera_stale = self._last_frame_timestamp > 0 and (
+                    now - self._last_frame_timestamp > self._max_frame_staleness
+                )
                 if self._session.is_authorized:
                     # 1. Staleness check: camera stopped or disconnected
-                    if self._last_frame_timestamp > 0 and (
-                        now - self._last_frame_timestamp > self._max_frame_staleness
-                    ):
+                    if camera_stale:
                         _logger.warning(
                             "AuthorizationController: frame staleness exceeded (%.2fs); revoking authorization as LOST",
                             now - self._last_frame_timestamp,
@@ -262,7 +267,7 @@ class AuthorizationController:
                         )
                         self._session = self._session.complete(AuthorizationStatus.LOST)
                         session_to_notify = self._session
-                else:
+                if self._session is not None and self._session.is_active:
                     if self._deadline is not None and now >= self._deadline:
                         try:
                             self._session = self._session.complete(AuthorizationStatus.TIMEOUT)

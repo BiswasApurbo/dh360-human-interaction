@@ -151,14 +151,60 @@ def get_enrollment_preview_frame(
         )
     import cv2
 
-    img = frame.image
+    img = frame.image.copy()
     h, w = img.shape[:2]
     if w > 640:
         new_w = 640
         new_h = int(h * (640 / w))
         img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        sx = new_w / w
+        sy = new_h / h
+    else:
+        sx = 1.0
+        sy = 1.0
 
-    success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    # Draw face detection bounding box and HUD guide if detected
+    progress = service.get_enrollment_progress()
+    if progress is not None and progress.face_detected and progress.face_bbox:
+        try:
+            bx, by, bw, bh = progress.face_bbox
+            rx = int(bx * sx)
+            ry = int(by * sy)
+            rw = int(bw * sx)
+            rh = int(bh * sy)
+
+            # High-tech cybernetic corner brackets
+            corner_len = max(10, int(min(rw, rh) * 0.18))
+            color = (248, 189, 56)  # High-visibility sky blue (BGR)
+            thickness = 2
+
+            # Corners
+            cv2.line(img, (rx, ry), (rx + corner_len, ry), color, thickness)
+            cv2.line(img, (rx, ry), (rx, ry + corner_len), color, thickness)
+            cv2.line(img, (rx + rw, ry), (rx + rw - corner_len, ry), color, thickness)
+            cv2.line(img, (rx + rw, ry), (rx + rw, ry + corner_len), color, thickness)
+            cv2.line(img, (rx, ry + rh), (rx + corner_len, ry + rh), color, thickness)
+            cv2.line(img, (rx, ry + rh), (rx, ry + rh - corner_len), color, thickness)
+            cv2.line(img, (rx + rw, ry + rh), (rx + rw - corner_len, ry + rh), color, thickness)
+            cv2.line(img, (rx + rw, ry + rh), (rx + rw, ry + rh - corner_len), color, thickness)
+
+            # Stage tag badge
+            stage = (progress.current_direction or "front").upper()
+            tag = f"FACE DETECTED [{stage}]"
+            cv2.putText(
+                img,
+                tag,
+                (rx + 4, max(18, ry - 6)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                color,
+                1,
+                cv2.LINE_AA,
+            )
+        except Exception:
+            pass
+
+    success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])
     if not success:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
