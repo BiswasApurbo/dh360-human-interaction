@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import threading
 import time
 from abc import ABC, abstractmethod
 from collections import deque
@@ -198,6 +199,12 @@ class WebcamFrameSource(FrameSource):
         self._consecutive_read_failures = 0
         self._last_reopen_attempt: float = 0.0
 
+        # Dedicated background capture worker for decoupled, high-throughput (>=15 FPS) reads
+        self._thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        self._frame_lock = threading.Lock()
+        self._latest_image: np.ndarray | None = None
+
     def _open_device(self, index: int) -> cv2.VideoCapture | None:
         cap = cv2.VideoCapture(index)
         if not cap.isOpened():
@@ -276,6 +283,32 @@ class WebcamFrameSource(FrameSource):
         self._read_timestamps.clear()
         self._consecutive_read_failures = 0
 
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._capture_worker,
+            name=f"WebcamCapture-{self.camera_index}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _capture_worker(self) -> None:
+        """Background thread continuously pulling frames to prevent capture stalls."""
+        while not self._stop_event.is_set():
+            cap = self._cap
+            if cap is None or not cap.isOpened():
+                time.sleep(0.02)
+                continue
+            success, image = cap.read()
+            if success and image is not None:
+                now = time.monotonic()
+                with self._frame_lock:
+                    self._latest_image = image
+                self._read_timestamps.append(now)
+                self._consecutive_read_failures = 0
+            else:
+                self._consecutive_read_failures += 1
+                time.sleep(0.01)
+
     def read(self) -> Frame | None:
         now = time.monotonic()
         if self._cap is None or not self._cap.isOpened():
@@ -288,27 +321,46 @@ class WebcamFrameSource(FrameSource):
             if self._cap is None or not self._cap.isOpened():
                 return None
 
-        success, image = self._cap.read()
-        if not success or image is None:
-            self._consecutive_read_failures += 1
-            if (
-                self.auto_discover
-                and self._consecutive_read_failures >= 5
-                and (now - self._last_reopen_attempt >= 1.0)
-            ):
-                self._last_reopen_attempt = now
-                try:
-                    self.release()
-                    self.open()
-                except Exception:
-                    pass
+        # Try non-blocking latest image from background worker first
+        with self._frame_lock:
+            image = self._latest_image
+
+        # If background thread hasn't pulled first frame yet, wait briefly or fall back to direct read
+        if image is None:
+            for _ in range(5):
+                time.sleep(0.01)
+                with self._frame_lock:
+                    image = self._latest_image
+                if image is not None:
+                    break
+
+        if image is None and self._cap is not None and self._cap.isOpened():
+            success, direct_img = self._cap.read()
+            if success and direct_img is not None:
+                image = direct_img
+                with self._frame_lock:
+                    self._latest_image = image
+                self._read_timestamps.append(now)
+            else:
+                self._consecutive_read_failures += 1
+                if (
+                    self.auto_discover
+                    and self._consecutive_read_failures >= 5
+                    and (now - self._last_reopen_attempt >= 1.0)
+                ):
+                    self._last_reopen_attempt = now
+                    try:
+                        self.release()
+                        self.open()
+                    except Exception:
+                        pass
+                return None
+
+        if image is None:
             return None
 
-        self._consecutive_read_failures = 0
-        self._read_timestamps.append(now)
-
         frame = Frame(
-            image=image,
+            image=image.copy(),
             frame_id=self._frame_id,
             timestamp=time.time(),
             source_info=f"webcam:{self.camera_index}",
@@ -317,9 +369,15 @@ class WebcamFrameSource(FrameSource):
         return frame
 
     def release(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=0.5)
+        self._thread = None
         if self._cap is not None:
             self._cap.release()
             self._cap = None
+        with self._frame_lock:
+            self._latest_image = None
         self._read_timestamps.clear()
 
     @property
