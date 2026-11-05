@@ -142,6 +142,7 @@ class DialogueCoordinator:
         # Inactivity timer for transitioning LISTENING -> IDLE (default 10s)
         self._inactivity_timer: threading.Timer | None = None
         self._inactivity_lock = threading.Lock()
+        self._is_interrupted: bool = False
 
         if self._shared_capture is not None:
             self._shared_capture.on_wake_word = self.on_wake_word_detected
@@ -662,30 +663,32 @@ class DialogueCoordinator:
                 self._tts_provider.interrupt()
 
     def interrupt(self) -> None:
-        """Abort active speech synthesis playback and microphone listening immediately."""
+        """Abort active speech synthesis playback and microphone listening immediately, forcing IDLE."""
         self._cancel_inactivity_timer()
-        self._set_state("interrupted")
+        with self._state_lock:
+            self._is_interrupted = True
+            self._is_active_voice_session = False
+
         if self._tts_provider is not None:
             with contextlib.suppress(Exception):
                 self._tts_provider.interrupt()
-        if self._shared_capture is not None and hasattr(self._shared_capture, "resume_after_playback"):
-            with contextlib.suppress(Exception):
-                self._shared_capture.resume_after_playback()
+
         if self._stt_provider is not None:
             with contextlib.suppress(Exception):
                 if hasattr(self._stt_provider, "interrupt"):
                     self._stt_provider.interrupt()
-                self._stt_provider.release()
+                self._stt_provider.hold()
 
-        def _reset_interrupted_state() -> None:
-            time.sleep(1.0)
-            with self._state_lock:
-                target_state = "muted" if self._is_microphone_muted else "listening"
-            self._set_state(target_state)
-            if target_state == "listening":
-                self._arm_inactivity_timer()
+        if self._shared_capture is not None:
+            with contextlib.suppress(Exception):
+                if hasattr(self._shared_capture, "resume_after_playback"):
+                    self._shared_capture.resume_after_playback()
+                if hasattr(self._shared_capture, "end_active_session"):
+                    self._shared_capture.end_active_session()
 
-        threading.Thread(target=_reset_interrupted_state, daemon=True).start()
+        with self._state_lock:
+            target_state = "muted" if self._is_microphone_muted else "idle"
+        self._set_state(target_state)
 
     def revoke_authorization(self) -> None:
         """Explicitly revoke authorization, clear private history, and abort audio."""
@@ -1228,7 +1231,7 @@ class DialogueCoordinator:
             )
             metadata["speak_response"] = bool(should_speak)
 
-            if should_speak and self._tts_provider is not None:
+            if should_speak and self._tts_provider is not None and not self._is_interrupted:
                 self._set_state("answering", response_text=response_text)
                 if self._stt_provider is not None:
                     with contextlib.suppress(Exception):
@@ -1254,7 +1257,8 @@ class DialogueCoordinator:
                             self._shared_capture.resume_after_playback()
                     if self._stt_provider is not None:
                         with contextlib.suppress(Exception):
-                            self._stt_provider.release()
+                            if not self._is_interrupted:
+                                self._stt_provider.release()
 
             # 7. Record and return model turn (inside state lock)
             model_turn = DialogueTurn(
@@ -1273,13 +1277,21 @@ class DialogueCoordinator:
                     and self._session_state.person_id == originating_person_id
                 ):
                     self._session_state.add_turn(model_turn, now=now)
-                final_state = (
-                    "muted"
-                    if self._is_microphone_muted
-                    else ("error" if error_code else "listening")
-                )
+                if self._is_interrupted:
+                    self._is_interrupted = False
+                    self._is_active_voice_session = False
+                    final_state = "muted" if self._is_microphone_muted else "idle"
+                    should_arm_timer = False
+                else:
+                    final_state = (
+                        "muted"
+                        if self._is_microphone_muted
+                        else ("error" if error_code else "listening")
+                    )
+                    should_arm_timer = (final_state == "listening")
+
             self._set_state(final_state)
-            if final_state == "listening":
+            if should_arm_timer:
                 self._arm_inactivity_timer()
 
             return model_turn
@@ -1730,6 +1742,13 @@ class DialogueCoordinator:
 
             if speak_response and not error_code and self._tts_provider:
                 def _safe_stream_speak():
+                    with self._state_lock:
+                        if self._is_interrupted:
+                            self._is_interrupted = False
+                            self._is_active_voice_session = False
+                            self._set_state("idle")
+                            return
+
                     if self._shared_capture is not None and hasattr(self._shared_capture, "pause_for_playback"):
                         with contextlib.suppress(Exception):
                             self._shared_capture.pause_for_playback()
@@ -1745,13 +1764,21 @@ class DialogueCoordinator:
                         if self._shared_capture is not None and hasattr(self._shared_capture, "resume_after_playback"):
                             with contextlib.suppress(Exception):
                                 self._shared_capture.resume_after_playback()
-                        if self._stt_provider is not None:
-                            with contextlib.suppress(Exception):
-                                self._stt_provider.release()
                         with self._state_lock:
-                            final_st = "muted" if self._is_microphone_muted else "listening"
+                            if self._is_interrupted:
+                                self._is_interrupted = False
+                                self._is_active_voice_session = False
+                                final_st = "muted" if self._is_microphone_muted else "idle"
+                                should_arm = False
+                            else:
+                                if self._stt_provider is not None:
+                                    with contextlib.suppress(Exception):
+                                        self._stt_provider.release()
+                                final_st = "muted" if self._is_microphone_muted else "listening"
+                                should_arm = (final_st == "listening")
+
                         self._set_state(final_st)
-                        if final_st == "listening":
+                        if should_arm:
                             self._arm_inactivity_timer()
 
                 threading.Thread(

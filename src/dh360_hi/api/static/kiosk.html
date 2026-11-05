@@ -707,7 +707,7 @@
         if (resp.ok) {
           const lang = currentState.language === "en" ? "en" : "bn";
           showToast(STRINGS[lang].interruptedToast);
-          currentState.state = "interrupted";
+          currentState.state = "idle";
           renderUI();
         }
       } catch (err) {

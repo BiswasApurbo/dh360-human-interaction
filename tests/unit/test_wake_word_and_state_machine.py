@@ -309,8 +309,8 @@ def test_coordinator_mute_and_unmute_lifecycle(mock_coordinator):
     assert mock_coordinator._shared_capture.is_muted is False
 
 
-def test_coordinator_interruption_transitions_to_listening(mock_coordinator):
-    """Verify right tap interruption stops TTS and transitions to LISTENING for follow-ups."""
+def test_coordinator_interruption_forces_idle_and_cancels_session(mock_coordinator):
+    """Verify right tap interruption stops TTS immediately, cancels follow-up session, and forces IDLE."""
     state_transitions = []
     mock_coordinator.register_state_callback(lambda s, _meta: state_transitions.append(s))
 
@@ -318,14 +318,30 @@ def test_coordinator_interruption_transitions_to_listening(mock_coordinator):
     mock_coordinator.interrupt()
 
     assert mock_coordinator._tts_provider.interrupted is True
-    assert "interrupted" in state_transitions
+    assert mock_coordinator.current_state == "idle"
+    assert "idle" in state_transitions
+    assert mock_coordinator._is_active_voice_session is False
 
-    # After 1.0s animation, state transitions to listening
-    time.sleep(1.2)
-    assert mock_coordinator.current_state == "listening"
-
-    # After inactivity timeout, state transitions to idle
+    # After delay, state must remain idle (never transition to listening)
     time.sleep(0.4)
+    assert mock_coordinator.current_state == "idle"
+
+
+def test_coordinator_interruption_during_turn_forces_idle(mock_coordinator):
+    """Verify interrupting during handle_turn forces state to IDLE and prevents LISTENING transition."""
+    def interrupt_during_speak(text, language="en", blocking=True):
+        mock_coordinator.interrupt()
+
+    mock_coordinator._tts_provider.speak = interrupt_during_speak
+    mock_coordinator.on_wake_word_detected(WakeWordEvent(detected=True, phrase="hey kb"))
+    assert mock_coordinator._is_active_voice_session is True
+
+    turn = mock_coordinator.handle_turn(user_text="What time is it?", speak_response=True)
+    assert turn.role == "model"
+    assert mock_coordinator.current_state == "idle"
+    assert mock_coordinator._is_active_voice_session is False
+
+    time.sleep(0.3)
     assert mock_coordinator.current_state == "idle"
 
 

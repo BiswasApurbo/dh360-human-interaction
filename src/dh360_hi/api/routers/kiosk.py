@@ -159,7 +159,7 @@ async def trigger_kiosk_interrupt(request: Request) -> JSONResponse:
     return JSONResponse(
         content={
             "status": "success",
-            "state": "interrupted",
+            "state": "idle",
         }
     )
 
