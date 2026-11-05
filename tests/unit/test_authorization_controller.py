@@ -783,3 +783,83 @@ class TestStalenessAndAbsenceSafeguards:
             assert sess2.is_active is True
 
         ctrl.close()
+
+
+class TestAutoStartAndContinuousKioskAuthorization:
+    """Tests covering auto_start and multi-listener registration for kiosk operation."""
+
+    def test_auto_start_authorizes_without_manual_start(self) -> None:
+        mgr = SessionManager(config=SessionConfig(require_confirmed_presence=True))
+        events: list[AuthorizationSession] = []
+        ctrl = AuthorizationController(
+            session_manager=mgr,
+            auto_start=True,
+            on_transition=events.append,
+        )
+
+        assert ctrl.get_current() is None
+        assert len(events) == 0
+
+        # Frame 1: Person appears and is identified
+        auth_state = _mk_id_state(
+            track_id=1,
+            state=IdentityState.IDENTIFIED,
+            person_id="p-tanvir",
+            display_name="Tanvir",
+        )
+        mgr.process_frame_result(_mk_frame(primary_track_id=1, identity_states={1: auth_state}))
+
+        current = ctrl.get_current()
+        assert current is not None
+        assert current.is_authorized is True
+        assert current.person_id == "p-tanvir"
+        assert current.display_name == "Tanvir"
+        assert len(events) == 1
+        assert events[-1].status is AuthorizationStatus.AUTHORIZED
+
+        # Frame 2: Person leaves
+        mgr.process_frame_result(_mk_frame(primary_track_id=None))
+        current = ctrl.get_current()
+        assert current is not None
+        assert current.status is AuthorizationStatus.LOST
+        assert current.is_authorized is False
+
+        # Frame 3: Next frame automatically arms a new session without manual start()
+        mgr.process_frame_result(_mk_frame(primary_track_id=None))
+        current = ctrl.get_current()
+        assert current is not None
+        assert current.is_active is True
+        assert current.status is AuthorizationStatus.NO_FACE
+
+        ctrl.close()
+
+    def test_add_and_remove_transition_listener(self) -> None:
+        mgr = SessionManager(config=SessionConfig(require_confirmed_presence=True))
+        ctrl = AuthorizationController(session_manager=mgr, auto_start=True)
+
+        received_1: list[AuthorizationSession] = []
+        received_2: list[AuthorizationSession] = []
+
+        ctrl.add_transition_listener(received_1.append)
+        ctrl.add_transition_listener(received_2.append)
+
+        # Trigger transition
+        auth_state = _mk_id_state(
+            track_id=1,
+            state=IdentityState.IDENTIFIED,
+            person_id="p-1",
+            display_name="User",
+        )
+        mgr.process_frame_result(_mk_frame(primary_track_id=1, identity_states={1: auth_state}))
+
+        assert len(received_1) == 1
+        assert len(received_2) == 1
+
+        # Remove one listener
+        ctrl.remove_transition_listener(received_2.append)
+        mgr.process_frame_result(_mk_frame(primary_track_id=None))
+
+        assert len(received_1) == 2
+        assert len(received_2) == 1  # Not called again
+
+        ctrl.close()

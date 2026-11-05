@@ -98,6 +98,14 @@ def handle_serve(args: argparse.Namespace) -> int:
 
     import uvicorn
 
+    # Configure OpenCV threading for multi-core Pi 5 inference
+    try:
+        import cv2
+
+        cv2.setNumThreads(4)
+    except Exception:
+        pass
+
     overrides: dict[str, Any] = {}
     cli_db = resolve_cli_db_path(args)
     if cli_db is not None:
@@ -120,6 +128,7 @@ def handle_serve(args: argparse.Namespace) -> int:
         overrides.setdefault("detector_model_path", str(default_yunet))
     if default_sface.is_file():
         overrides.setdefault("embedder_model_path", str(default_sface))
+    overrides.setdefault("detector_input_size", (224, 224))
 
     config = load_config(
         preset=getattr(args, "preset", None),
@@ -165,6 +174,7 @@ def handle_serve(args: argparse.Namespace) -> int:
         session_manager=service.runtime.session_manager,
         timeout_seconds=timeout_sec,
         require_continuous_presence=getattr(args, "continuous_presence", True),
+        auto_start=True,
     )
 
     # Dialogue subsystem composition

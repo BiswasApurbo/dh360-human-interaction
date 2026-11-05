@@ -231,6 +231,9 @@ class WebcamFrameSource(FrameSource):
         if self.target_fps:
             cap.set(cv2.CAP_PROP_FPS, self.target_fps)
 
+        # Optimize latency: keep buffer size minimal to avoid processing stale frames
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
         # Confirm that a frame can actually be captured from this device
         success, _ = cap.read()
         if not success:

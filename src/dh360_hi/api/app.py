@@ -83,6 +83,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 timeout_seconds=timeout_sec,
                 on_transition=_on_auth_transition,
                 require_continuous_presence=True,
+                auto_start=True,
             )
             app.state.authorization_controller = auth_ctrl
         else:
@@ -94,6 +95,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 hub.publish(AuthorizationUpdatedIntegrationEvent.from_session(s))
 
         auth_ctrl._on_transition = _on_injected_transition
+        auth_ctrl.add_transition_listener(_on_injected_transition)
 
     if auth_ctrl is not None and service is not None:
         service.authorization_controller = auth_ctrl
@@ -171,6 +173,7 @@ def create_app(
                 hub.publish(AuthorizationUpdatedIntegrationEvent.from_session(s))
 
             authorization_controller._on_transition = _on_auth_trans
+            authorization_controller.add_transition_listener(_on_auth_trans)
         app.state.authorization_controller = authorization_controller
         service.authorization_controller = authorization_controller
     elif service.runtime is not None and service.runtime.session_manager is not None:
@@ -188,6 +191,7 @@ def create_app(
             timeout_seconds=timeout_sec,
             on_transition=_on_auth_trans_created,
             require_continuous_presence=True,
+            auto_start=True,
         )
         service.authorization_controller = app.state.authorization_controller
     else:

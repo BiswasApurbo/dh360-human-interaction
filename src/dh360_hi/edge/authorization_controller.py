@@ -48,13 +48,18 @@ class AuthorizationController:
         require_continuous_presence: bool = True,
         max_frame_staleness: float = 2.0,
         max_absence_seconds: float = 2.0,
+        auto_start: bool = False,
     ) -> None:
         self._session_manager = session_manager
         self._timeout_seconds = timeout_seconds
         self._on_transition = on_transition
+        self._listeners: list[Callable[[AuthorizationSession], None]] = []
+        if on_transition is not None:
+            self._listeners.append(on_transition)
         self._require_continuous_presence = require_continuous_presence
         self._max_frame_staleness = max_frame_staleness
         self._max_absence_seconds = max_absence_seconds
+        self._auto_start = auto_start
         self._lock = threading.Lock()
         self._session: AuthorizationSession | None = None
         self._deadline: float | None = None
@@ -66,11 +71,35 @@ class AuthorizationController:
         self._session_manager.add_observer(self._on_frame)
         _logger.debug(
             "AuthorizationController registered observer with SessionManager "
-            "(require_continuous_presence=%s, max_frame_staleness=%.2f, max_absence=%.2f)",
+            "(require_continuous_presence=%s, max_frame_staleness=%.2f, max_absence=%.2f, auto_start=%s)",
             self._require_continuous_presence,
             self._max_frame_staleness,
             self._max_absence_seconds,
+            self._auto_start,
         )
+
+    @property
+    def auto_start(self) -> bool:
+        """Whether automatic authorization session creation on frame observation is enabled."""
+        with self._lock:
+            return self._auto_start
+
+    @auto_start.setter
+    def auto_start(self, enabled: bool) -> None:
+        with self._lock:
+            self._auto_start = enabled
+
+    def add_transition_listener(self, listener: Callable[[AuthorizationSession], None]) -> None:
+        """Register an additional callback invoked on authorization session status changes."""
+        with self._lock:
+            if listener not in self._listeners:
+                self._listeners.append(listener)
+
+    def remove_transition_listener(self, listener: Callable[[AuthorizationSession], None]) -> None:
+        """Unregister a transition callback."""
+        with self._lock:
+            if listener in self._listeners:
+                self._listeners.remove(listener)
 
     @property
     def require_continuous_presence(self) -> bool:
@@ -122,6 +151,9 @@ class AuthorizationController:
                         _logger.exception("Failed to complete session on start: %s", exc)
 
             if self._session is not None and self._session.is_active:
+                if self._auto_start and not self._session.is_authorized:
+                    self._deadline = now + self._timeout_seconds
+                    return self._session
                 raise ValueError("An active authorization session already exists")
 
             new_session = AuthorizationSession()
@@ -190,13 +222,17 @@ class AuthorizationController:
         return session_to_notify
 
     def _notify_transition(self, session: AuthorizationSession) -> None:
-        """Safely invoke the transition callback without leaking exceptions."""
-        if self._on_transition is not None:
+        """Safely invoke transition callbacks without leaking exceptions."""
+        with self._lock:
+            listeners = list(self._listeners)
+            if self._on_transition is not None and self._on_transition not in listeners:
+                listeners.append(self._on_transition)
+        for listener in listeners:
             try:
-                self._on_transition(session)
+                listener(session)
             except Exception as exc:
                 _logger.exception(
-                    "Error in AuthorizationController on_transition callback: %s", exc
+                    "Error in AuthorizationController listener callback: %s", exc
                 )
 
     def get_current(self) -> AuthorizationSession | None:
@@ -263,7 +299,11 @@ class AuthorizationController:
                 self._last_frame_timestamp = now
 
                 if self._session is None or not self._session.is_active:
-                    return
+                    if self._auto_start and not self._closed:
+                        self._session = AuthorizationSession()
+                        self._deadline = None
+                    else:
+                        return
 
                 # Check timeout on each frame observation (pre-authorization only)
                 if (
@@ -358,9 +398,6 @@ class AuthorizationController:
                             self._session = self._session.transition(new_status)
                             session_to_notify = self._session
                         elif (
-                            new_status is AuthorizationStatus.ACTIVE
-                            and prior_status is not AuthorizationStatus.ACTIVE
-                        ) or (
                             new_status is AuthorizationStatus.ACTIVE
                             and prior_status is not AuthorizationStatus.ACTIVE
                         ):

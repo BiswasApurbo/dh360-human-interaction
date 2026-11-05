@@ -196,6 +196,8 @@ async def stream_kiosk_events(request: Request) -> StreamingResponse:
     event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=30)
     loop = asyncio.get_running_loop()
 
+    auth_ctrl = getattr(request.app.state, "authorization_controller", None)
+
     def _state_listener(new_state: str, metadata: dict[str, Any]) -> None:
         try:
             snapshot = _get_current_kiosk_state(request)
@@ -210,8 +212,19 @@ async def stream_kiosk_events(request: Request) -> StreamingResponse:
         except Exception as exc:
             logger.debug("Kiosk event queue error: %s", exc)
 
+    def _auth_listener(session: Any) -> None:
+        try:
+            snapshot = _get_current_kiosk_state(request)
+            loop.call_soon_threadsafe(
+                lambda: event_queue.put_nowait(snapshot) if not event_queue.full() else None
+            )
+        except Exception as exc:
+            logger.debug("Kiosk auth queue error: %s", exc)
+
     if coord is not None:
         coord.register_state_callback(_state_listener)
+    if auth_ctrl is not None:
+        auth_ctrl.add_transition_listener(_auth_listener)
 
     async def _event_generator() -> AsyncGenerator[str, None]:
         try:
@@ -233,6 +246,8 @@ async def stream_kiosk_events(request: Request) -> StreamingResponse:
         finally:
             if coord is not None:
                 coord.unregister_state_callback(_state_listener)
+            if auth_ctrl is not None:
+                auth_ctrl.remove_transition_listener(_auth_listener)
 
     return StreamingResponse(
         _event_generator(),
