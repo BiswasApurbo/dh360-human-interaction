@@ -102,8 +102,12 @@ def start_enrollment_session(
     service = _get_service(request)
     tenant_id = request.headers.get("X-Tenant-ID")
     _require_person(service, person_id, tenant_id=tenant_id)
-    if service.get_enrollment_progress() is not None:
-        raise ConflictAppError("An enrollment session is already active")
+    current = service.get_enrollment_progress()
+    if current is not None:
+        if current.person_id == person_id:
+            service.cancel_enrollment("Restarting enrollment session")
+        else:
+            raise ConflictAppError("An enrollment session is already active for another person")
     runtime = getattr(service, "runtime", None)
     capture: FrameSource | None = None
     if runtime is None or not getattr(runtime, "is_running", False):

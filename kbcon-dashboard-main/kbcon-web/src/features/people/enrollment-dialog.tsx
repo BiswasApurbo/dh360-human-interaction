@@ -110,26 +110,6 @@ function EnrollmentDialogContent({
     return headers;
   }, [user]);
 
-  // Keep Firebase ID token synced for direct image stream authentication
-  useEffect(() => {
-    let active = true;
-    if (user) {
-      user
-        .getIdToken()
-        .then((tok) => {
-          if (active) setAuthToken(tok);
-        })
-        .catch(() => {});
-    }
-    return () => {
-      active = false;
-    };
-  }, [user]);
-
-  const streamUrl = authToken
-    ? `/api/dh360/persons/${person.person_id}/enrollment/sessions/stream?token=${encodeURIComponent(authToken)}`
-    : null;
-
   // Fetch current camera preview frame (high-speed fallback)
   const fetchPreviewFrame = useCallback(async () => {
     if (!user || authLoading || inFlightRef.current) return;
@@ -155,6 +135,29 @@ function EnrollmentDialogContent({
       inFlightRef.current = false;
     }
   }, [user, authLoading, person.person_id, getHeaders]);
+
+  // Keep Firebase ID token synced for direct image stream authentication
+  useEffect(() => {
+    let active = true;
+    if (user) {
+      user
+        .getIdToken()
+        .then((tok) => {
+          if (active) {
+            setAuthToken(tok);
+            void fetchPreviewFrame();
+          }
+        })
+        .catch(() => {});
+    }
+    return () => {
+      active = false;
+    };
+  }, [user, fetchPreviewFrame]);
+
+  const streamUrl = authToken
+    ? `/api/dh360/persons/${person.person_id}/enrollment/sessions/stream?token=${encodeURIComponent(authToken)}`
+    : null;
 
   // Fast polling fallback loop (25 FPS) when MJPEG stream is disabled or unsupported
   useEffect(() => {
@@ -310,7 +313,7 @@ function EnrollmentDialogContent({
             // Ignore if none active
           }
 
-          const res = await fetch(
+          let res = await fetch(
             `/api/dh360/persons/${person.person_id}/enrollment/sessions`,
             {
               method: "POST",
@@ -318,6 +321,22 @@ function EnrollmentDialogContent({
               body: JSON.stringify({ mode }),
             }
           );
+
+          if (res.status === 409) {
+            // Cancel any stale session and retry
+            await fetch(`/api/dh360/persons/enrollment/sessions/current`, {
+              method: "DELETE",
+              headers,
+            }).catch(() => {});
+            res = await fetch(
+              `/api/dh360/persons/${person.person_id}/enrollment/sessions`,
+              {
+                method: "POST",
+                headers,
+                body: JSON.stringify({ mode }),
+              }
+            );
+          }
 
           if (!res.ok) {
             const errData = await res.json().catch(() => ({}));

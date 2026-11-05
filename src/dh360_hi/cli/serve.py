@@ -143,28 +143,51 @@ def handle_serve(args: argparse.Namespace) -> int:
             field="detector_model_path",
         )
 
-    try:
-        frame_source = _build_frame_source(args)
-        service = create_interaction_service(
-            config=config, frame_source=frame_source, enable_perception=True
-        )
-        # Start live perception pipeline
-        service.start(async_thread=True)
-    except Exception as exc:
-        if getattr(args, "source", "") == "webcam":
-            logger.warning(
-                "Webcam open failed (%s); using synthetic frame source to maintain API uptime.",
-                exc,
-            )
-            from dh360_hi.vision.frame import SyntheticFrameSource
+    is_webcam = getattr(args, "source", "") == "webcam"
+    is_testing = getattr(args, "preset", "") == "testing"
+    service = None
+    max_retries = 1 if is_testing else (4 if is_webcam else 1)
 
-            frame_source = SyntheticFrameSource(fps=30.0, num_frames=1000000)
+    for attempt in range(1, max_retries + 1):
+        try:
+            frame_source = _build_frame_source(args)
             service = create_interaction_service(
                 config=config, frame_source=frame_source, enable_perception=True
             )
+            # Start live perception pipeline
             service.start(async_thread=True)
-        else:
-            raise
+            break
+        except Exception as exc:
+            if is_webcam and attempt < max_retries:
+                logger.warning(
+                    "Webcam open attempt %d/%d failed (%s); retrying in 0.5s for hardware to settle...",
+                    attempt,
+                    max_retries,
+                    exc,
+                )
+                import time
+
+                time.sleep(0.5)
+            elif is_webcam:
+                logger.warning(
+                    "Webcam open failed (%s); using resilient auto-reconnecting frame source to maintain API uptime.",
+                    exc,
+                )
+                from dh360_hi.vision.frame import ResilientWebcamFrameSource
+
+                frame_source = ResilientWebcamFrameSource(
+                    camera_index=getattr(args, "camera_index", 0),
+                    target_width=640,
+                    target_height=480,
+                    target_fps=getattr(getattr(config, "runtime", None), "target_fps", 30.0),
+                )
+                service = create_interaction_service(
+                    config=config, frame_source=frame_source, enable_perception=True
+                )
+                service.start(async_thread=True)
+                break
+            else:
+                raise
 
     # Instantiate single AuthorizationController bound to live session manager
     assert service.runtime is not None

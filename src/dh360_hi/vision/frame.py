@@ -241,8 +241,14 @@ class WebcamFrameSource(FrameSource):
         # Optimize latency: keep buffer size minimal to avoid processing stale frames
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-        # Confirm that a frame can actually be captured from this device
-        success, _ = cap.read()
+        # Confirm that a frame can actually be captured from this device (allow up to 5 reads for UVC sync)
+        success = False
+        for _ in range(5):
+            success, _ = cap.read()
+            if success:
+                break
+            time.sleep(0.03)
+
         if not success:
             cap.release()
             return None
@@ -258,11 +264,15 @@ class WebcamFrameSource(FrameSource):
 
         cap = None
         selected_index = self.camera_index
-        for idx in candidates:
-            cap = self._open_device(idx)
+        for _attempt in range(3):
+            for idx in candidates:
+                cap = self._open_device(idx)
+                if cap is not None:
+                    selected_index = idx
+                    break
             if cap is not None:
-                selected_index = idx
                 break
+            time.sleep(0.1)
 
         if cap is None:
             raise RuntimeError(
@@ -473,3 +483,115 @@ class SyntheticFrameSource(FrameSource):
     @property
     def fps(self) -> float:
         return self._fps
+
+
+class ResilientWebcamFrameSource(FrameSource):
+    """Resilient frame source providing continuous fallback while auto-reconnecting to hardware."""
+
+    def __init__(
+        self,
+        camera_index: int = 0,
+        target_width: int = 640,
+        target_height: int = 480,
+        target_fps: float = 30.0,
+    ) -> None:
+        self.camera_index = camera_index
+        self.target_width = target_width
+        self.target_height = target_height
+        self.target_fps = target_fps
+        self._synthetic = SyntheticFrameSource(
+            width=target_width, height=target_height, fps=target_fps, num_frames=10_000_000
+        )
+        self._webcam: WebcamFrameSource | None = None
+        self._last_reconnect_attempt = 0.0
+        self._is_opened = False
+        self._lock = threading.Lock()
+
+    def open(self) -> None:
+        self._is_opened = True
+        self._synthetic.open()
+        self._try_connect_webcam()
+
+    def _try_connect_webcam(self) -> bool:
+        try:
+            ws = WebcamFrameSource(
+                camera_index=self.camera_index,
+                target_width=self.target_width,
+                target_height=self.target_height,
+                target_fps=self.target_fps,
+                auto_discover=True,
+            )
+            ws.open()
+            with self._lock:
+                self._webcam = ws
+            logger.info(
+                "ResilientWebcamFrameSource acquired physical camera on index %d",
+                self.camera_index,
+            )
+            return True
+        except Exception:
+            return False
+
+    def read(self) -> Frame | None:
+        if not self._is_opened:
+            return None
+
+        now = time.monotonic()
+        with self._lock:
+            if self._webcam is not None and self._webcam.is_opened:
+                frame = self._webcam.read()
+                if frame is not None:
+                    return frame
+                if getattr(self._webcam, "_consecutive_read_failures", 0) > 5:
+                    try:
+                        self._webcam.release()
+                    except Exception:
+                        pass
+                    self._webcam = None
+
+        if now - self._last_reconnect_attempt >= 2.0:
+            self._last_reconnect_attempt = now
+            if self._try_connect_webcam():
+                with self._lock:
+                    if self._webcam is not None and self._webcam.is_opened:
+                        frame = self._webcam.read()
+                        if frame is not None:
+                            return frame
+
+        return self._synthetic.read()
+
+    def release(self) -> None:
+        self._is_opened = False
+        with self._lock:
+            if self._webcam is not None:
+                try:
+                    self._webcam.release()
+                except Exception:
+                    pass
+                self._webcam = None
+        self._synthetic.release()
+
+    @property
+    def is_opened(self) -> bool:
+        return self._is_opened
+
+    @property
+    def resolution(self) -> tuple[int, int]:
+        with self._lock:
+            if self._webcam is not None and self._webcam.is_opened:
+                return self._webcam.resolution
+        return self.target_width, self.target_height
+
+    @property
+    def fps(self) -> float:
+        with self._lock:
+            if self._webcam is not None and self._webcam.is_opened:
+                return self._webcam.fps
+        return self.target_fps
+
+    @property
+    def capture_fps(self) -> float:
+        with self._lock:
+            if self._webcam is not None and self._webcam.is_opened:
+                return self._webcam.capture_fps
+        return self.target_fps
