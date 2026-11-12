@@ -255,7 +255,10 @@ export async function handleDh360ProxyRequest(
         status: upstreamResponse.status,
         headers: {
           "Content-Type": contentType,
-          "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+          "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
+          "Pragma": "no-cache",
+          "Expires": "0",
+          "Surrogate-Control": "no-store",
         },
       });
     }

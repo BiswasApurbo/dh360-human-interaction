@@ -58,30 +58,12 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
   const [session, setSession] = useState<AuthorizationSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [authToken, setAuthToken] = useState<string | null>(null);
-  const [useStream, setUseStream] = useState(true);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const prevUrlRef = useRef<string | null>(null);
-  const inFlightRef = useRef(false);
-
-  useEffect(() => {
-    let active = true;
-    if (user) {
-      user
-        .getIdToken()
-        .then((t) => {
-          if (active) setAuthToken(t);
-        })
-        .catch(() => {});
-    }
-    return () => {
-      active = false;
-    };
-  }, [user]);
-
-  const streamUrl = authToken
-    ? `/api/dh360/authorization/sessions/stream?token=${encodeURIComponent(authToken)}`
-    : null;
+  const isPullingRef = useRef(false);
+  const activeRef = useRef(true);
+  const previewTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const userStoppedRef = useRef(false);
 
   const getHeaders = useCallback(async (): Promise<HeadersInit> => {
     const headers: Record<string, string> = {
@@ -98,97 +80,65 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
     return headers;
   }, [user]);
 
-  // Poll active authorization session
-  const fetchCurrentSession = useCallback(async () => {
-    if (!user || authLoading) return;
-    try {
-      const headers = await getHeaders();
-      const res = await fetch("/api/dh360/authorization/sessions/current", {
-        headers,
-      });
-      if (res.ok) {
-        const data: AuthorizationSession = await res.json();
-        setSession(data);
-      } else if (res.status === 404) {
-        setSession(null);
-      } else if (res.status === 401 || res.status === 403) {
-        setError(res.status === 403 ? "Admin role required." : "Authentication required.");
-      }
-    } catch {
-      // Offline or network error
-    }
-  }, [user, authLoading, getHeaders]);
-
-  useEffect(() => {
-    if (!user || authLoading) return;
-    const timeout = setTimeout(() => {
-      void fetchCurrentSession();
-    }, 0);
-    const interval = setInterval(() => {
-      void fetchCurrentSession();
-    }, 1500);
-    return () => {
-      clearTimeout(timeout);
-      clearInterval(interval);
-    };
-  }, [user, authLoading, fetchCurrentSession]);
-
+  // Continuous active camera frame pull loop
   const fetchPreviewFrame = useCallback(async () => {
-    if (!user || authLoading || inFlightRef.current) return;
-    inFlightRef.current = true;
+    if (!activeRef.current || isPullingRef.current || !user || authLoading) return;
+    isPullingRef.current = true;
     try {
       const headers = await getHeaders();
-      const res = await fetch("/api/dh360/authorization/sessions/preview", { headers });
-      if (res.ok) {
+      const res = await fetch(`/api/dh360/authorization/sessions/preview?_t=${Date.now()}`, {
+        headers,
+        cache: "no-store",
+      });
+      if (res.ok && activeRef.current) {
         const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        if (prevUrlRef.current) {
-          URL.revokeObjectURL(prevUrlRef.current);
+        if (blob.size > 0 && activeRef.current) {
+          const url = URL.createObjectURL(blob);
+          if (prevUrlRef.current) {
+            URL.revokeObjectURL(prevUrlRef.current);
+          }
+          prevUrlRef.current = url;
+          setPreviewUrl(url);
         }
-        prevUrlRef.current = url;
-        setPreviewUrl(url);
       }
     } catch {
-      // preview frame unavailable
+      // preview frame temporarily unavailable
     } finally {
-      inFlightRef.current = false;
+      isPullingRef.current = false;
+      if (activeRef.current) {
+        previewTimerRef.current = setTimeout(() => {
+          void fetchPreviewFrame();
+        }, 50);
+      }
     }
   }, [user, authLoading, getHeaders]);
 
-  // Fast polling fallback loop (25 FPS) when MJPEG stream is disabled or unsupported
+  // Start continuous preview loop on mount
   useEffect(() => {
-    if (useStream || !user || authLoading) return;
-    const interval = setInterval(() => {
+    activeRef.current = true;
+    if (user && !authLoading) {
       void fetchPreviewFrame();
-    }, 40);
+    }
     return () => {
-      clearInterval(interval);
-    };
-  }, [useStream, user, authLoading, fetchPreviewFrame]);
-
-  useEffect(() => {
-    return () => {
+      activeRef.current = false;
+      if (previewTimerRef.current) {
+        clearTimeout(previewTimerRef.current);
+      }
       if (prevUrlRef.current) {
         URL.revokeObjectURL(prevUrlRef.current);
       }
     };
-  }, []);
+  }, [user, authLoading, fetchPreviewFrame]);
 
-  const isSessionRunning = Boolean(
-    session &&
-      !session.ended_at_iso &&
-      session.status !== "timeout" &&
-      session.status !== "cancelled" &&
-      session.status !== "lost"
-  );
-
-  async function startAuthorization() {
+  // Start authorization session
+  const startAuthorization = useCallback(async () => {
     if (!user) {
       setError("Please sign in with an authorized account.");
       return;
     }
     setLoading(true);
     setError(null);
+    userStoppedRef.current = false;
     try {
       const headers = await getHeaders();
       const res = await fetch("/api/dh360/authorization/sessions", {
@@ -197,7 +147,11 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
       });
       if (res.status === 409) {
         // Active session already running; sync state immediately without throwing
-        await fetchCurrentSession();
+        const curRes = await fetch("/api/dh360/authorization/sessions/current", { headers });
+        if (curRes.ok) {
+          const data = await curRes.json();
+          setSession(data);
+        }
         return;
       }
       if (!res.ok) {
@@ -217,12 +171,61 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
     } finally {
       setLoading(false);
     }
-  }
+  }, [user, getHeaders]);
+
+  // Poll & maintain active authorization session while dialog is open
+  useEffect(() => {
+    if (!user || authLoading) return;
+    let active = true;
+
+    const syncSession = async () => {
+      if (!active) return;
+      try {
+        const headers = await getHeaders();
+        const res = await fetch(`/api/dh360/authorization/sessions/current?_t=${Date.now()}`, {
+          headers,
+          cache: "no-store",
+        });
+        if (res.ok && active) {
+          const data: AuthorizationSession = await res.json();
+          setSession(data);
+          // If session ended (e.g. face left frame -> lost or timeout), auto-restart unless operator explicitly stopped
+          if (!userStoppedRef.current && (data.ended_at_iso || data.status === "lost" || data.status === "timeout")) {
+            void startAuthorization();
+          }
+        } else if (res.status === 404 && active && !userStoppedRef.current) {
+          // No session running yet, auto-start
+          void startAuthorization();
+        }
+      } catch {
+        // Network jitter
+      }
+    };
+
+    void syncSession();
+    const interval = setInterval(() => {
+      void syncSession();
+    }, 1000);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [user, authLoading, getHeaders, startAuthorization]);
+
+  const isSessionRunning = Boolean(
+    session &&
+      !session.ended_at_iso &&
+      session.status !== "timeout" &&
+      session.status !== "cancelled" &&
+      session.status !== "lost"
+  );
 
   async function stopAuthorization() {
     if (!user) return;
     setLoading(true);
     setError(null);
+    userStoppedRef.current = true;
     try {
       const headers = await getHeaders();
       const res = await fetch("/api/dh360/authorization/sessions/current", {
@@ -236,8 +239,6 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
         } else {
           setSession(null);
         }
-      } else {
-        await fetchCurrentSession();
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to stop session");
@@ -392,22 +393,11 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
 
           {/* Live Camera Viewport with Cybernetic Reticle */}
           <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-slate-950 border border-sky-300/60 shadow-inner flex items-center justify-center group">
-            {useStream && streamUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={streamUrl}
-                alt="Live authorization camera stream"
-                className="h-full w-full object-cover"
-                onError={() => {
-                  setUseStream(false);
-                  void fetchPreviewFrame();
-                }}
-              />
-            ) : previewUrl ? (
+            {previewUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={previewUrl}
-                alt="Robot camera preview"
+                alt="Live authorization camera stream"
                 className="h-full w-full object-cover"
               />
             ) : (
