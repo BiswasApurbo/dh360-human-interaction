@@ -219,7 +219,7 @@ async def stream_authorization_preview(
                             + jpeg_bytes
                             + b"\r\n"
                         )
-                await asyncio.sleep(0.015)  # Up to 30+ FPS responsive frame dispatch
+                await asyncio.sleep(0.005)  # Responsive check for next captured frame (up to 30 FPS)
         except asyncio.CancelledError:
             pass
 
