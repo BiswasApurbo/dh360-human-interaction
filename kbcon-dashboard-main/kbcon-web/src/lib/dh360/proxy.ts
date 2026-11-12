@@ -156,6 +156,7 @@ export async function handleDh360ProxyRequest(
   // 6. Build upstream request headers with multi-tenant context
   const upstreamHeaders = new Headers();
   upstreamHeaders.set("Authorization", `Bearer ${config.operatorToken}`);
+  upstreamHeaders.set("Connection", "keep-alive");
   upstreamHeaders.set("X-Tenant-ID", principal.uid);
   upstreamHeaders.set("X-User-Role", principal.role);
   upstreamHeaders.set("X-User-ID", principal.uid);
@@ -260,6 +261,8 @@ export async function handleDh360ProxyRequest(
           "Pragma": "no-cache",
           "Expires": "0",
           "Surrogate-Control": "no-store",
+          "Connection": "keep-alive",
+          "X-Accel-Buffering": "no",
         },
       });
     }

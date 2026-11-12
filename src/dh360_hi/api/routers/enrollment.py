@@ -157,12 +157,12 @@ def get_enrollment_preview_frame(
 
     img = frame.image.copy()
     h, w = img.shape[:2]
-    if w > 640:
-        new_w = 640
-        new_h = int(h * (640 / w))
-        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        sx = new_w / w
-        sy = new_h / h
+    target_w = 480
+    if w != target_w:
+        target_h = int(h * (target_w / w))
+        img = cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+        sx = target_w / w
+        sy = target_h / h
     else:
         sx = 1.0
         sy = 1.0
@@ -208,7 +208,7 @@ def get_enrollment_preview_frame(
         except Exception:
             pass
 
-    success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])
+    success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
     if not success:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

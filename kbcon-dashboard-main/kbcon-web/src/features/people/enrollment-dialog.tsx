@@ -127,11 +127,12 @@ function EnrollmentDialogContent({
         const blob = await res.blob();
         if (blob.size > 0 && activeRef.current) {
           const url = URL.createObjectURL(blob);
-          if (prevUrlRef.current) {
-            URL.revokeObjectURL(prevUrlRef.current);
-          }
+          const oldUrl = prevUrlRef.current;
           prevUrlRef.current = url;
           setPreviewUrl(url);
+          if (oldUrl) {
+            setTimeout(() => URL.revokeObjectURL(oldUrl), 200);
+          }
         }
       }
     } catch {
@@ -141,7 +142,7 @@ function EnrollmentDialogContent({
       if (activeRef.current) {
         previewTimerRef.current = setTimeout(() => {
           void fetchPreviewFrame();
-        }, 50);
+        }, 0);
       }
     }
   }, [user, authLoading, person.person_id, getHeaders]);

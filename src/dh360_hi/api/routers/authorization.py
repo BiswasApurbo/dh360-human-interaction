@@ -121,16 +121,16 @@ def get_authorization_preview_frame(
 
     img = frame.image.copy()
     h, w = img.shape[:2]
-    if w > 640:
-        new_w = 640
-        new_h = int(h * (640 / w))
-        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    target_w = 480
+    if w != target_w:
+        target_h = int(h * (target_w / w))
+        img = cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
 
     controller = getattr(request.app.state, "authorization_controller", None)
     current_session = controller.get_current() if controller else None
     _render_auth_hud(img, current_session)
 
-    success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])
+    success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
     if not success:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
