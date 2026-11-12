@@ -10,11 +10,11 @@ import { getFunctions, connectFunctionsEmulator } from "firebase/functions";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "AIzaSyDummyKeyForBuildValidationOnly12345",
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || "kbcon-dashboard-4b009.firebaseapp.com",
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "kbcon-dashboard-4b009",
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || "kbcon-dashboard-4b009.appspot.com",
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || "743780299959",
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || "1:743780299959:web:dummy",
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || "kbcon-production.firebaseapp.com",
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "kbcon-production",
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || "kbcon-production.firebasestorage.app",
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || "946477580702",
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || "1:946477580702:web:600cc26c9c3c11c224d68f",
 };
 
 // Validate presence of critical client environment variables without exposing secret values

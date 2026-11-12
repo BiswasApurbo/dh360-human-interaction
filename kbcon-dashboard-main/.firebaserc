@@ -1,7 +1,7 @@
 {
   "projects": {
-    "default": "kbcon-dashboard-4b009",
-    "my-kbcon": "kbcon-dashboard-4b009"
+    "default": "kbcon-production",
+    "my-kbcon": "kbcon-production"
   },
   "targets": {},
   "etags": {}

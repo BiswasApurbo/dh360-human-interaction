@@ -145,7 +145,7 @@ function getExpectedProjectId(): string {
   return (
     process.env.FIREBASE_PROJECT_ID ||
     process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
-    "kbcon-dashboard-4b009"
+    "kbcon-production"
   );
 }
 
