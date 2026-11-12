@@ -65,6 +65,9 @@ function EnrollmentDialogContent({
   const [sessionActive, setSessionActive] = useState(false);
   const [progress, setProgress] = useState<EnrollmentProgress | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [idToken, setIdToken] = useState<string | null>(null);
+  const [streamKey, setStreamKey] = useState<number>(Date.now());
+  const [useStream, setUseStream] = useState<boolean>(true);
   const [loading, setLoading] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [committing, setCommitting] = useState(false);
@@ -81,6 +84,36 @@ function EnrollmentDialogContent({
   const sessionActiveRef = useRef(false);
   const isCompleteRef = useRef(false);
   const activeRef = useRef(true);
+
+  // Obtain caller ID token for stream authentication
+  useEffect(() => {
+    let cancelled = false;
+    if (user && !authLoading) {
+      user.getIdToken().then((tok) => {
+        if (!cancelled && tok) {
+          setIdToken(tok);
+        }
+      }).catch((err) => {
+        console.warn("[EnrollmentDialog] ID token fetch error:", err);
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [user, authLoading]);
+
+  // Rotate stream every 40s to prevent Vercel's 60s serverless timeout
+  useEffect(() => {
+    if (!useStream || !idToken) return;
+    const interval = setInterval(() => {
+      setStreamKey(Date.now());
+    }, 40000);
+    return () => clearInterval(interval);
+  }, [useStream, idToken]);
+
+  const streamUrl = (useStream && idToken)
+    ? `/api/dh360/persons/${person.person_id}/enrollment/sessions/stream?token=${encodeURIComponent(idToken)}&_t=${streamKey}`
+    : null;
 
   // Synchronize ref states
   useEffect(() => {
@@ -110,9 +143,9 @@ function EnrollmentDialogContent({
     return headers;
   }, [user]);
 
-  // Continuous active camera preview frame pull loop
+  // Fallback camera preview polling loop (activates if stream is unavailable)
   const fetchPreviewFrame = useCallback(async () => {
-    if (!activeRef.current || inFlightRef.current || !user || authLoading) return;
+    if (!activeRef.current || inFlightRef.current || !user || authLoading || useStream) return;
     inFlightRef.current = true;
     try {
       const headers = await getHeaders();
@@ -138,18 +171,18 @@ function EnrollmentDialogContent({
       // Preview stream frame temporarily unavailable
     } finally {
       inFlightRef.current = false;
-      if (activeRef.current) {
+      if (activeRef.current && !useStream) {
         previewTimerRef.current = setTimeout(() => {
           void fetchPreviewFrame();
         }, 50);
       }
     }
-  }, [user, authLoading, person.person_id, getHeaders]);
+  }, [user, authLoading, person.person_id, getHeaders, useStream]);
 
   // Start continuous preview loop on mount and clean up on unmount
   useEffect(() => {
     activeRef.current = true;
-    if (user && !authLoading) {
+    if (!useStream && user && !authLoading) {
       void fetchPreviewFrame();
     }
     return () => {
@@ -164,7 +197,7 @@ function EnrollmentDialogContent({
         clearTimeout(stepTimerRef.current);
       }
     };
-  }, [user, authLoading, fetchPreviewFrame]);
+  }, [user, authLoading, useStream, fetchPreviewFrame]);
 
   // Step capture function: evaluates 1 frame on backend
   const executeStep = useCallback(async () => {
@@ -622,7 +655,18 @@ function EnrollmentDialogContent({
 
               {/* Live Camera Preview with Head-Up Display (HUD) */}
               <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-slate-950 border border-sky-300/60 shadow-inner flex items-center justify-center group">
-                {previewUrl ? (
+                {(useStream && streamUrl) ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={streamUrl}
+                    alt="Robot camera live preview"
+                    className="h-full w-full object-cover"
+                    onError={() => {
+                      console.warn("[EnrollmentDialog] Stream error, falling back to polling preview");
+                      setUseStream(false);
+                    }}
+                  />
+                ) : previewUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={previewUrl}

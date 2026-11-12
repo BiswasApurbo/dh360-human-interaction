@@ -59,11 +59,44 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [idToken, setIdToken] = useState<string | null>(null);
+  const [streamKey, setStreamKey] = useState<number>(Date.now());
+  const [useStream, setUseStream] = useState<boolean>(true);
   const prevUrlRef = useRef<string | null>(null);
   const isPullingRef = useRef(false);
   const activeRef = useRef(true);
   const previewTimerRef = useRef<NodeJS.Timeout | null>(null);
   const userStoppedRef = useRef(false);
+
+  // Obtain caller ID token for stream authentication
+  useEffect(() => {
+    let cancelled = false;
+    if (user && !authLoading) {
+      user.getIdToken().then((tok) => {
+        if (!cancelled && tok) {
+          setIdToken(tok);
+        }
+      }).catch((err) => {
+        console.warn("[AuthorizationDialog] ID token fetch error:", err);
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [user, authLoading]);
+
+  // Rotate stream every 40s to prevent Vercel's 60s serverless timeout
+  useEffect(() => {
+    if (!useStream || !idToken) return;
+    const interval = setInterval(() => {
+      setStreamKey(Date.now());
+    }, 40000);
+    return () => clearInterval(interval);
+  }, [useStream, idToken]);
+
+  const streamUrl = (useStream && idToken)
+    ? `/api/dh360/authorization/sessions/stream?token=${encodeURIComponent(idToken)}&_t=${streamKey}`
+    : null;
 
   const getHeaders = useCallback(async (): Promise<HeadersInit> => {
     const headers: Record<string, string> = {
@@ -80,9 +113,9 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
     return headers;
   }, [user]);
 
-  // Continuous active camera frame pull loop
+  // Fallback camera preview polling loop (activates if stream is unavailable)
   const fetchPreviewFrame = useCallback(async () => {
-    if (!activeRef.current || isPullingRef.current || !user || authLoading) return;
+    if (!activeRef.current || isPullingRef.current || !user || authLoading || useStream) return;
     isPullingRef.current = true;
     try {
       const headers = await getHeaders();
@@ -105,18 +138,18 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
       // preview frame temporarily unavailable
     } finally {
       isPullingRef.current = false;
-      if (activeRef.current) {
+      if (activeRef.current && !useStream) {
         previewTimerRef.current = setTimeout(() => {
           void fetchPreviewFrame();
         }, 50);
       }
     }
-  }, [user, authLoading, getHeaders]);
+  }, [user, authLoading, getHeaders, useStream]);
 
-  // Start continuous preview loop on mount
+  // Start continuous preview loop on mount or when fallback active
   useEffect(() => {
     activeRef.current = true;
-    if (user && !authLoading) {
+    if (!useStream && user && !authLoading) {
       void fetchPreviewFrame();
     }
     return () => {
@@ -128,7 +161,7 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
         URL.revokeObjectURL(prevUrlRef.current);
       }
     };
-  }, [user, authLoading, fetchPreviewFrame]);
+  }, [user, authLoading, useStream, fetchPreviewFrame]);
 
   // Start authorization session
   const startAuthorization = useCallback(async () => {
@@ -393,7 +426,18 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
 
           {/* Live Camera Viewport with Cybernetic Reticle */}
           <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-slate-950 border border-sky-300/60 shadow-inner flex items-center justify-center group">
-            {previewUrl ? (
+            {(useStream && streamUrl) ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={streamUrl}
+                alt="Live authorization camera stream"
+                className="h-full w-full object-cover"
+                onError={() => {
+                  console.warn("[AuthorizationDialog] Stream error, falling back to polling preview");
+                  setUseStream(false);
+                }}
+              />
+            ) : previewUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={previewUrl}

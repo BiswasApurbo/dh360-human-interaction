@@ -30,8 +30,101 @@ from dh360_hi.contracts.errors import (
 )
 from dh360_hi.vision.frame import FrameSource, WebcamFrameSource
 
+import threading
+
 router = APIRouter(prefix="/persons", tags=["enrollment"])
 _enrollment_manage = Depends(require_scope(OperatorScope.ENROLLMENT_MANAGE))
+
+_enroll_cache_lock = threading.Lock()
+_cached_enroll_frame_id: int = -1
+_cached_enroll_key: str = ""
+_cached_enroll_jpeg: bytes = b""
+
+
+def _get_encoded_enroll_frame(service: HumanInteractionService) -> bytes | None:
+    """Encode the latest camera frame with enrollment HUD, caching by frame_id and detection state."""
+    global _cached_enroll_frame_id, _cached_enroll_key, _cached_enroll_jpeg
+    frame_getter = getattr(service, "get_latest_camera_frame", None) or getattr(service, "get_latest_enrollment_frame", None)
+    frame = frame_getter() if callable(frame_getter) else None
+    if frame is None or getattr(frame, "image", None) is None:
+        return None
+
+    progress = service.get_enrollment_progress()
+    face_detected = getattr(progress, "face_detected", False) if progress else False
+    stage = getattr(progress, "current_direction", "front") if progress else "front"
+    bbox = getattr(progress, "face_bbox", None) if progress else None
+    bbox_str = f"{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}" if bbox and len(bbox) == 4 else ""
+    key = f"{face_detected}:{stage}:{bbox_str}"
+
+    with _enroll_cache_lock:
+        if (
+            frame.frame_id == _cached_enroll_frame_id
+            and _cached_enroll_key == key
+            and _cached_enroll_jpeg
+        ):
+            return _cached_enroll_jpeg
+
+    import cv2
+
+    img = frame.image.copy()
+    h, w = img.shape[:2]
+    target_w = 480
+    if w != target_w:
+        target_h = int(h * (target_w / w))
+        img = cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+        sx = target_w / w
+        sy = target_h / h
+    else:
+        sx = 1.0
+        sy = 1.0
+
+    if progress is not None and progress.face_detected and progress.face_bbox:
+        try:
+            bx, by, bw, bh = progress.face_bbox
+            rx = int(bx * sx)
+            ry = int(by * sy)
+            rw = int(bw * sx)
+            rh = int(bh * sy)
+
+            corner_len = max(10, int(min(rw, rh) * 0.18))
+            color = (248, 189, 56)  # High-visibility sky blue (BGR)
+            thickness = 2
+
+            cv2.line(img, (rx, ry), (rx + corner_len, ry), color, thickness)
+            cv2.line(img, (rx, ry), (rx, ry + corner_len), color, thickness)
+            cv2.line(img, (rx + rw, ry), (rx + rw - corner_len, ry), color, thickness)
+            cv2.line(img, (rx + rw, ry), (rx + rw, ry + corner_len), color, thickness)
+            cv2.line(img, (rx, ry + rh), (rx + corner_len, ry + rh), color, thickness)
+            cv2.line(img, (rx, ry + rh), (rx, ry + rh - corner_len), color, thickness)
+            cv2.line(img, (rx + rw, ry + rh), (rx + rw - corner_len, ry + rh), color, thickness)
+            cv2.line(img, (rx + rw, ry + rh), (rx + rw - corner_len, ry + rh), color, thickness)
+
+            stage_text = (progress.current_direction or "front").upper()
+            tag = f"FACE DETECTED [{stage_text}]"
+            cv2.putText(
+                img,
+                tag,
+                (rx + 4, max(18, ry - 6)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                color,
+                1,
+                cv2.LINE_AA,
+            )
+        except Exception:
+            pass
+
+    success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
+    if not success:
+        return None
+
+    jpeg_bytes = encoded.tobytes()
+    with _enroll_cache_lock:
+        _cached_enroll_frame_id = frame.frame_id
+        _cached_enroll_key = key
+        _cached_enroll_jpeg = jpeg_bytes
+
+    return jpeg_bytes
 
 
 class EnrollmentStartRequest(BaseModel):
@@ -146,78 +239,20 @@ def get_enrollment_preview_frame(
     service = _get_service(request)
     tenant_id = request.headers.get("X-Tenant-ID")
     _require_person(service, person_id, tenant_id=tenant_id)
-    frame_getter = getattr(service, "get_latest_camera_frame", None) or getattr(service, "get_latest_enrollment_frame", None)
-    frame = frame_getter() if callable(frame_getter) else None
-    if frame is None or getattr(frame, "image", None) is None:
+    jpeg_bytes = _get_encoded_enroll_frame(service)
+    if jpeg_bytes is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No preview frame available for enrollment session",
         )
-    import cv2
-
-    img = frame.image.copy()
-    h, w = img.shape[:2]
-    if w > 640:
-        new_w = 640
-        new_h = int(h * (640 / w))
-        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        sx = new_w / w
-        sy = new_h / h
-    else:
-        sx = 1.0
-        sy = 1.0
-
-    # Draw face detection bounding box and HUD guide if detected
-    progress = service.get_enrollment_progress()
-    if progress is not None and progress.face_detected and progress.face_bbox:
-        try:
-            bx, by, bw, bh = progress.face_bbox
-            rx = int(bx * sx)
-            ry = int(by * sy)
-            rw = int(bw * sx)
-            rh = int(bh * sy)
-
-            # High-tech cybernetic corner brackets
-            corner_len = max(10, int(min(rw, rh) * 0.18))
-            color = (248, 189, 56)  # High-visibility sky blue (BGR)
-            thickness = 2
-
-            # Corners
-            cv2.line(img, (rx, ry), (rx + corner_len, ry), color, thickness)
-            cv2.line(img, (rx, ry), (rx, ry + corner_len), color, thickness)
-            cv2.line(img, (rx + rw, ry), (rx + rw - corner_len, ry), color, thickness)
-            cv2.line(img, (rx + rw, ry), (rx + rw, ry + corner_len), color, thickness)
-            cv2.line(img, (rx, ry + rh), (rx + corner_len, ry + rh), color, thickness)
-            cv2.line(img, (rx, ry + rh), (rx, ry + rh - corner_len), color, thickness)
-            cv2.line(img, (rx + rw, ry + rh), (rx + rw - corner_len, ry + rh), color, thickness)
-            cv2.line(img, (rx + rw, ry + rh), (rx + rw, ry + rh - corner_len), color, thickness)
-
-            # Stage tag badge
-            stage = (progress.current_direction or "front").upper()
-            tag = f"FACE DETECTED [{stage}]"
-            cv2.putText(
-                img,
-                tag,
-                (rx + 4, max(18, ry - 6)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.45,
-                color,
-                1,
-                cv2.LINE_AA,
-            )
-        except Exception:
-            pass
-
-    success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to encode preview frame",
-        )
     return Response(
-        content=encoded.tobytes(),
+        content=jpeg_bytes,
         media_type="image/jpeg",
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
     )
 
 
@@ -229,82 +264,32 @@ async def stream_enrollment_preview(
 ) -> StreamingResponse:
     """Stream live server camera frames as multipart/x-mixed-replace JPEG stream (15-30 FPS)."""
     import asyncio
-    import cv2
 
     service = _get_service(request)
     tenant_id = request.headers.get("X-Tenant-ID")
     _require_person(service, person_id, tenant_id=tenant_id)
 
     async def frame_generator():
-        last_frame_id = -1
+        last_sent_id = -1
         try:
             while True:
                 if await request.is_disconnected():
                     break
 
                 frame_getter = getattr(service, "get_latest_camera_frame", None) or getattr(service, "get_latest_enrollment_frame", None)
-                frame = frame_getter() if callable(frame_getter) else None
-                if frame is not None and getattr(frame, "image", None) is not None and frame.frame_id != last_frame_id:
-                    last_frame_id = frame.frame_id
-                    img = frame.image.copy()
-                    h, w = img.shape[:2]
-                    if w > 640:
-                        new_w = 640
-                        new_h = int(h * (640 / w))
-                        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-                        sx = new_w / w
-                        sy = new_h / h
-                    else:
-                        sx = 1.0
-                        sy = 1.0
-
-                    # Draw face detection bounding box and HUD guide if detected
-                    progress = service.get_enrollment_progress()
-                    if progress is not None and progress.face_detected and progress.face_bbox:
-                        try:
-                            bx, by, bw, bh = progress.face_bbox
-                            rx = int(bx * sx)
-                            ry = int(by * sy)
-                            rw = int(bw * sx)
-                            rh = int(bh * sy)
-
-                            corner_len = max(10, int(min(rw, rh) * 0.18))
-                            color = (248, 189, 56)  # High-visibility sky blue
-                            thickness = 2
-
-                            cv2.line(img, (rx, ry), (rx + corner_len, ry), color, thickness)
-                            cv2.line(img, (rx, ry), (rx, ry + corner_len), color, thickness)
-                            cv2.line(img, (rx + rw, ry), (rx + rw - corner_len, ry), color, thickness)
-                            cv2.line(img, (rx + rw, ry), (rx + rw, ry + corner_len), color, thickness)
-                            cv2.line(img, (rx, ry + rh), (rx + corner_len, ry + rh), color, thickness)
-                            cv2.line(img, (rx, ry + rh), (rx, ry + rh - corner_len), color, thickness)
-                            cv2.line(img, (rx + rw, ry + rh), (rx + rw - corner_len, ry + rh), color, thickness)
-                            cv2.line(img, (rx + rw, ry + rh), (rx + rw, ry + rh - corner_len), color, thickness)
-
-                            stage = (progress.current_direction or "front").upper()
-                            tag = f"FACE DETECTED [{stage}]"
-                            cv2.putText(
-                                img,
-                                tag,
-                                (rx + 4, max(18, ry - 6)),
-                                cv2.FONT_HERSHEY_SIMPLEX,
-                                0.45,
-                                color,
-                                1,
-                                cv2.LINE_AA,
-                            )
-                        except Exception:
-                            pass
-
-                    success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 68])
-                    if success:
-                        chunk = (
+                cur_frame = frame_getter() if callable(frame_getter) else None
+                cur_id = getattr(cur_frame, "frame_id", None)
+                if cur_id is not None and cur_id != last_sent_id:
+                    jpeg_bytes = _get_encoded_enroll_frame(service)
+                    if jpeg_bytes is not None:
+                        last_sent_id = cur_id
+                        yield (
                             b"--frame\r\n"
-                            b"Content-Type: image/jpeg\r\n\r\n"
-                            + encoded.tobytes()
+                            b"Content-Type: image/jpeg\r\n"
+                            b"Content-Length: " + str(len(jpeg_bytes)).encode("ascii") + b"\r\n\r\n"
+                            + jpeg_bytes
                             + b"\r\n"
                         )
-                        yield chunk
                 await asyncio.sleep(0.015)  # Responsive check for next captured frame (up to 30 FPS)
         except asyncio.CancelledError:
             pass
