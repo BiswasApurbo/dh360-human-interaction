@@ -10,63 +10,8 @@ from fastapi.responses import Response, StreamingResponse
 from dh360_hi.api.security import OperatorPrincipal, OperatorScope, require_scope
 from dh360_hi.edge.authorization_controller import AuthorizationController
 
-import threading
-
 router = APIRouter(prefix="", tags=["authorization"])
 _authorization_manage = Depends(require_scope(OperatorScope.AUTHORIZATION_MANAGE))
-
-_auth_cache_lock = threading.Lock()
-_cached_auth_frame_id: int = -1
-_cached_auth_status: str = ""
-_cached_auth_name: str = ""
-_cached_auth_jpeg: bytes = b""
-
-
-def _get_encoded_auth_frame(service: Any, controller: Any) -> bytes | None:
-    """Encode the latest camera frame with authorization HUD, caching by frame_id and session status."""
-    global _cached_auth_frame_id, _cached_auth_status, _cached_auth_name, _cached_auth_jpeg
-    frame_getter = getattr(service, "get_latest_camera_frame", None) or getattr(service, "get_latest_enrollment_frame", None)
-    frame = frame_getter() if callable(frame_getter) else None
-    if frame is None or getattr(frame, "image", None) is None:
-        return None
-
-    current_session = controller.get_current() if controller else None
-    status_val = getattr(current_session, "status", None) if current_session else None
-    status_name = status_val.value if hasattr(status_val, "value") else str(status_val or "standby")
-    display_name = getattr(current_session, "display_name", "") or ""
-
-    with _auth_cache_lock:
-        if (
-            frame.frame_id == _cached_auth_frame_id
-            and _cached_auth_status == status_name
-            and _cached_auth_name == display_name
-            and _cached_auth_jpeg
-        ):
-            return _cached_auth_jpeg
-
-    import cv2
-
-    img = frame.image.copy()
-    h, w = img.shape[:2]
-    target_w = 480
-    if w != target_w:
-        target_h = int(h * (target_w / w))
-        img = cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
-
-    _render_auth_hud(img, current_session)
-
-    success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
-    if not success:
-        return None
-
-    jpeg_bytes = encoded.tobytes()
-    with _auth_cache_lock:
-        _cached_auth_frame_id = frame.frame_id
-        _cached_auth_status = status_name
-        _cached_auth_name = display_name
-        _cached_auth_jpeg = jpeg_bytes
-
-    return jpeg_bytes
 
 
 def _get_controller(request: Request) -> AuthorizationController:
@@ -165,21 +110,36 @@ def get_authorization_preview_frame(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Application service is not initialized",
         )
-    controller = getattr(request.app.state, "authorization_controller", None)
-    jpeg_bytes = _get_encoded_auth_frame(service, controller)
-    if jpeg_bytes is None:
+    frame_getter = getattr(service, "get_latest_camera_frame", None) or getattr(service, "get_latest_enrollment_frame", None)
+    frame = frame_getter() if callable(frame_getter) else None
+    if frame is None or getattr(frame, "image", None) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No preview frame available",
         )
+    import cv2
+
+    img = frame.image.copy()
+    h, w = img.shape[:2]
+    if w > 640:
+        new_w = 640
+        new_h = int(h * (640 / w))
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    controller = getattr(request.app.state, "authorization_controller", None)
+    current_session = controller.get_current() if controller else None
+    _render_auth_hud(img, current_session)
+
+    success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to encode preview frame",
+        )
     return Response(
-        content=jpeg_bytes,
+        content=encoded.tobytes(),
         media_type="image/jpeg",
-        headers={
-            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-            "Pragma": "no-cache",
-            "Expires": "0",
-        },
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
     )
 
 
@@ -196,30 +156,38 @@ async def stream_authorization_preview(
             detail="Application service is not initialized",
         )
     import asyncio
+    import cv2
 
     controller = getattr(request.app.state, "authorization_controller", None)
 
     async def frame_generator():
-        last_sent_id = -1
+        last_frame_id = -1
         try:
             while True:
                 if await request.is_disconnected():
                     break
                 frame_getter = getattr(service, "get_latest_camera_frame", None) or getattr(service, "get_latest_enrollment_frame", None)
-                cur_frame = frame_getter() if callable(frame_getter) else None
-                cur_id = getattr(cur_frame, "frame_id", None)
-                if cur_id is not None and cur_id != last_sent_id:
-                    jpeg_bytes = _get_encoded_auth_frame(service, controller)
-                    if jpeg_bytes is not None:
-                        last_sent_id = cur_id
-                        yield (
+                frame = frame_getter() if callable(frame_getter) else None
+                if frame is not None and getattr(frame, "image", None) is not None and frame.frame_id != last_frame_id:
+                    last_frame_id = frame.frame_id
+                    img = frame.image.copy()
+                    h, w = img.shape[:2]
+                    if w > 640:
+                        new_w = 640
+                        new_h = int(h * (640 / w))
+                        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+                    current_session = controller.get_current() if controller else None
+                    _render_auth_hud(img, current_session)
+                    success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 68])
+                    if success:
+                        chunk = (
                             b"--frame\r\n"
-                            b"Content-Type: image/jpeg\r\n"
-                            b"Content-Length: " + str(len(jpeg_bytes)).encode("ascii") + b"\r\n\r\n"
-                            + jpeg_bytes
+                            b"Content-Type: image/jpeg\r\n\r\n"
+                            + encoded.tobytes()
                             + b"\r\n"
                         )
-                await asyncio.sleep(0.005)  # Responsive check for next captured frame (up to 30 FPS)
+                        yield chunk
+                await asyncio.sleep(0.015)  # Responsive check for next captured frame (up to 30 FPS)
         except asyncio.CancelledError:
             pass
 
