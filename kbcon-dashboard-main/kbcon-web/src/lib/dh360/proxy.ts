@@ -216,6 +216,7 @@ export async function handleDh360ProxyRequest(
       headers: upstreamHeaders,
       body: rawBodyText !== null ? rawBodyText : undefined,
       signal: fetchSignal,
+      cache: "no-store",
     });
 
     if (timeoutId) clearTimeout(timeoutId);

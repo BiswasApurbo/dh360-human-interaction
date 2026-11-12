@@ -13,6 +13,10 @@
 
 import { handleDh360ProxyRequest } from "../../../../lib/dh360/proxy.ts";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const fetchCache = "force-no-store";
+
 interface RouteContext {
   params: Promise<{ path: string[] }> | { path: string[] };
 }
