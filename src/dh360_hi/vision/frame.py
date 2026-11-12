@@ -256,19 +256,28 @@ class WebcamFrameSource(FrameSource):
         return cap
 
     def _discover_candidate_indices(self) -> list[int]:
-        """Discover candidate camera device indices, prioritizing physical nodes."""
+        """Discover candidate camera device indices, prioritizing physical camera nodes and filtering out platform codecs/ISPs."""
         candidates = [self.camera_index]
         if self.auto_discover:
             if sys.platform.startswith("linux"):
                 v4l_indices: list[int] = []
                 v4l_dir = Path("/sys/class/video4linux")
+                ignored_keywords = ("bcm2835", "isp", "codec", "hevc", "unicam", "dummy")
                 if v4l_dir.exists():
                     for entry in sorted(v4l_dir.glob("video*")):
                         try:
                             num = int(entry.name.replace("video", ""))
-                            if Path(f"/dev/video{num}").exists():
-                                v4l_indices.append(num)
-                        except ValueError:
+                            dev_path = Path(f"/dev/video{num}")
+                            if not dev_path.exists():
+                                continue
+                            # Inspect sysfs name to skip hardware decoders/encoders and ISPs
+                            name_file = entry / "name"
+                            if name_file.exists():
+                                dev_name = name_file.read_text().strip().lower()
+                                if any(kw in dev_name for kw in ignored_keywords):
+                                    continue
+                            v4l_indices.append(num)
+                        except Exception:
                             pass
                 if v4l_indices:
                     if self.camera_index in v4l_indices:
@@ -276,11 +285,11 @@ class WebcamFrameSource(FrameSource):
                     else:
                         candidates = list(v4l_indices)
                 else:
-                    for idx in [0, 1, 2, 3, 4]:
+                    for idx in [0, 1, 2]:
                         if idx not in candidates:
                             candidates.append(idx)
             else:
-                for idx in [0, 1, 2, 3, 4]:
+                for idx in [0, 1, 2]:
                     if idx not in candidates:
                         candidates.append(idx)
         return candidates
