@@ -89,3 +89,31 @@ async def test_send_heartbeat_network_error_handled():
     success = await client._send_heartbeat(mock_http)
     assert success is False
     assert client._was_offline is True
+
+
+@pytest.mark.anyio
+async def test_send_heartbeat_multi_url_broadcast():
+    client = EdgeHeartbeatClient(
+        robot_id="test-bot",
+        central_url="https://site1.com,https://site2.com",
+    )
+    assert len(client.central_urls) == 2
+
+    mock_resp1 = MagicMock()
+    mock_resp1.status_code = 200
+    mock_resp1.json.return_value = {"status": "online", "tenant": "Salute"}
+
+    mock_resp2 = MagicMock()
+    mock_resp2.status_code = 500
+    mock_resp2.text = "Internal Server Error"
+
+    mock_http = AsyncMock(spec=httpx.AsyncClient)
+    # site1 succeeds, site2 returns 500
+    mock_http.post.side_effect = [mock_resp1, mock_resp2]
+
+    with patch("dh360_hi.edge.heartbeat._read_cpu_temperature", return_value=40.0):
+        success = await client._send_heartbeat(mock_http)
+
+    assert success is True
+    assert mock_http.post.call_count == 2
+

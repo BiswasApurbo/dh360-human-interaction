@@ -56,11 +56,13 @@ class EdgeHeartbeatClient:
             resolved = robot_id
 
         self.robot_id = resolved
-        self.central_url = (
+        raw_url = (
             central_url
             or os.environ.get("KBCON_CENTRAL_URL")
-            or "https://kbcon-dashboard-gamma.vercel.app"
-        ).rstrip("/")
+            or "https://kbcon-dashboard-client.vercel.app,https://kbcon-dashboard-gamma.vercel.app"
+        )
+        self.central_urls = [u.strip().rstrip("/") for u in raw_url.split(",") if u.strip()]
+        self.central_url = self.central_urls[0] if self.central_urls else "https://kbcon-dashboard-client.vercel.app"
         self.interval_seconds = max(5.0, interval_seconds)
         self.min_backoff = min_backoff_seconds
         self.max_backoff = max_backoff_seconds
@@ -122,7 +124,6 @@ class EdgeHeartbeatClient:
             logger.debug("Device is UNPROVISIONED; awaiting pairing before heartbeating.")
             return False
 
-        url = f"{self.central_url}/api/robot/heartbeat"
         temp = _read_cpu_temperature()
         payload: dict[str, Any] = {
             "robotId": self.robot_id,
@@ -137,75 +138,90 @@ class EdgeHeartbeatClient:
         if "X-Device-ID" in headers:
             payload["deviceId"] = headers["X-Device-ID"]
 
-        try:
-            resp = await client.post(
-                url,
-                json=payload,
-                headers=headers,
-                timeout=httpx.Timeout(10.0, connect=5.0),
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                if self._was_offline:
-                    logger.info("Reconnected to central dashboard after network interruption!")
-                    self._was_offline = False
+        overall_success = False
+        latest_data: dict[str, Any] | None = None
+        rejections: list[str] = []
 
-                self._current_backoff = self.min_backoff
-
-                # Synchronize authoritative tenant if provided
-                if isinstance(data, dict):
-                    remote_tenant = (
-                        data.get("tenantName") or data.get("tenant") or data.get("tenantId")
+        for base_url in self.central_urls:
+            url = f"{base_url}/api/robot/heartbeat"
+            try:
+                resp = await client.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    timeout=httpx.Timeout(10.0, connect=5.0),
+                )
+                if resp.status_code == 200:
+                    overall_success = True
+                    try:
+                        data = resp.json()
+                        if latest_data is None and isinstance(data, dict):
+                            latest_data = data
+                    except Exception:
+                        pass
+                else:
+                    rejections.append(f"{base_url} (status {resp.status_code})")
+                    logger.warning(
+                        "Heartbeat rejected by %s (status %d): %s",
+                        base_url,
+                        resp.status_code,
+                        resp.text[:200],
                     )
-                    if remote_tenant:
-                        try:
-                            from dh360_hi.device.identity import DeviceIdentity
+            except (httpx.RequestError, httpx.TimeoutException) as exc:
+                rejections.append(f"{base_url} ({exc})")
+            except Exception as exc:
+                logger.error("Unexpected error in heartbeat transmission to %s: %s", base_url, exc, exc_info=True)
 
-                            dev_ident = DeviceIdentity.load_or_create()
-                            if dev_ident.config.tenant_id != remote_tenant:
-                                dev_ident.config.tenant_id = remote_tenant
-                                dev_ident.save()
-                                logger.info(
-                                    "EdgeHeartbeatClient synchronized authoritative tenant: %s",
-                                    remote_tenant,
-                                )
-                        except Exception:
-                            pass
+        if overall_success:
+            if self._was_offline:
+                logger.info("Reconnected to central dashboard after network interruption!")
+                self._was_offline = False
 
-                # Synchronize remote config if provided
-                if self.on_config_synced and isinstance(data, dict):
-                    remote_config = data.get("config", {})
-                    if remote_config != self._synced_config:
-                        self._synced_config = remote_config
-                        self.on_config_synced(data)
+            self._current_backoff = self.min_backoff
 
-                logger.info(
-                    "Heartbeat acknowledged by central dashboard (robot '%s', tenant '%s')",
-                    self.robot_id,
-                    data.get("tenantName") or data.get("tenant")
-                    if isinstance(data, dict)
-                    else "unknown",
+            # Synchronize authoritative tenant if provided
+            if isinstance(latest_data, dict):
+                remote_tenant = (
+                    latest_data.get("tenantName") or latest_data.get("tenant") or latest_data.get("tenantId")
                 )
-                return True
+                if remote_tenant:
+                    try:
+                        from dh360_hi.device.identity import DeviceIdentity
 
-            logger.warning(
-                "Heartbeat rejected by central server (status %d): %s",
-                resp.status_code,
-                resp.text[:200],
+                        dev_ident = DeviceIdentity.load_or_create()
+                        if dev_ident.config.tenant_id != remote_tenant:
+                            dev_ident.config.tenant_id = remote_tenant
+                            dev_ident.save()
+                            logger.info(
+                                "EdgeHeartbeatClient synchronized authoritative tenant: %s",
+                                remote_tenant,
+                            )
+                    except Exception:
+                        pass
+
+            # Synchronize remote config if provided
+            if self.on_config_synced and isinstance(latest_data, dict):
+                remote_config = latest_data.get("config", {})
+                if remote_config != self._synced_config:
+                    self._synced_config = remote_config
+                    self.on_config_synced(latest_data)
+
+            logger.info(
+                "Heartbeat acknowledged by central dashboard (robot '%s', tenant '%s')",
+                self.robot_id,
+                latest_data.get("tenantName") or latest_data.get("tenant")
+                if isinstance(latest_data, dict)
+                else "unknown",
             )
-            return False
+            return True
 
-        except (httpx.RequestError, httpx.TimeoutException) as exc:
-            if not self._was_offline:
-                logger.warning(
-                    "Network disconnected or central server unreachable (%s). Entering retry loop...",
-                    exc,
-                )
-                self._was_offline = True
-            return False
-        except Exception as exc:
-            logger.error("Unexpected error in heartbeat transmission: %s", exc, exc_info=True)
-            return False
+        if not self._was_offline:
+            logger.warning(
+                "Network disconnected or central server unreachable (%s). Entering retry loop...",
+                ", ".join(rejections) if rejections else "no endpoints reached",
+            )
+            self._was_offline = True
+        return False
 
     async def _run_loop(self) -> None:
         """Continuous heartbeat and reconnection loop with resilient client refresh and backoff."""
