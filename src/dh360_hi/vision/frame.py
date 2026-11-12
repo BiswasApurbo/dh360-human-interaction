@@ -203,6 +203,7 @@ class WebcamFrameSource(FrameSource):
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._frame_lock = threading.Lock()
+        self._device_lock = threading.Lock()
         self._latest_image: np.ndarray | None = None
 
     def _open_device(self, index: int) -> cv2.VideoCapture | None:
@@ -295,36 +296,41 @@ class WebcamFrameSource(FrameSource):
         return candidates
 
     def _recover_device(self) -> bool:
-        """Attempt to recover from a capture error or USB device re-enumeration."""
-        old_cap = self._cap
-        self._cap = None
-        if old_cap is not None:
-            try:
-                old_cap.release()
-            except Exception:
-                pass
+        """Attempt to recover from a capture error or USB device re-enumeration (thread-safe)."""
+        if not self._device_lock.acquire(blocking=False):
+            return False
+        try:
+            old_cap = self._cap
+            self._cap = None
+            if old_cap is not None:
+                try:
+                    old_cap.release()
+                except Exception:
+                    pass
 
-        candidates = self._discover_candidate_indices()
-        new_cap = None
-        new_index = self.camera_index
-        for idx in candidates:
-            new_cap = self._open_device(idx)
+            candidates = self._discover_candidate_indices()
+            new_cap = None
+            new_index = self.camera_index
+            for idx in candidates:
+                new_cap = self._open_device(idx)
+                if new_cap is not None:
+                    new_index = idx
+                    break
+
             if new_cap is not None:
-                new_index = idx
-                break
-
-        if new_cap is not None:
-            self.camera_index = new_index
-            self._cap = new_cap
-            self._consecutive_read_failures = 0
-            width = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            raw_fps = self._cap.get(cv2.CAP_PROP_FPS)
-            self._resolution = (width, height)
-            if raw_fps > 0:
-                self._fps = float(raw_fps)
-            return True
-        return False
+                self.camera_index = new_index
+                self._cap = new_cap
+                self._consecutive_read_failures = 0
+                width = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                raw_fps = self._cap.get(cv2.CAP_PROP_FPS)
+                self._resolution = (width, height)
+                if raw_fps > 0:
+                    self._fps = float(raw_fps)
+                return True
+            return False
+        finally:
+            self._device_lock.release()
 
     def open(self) -> None:
         candidates = self._discover_candidate_indices()
@@ -373,8 +379,17 @@ class WebcamFrameSource(FrameSource):
         while not self._stop_event.is_set():
             cap = self._cap
             if cap is None or not cap.isOpened():
-                time.sleep(0.02)
+                if self.auto_discover:
+                    now = time.monotonic()
+                    if now - self._last_reopen_attempt >= 1.5:
+                        self._last_reopen_attempt = now
+                        try:
+                            self._recover_device()
+                        except Exception:
+                            pass
+                time.sleep(0.05)
                 continue
+
             success, image = cap.read()
             if success and image is not None:
                 now = time.monotonic()
@@ -402,26 +417,17 @@ class WebcamFrameSource(FrameSource):
 
     def read(self) -> Frame | None:
         now = time.monotonic()
-        if self._cap is None or not self._cap.isOpened():
-            if self.auto_discover and (now - self._last_reopen_attempt >= 1.5):
-                self._last_reopen_attempt = now
-                try:
-                    self._recover_device()
-                except Exception:
-                    pass
-            if self._cap is None or not self._cap.isOpened():
-                return None
 
-        # Check freshness: if no frame was read in the last 0.8s, worker is stalled or camera dropped
-        if not self._read_timestamps or (now - self._read_timestamps[-1] > 0.8):
+        # Check freshness: if no frame was read in the last 2.0s, worker is stalled or camera dropped
+        if not self._read_timestamps or (now - self._read_timestamps[-1] > 2.0):
             with self._frame_lock:
                 self._latest_image = None
 
-        # Try non-blocking latest image from background worker first
+        # Retrieve latest image from background worker
         with self._frame_lock:
             image = self._latest_image
 
-        # If background thread hasn't pulled first frame yet, wait briefly or fall back to direct read
+        # If background thread hasn't pulled first frame yet, wait briefly
         if image is None:
             for _ in range(5):
                 time.sleep(0.01)
@@ -429,27 +435,6 @@ class WebcamFrameSource(FrameSource):
                     image = self._latest_image
                 if image is not None:
                     break
-
-        if image is None and self._cap is not None and self._cap.isOpened():
-            success, direct_img = self._cap.read()
-            if success and direct_img is not None:
-                image = direct_img
-                with self._frame_lock:
-                    self._latest_image = image
-                self._read_timestamps.append(now)
-            else:
-                self._consecutive_read_failures += 1
-                if (
-                    self.auto_discover
-                    and self._consecutive_read_failures >= 5
-                    and (now - self._last_reopen_attempt >= 1.5)
-                ):
-                    self._last_reopen_attempt = now
-                    try:
-                        self._recover_device()
-                    except Exception:
-                        pass
-                return None
 
         if image is None:
             return None
