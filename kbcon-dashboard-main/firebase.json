@@ -48,7 +48,7 @@
     "redirects": [
       {
         "source": "/__/auth/action",
-        "destination": "https://kbcon-dashboard-gamma.vercel.app/auth/action",
+        "destination": "https://kbcon-dashboard-client.vercel.app/auth/action",
         "type": 302
       }
     ]

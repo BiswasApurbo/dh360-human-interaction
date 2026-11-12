@@ -21,7 +21,7 @@ from dh360_hi.device.identity import DeviceIdentity
 logger = logging.getLogger(__name__)
 
 DEFAULT_CENTRAL_URL = os.environ.get(
-    "KBCON_CENTRAL_URL", "https://kbcon-dashboard-gamma.vercel.app"
+    "KBCON_CENTRAL_URL", "https://kbcon-dashboard-client.vercel.app"
 ).rstrip("/")
 
 

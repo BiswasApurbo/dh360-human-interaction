@@ -375,7 +375,9 @@ export async function authenticateFirebaseToken(
         const effectiveRole =
           (decoded.role as string) ||
           payload.role ||
-          (email === "apurbobiswas32@gmail.com" || email === "superadmin@gmail.com"
+          (email === "26digital360@gmail.com" ||
+            email === "apurbobiswas32@gmail.com" ||
+            email === "superadmin@gmail.com"
             ? "superAdmin"
             : undefined);
         if (effectiveRole !== "superAdmin" && effectiveRole !== "admin") {
@@ -535,7 +537,9 @@ export async function authenticateFirebaseToken(
     const email = (payload.email || "").toLowerCase();
     const role =
       payload.role ||
-      (email === "apurbobiswas32@gmail.com" || email === "superadmin@gmail.com"
+      (email === "26digital360@gmail.com" ||
+        email === "apurbobiswas32@gmail.com" ||
+        email === "superadmin@gmail.com"
         ? "superAdmin"
         : undefined);
     if (role !== "superAdmin" && role !== "admin") {

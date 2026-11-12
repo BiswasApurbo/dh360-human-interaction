@@ -11,7 +11,7 @@
  *   --emulator    Force using local Firebase Auth/Firestore emulator.
  *
  * Environment Variables (Production):
- *   FIREBASE_PROJECT_ID            Target Firebase Project ID (default: kbcon-dashboard-4b009)
+ *   FIREBASE_PROJECT_ID            Target Firebase Project ID (default: kbcon-production)
  *   GOOGLE_APPLICATION_CREDENTIALS Path to service account JSON file
  *   FIREBASE_SERVICE_ACCOUNT_KEY   Path to service account JSON file, or inline JSON string
  *

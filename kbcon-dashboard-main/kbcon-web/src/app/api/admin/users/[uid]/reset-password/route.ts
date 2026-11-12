@@ -64,9 +64,15 @@ export async function POST(request: Request, context: RouteParams) {
       );
     }
 
+    const appUrl =
+      process.env.NEXT_PUBLIC_APP_URL ||
+      (process.env.VERCEL_PROJECT_PRODUCTION_URL
+        ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+        : "https://kbcon-dashboard-client.vercel.app");
+
     // Generate reset link via Firebase Admin SDK targeting branded action handler
     const actionCodeSettings = {
-      url: "https://kbcon-dashboard-gamma.vercel.app/auth/action",
+      url: `${appUrl}/auth/action`,
       handleCodeInApp: false,
     };
 
@@ -75,7 +81,7 @@ export async function POST(request: Request, context: RouteParams) {
     // Send the branded Firebase password reset email with continueUrl preserved
     const apiKey =
       process.env.NEXT_PUBLIC_FIREBASE_API_KEY ||
-      "AIzaSyDZZnhT04VdmzYwdY8o2Xzp5u6WX1nTreM";
+      "AIzaSyDGMZL2JhX3-fUwUPn4Ivhaa8ECN0LJfMQ";
     try {
       await fetch(
         `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${apiKey}`,
@@ -85,7 +91,7 @@ export async function POST(request: Request, context: RouteParams) {
           body: JSON.stringify({
             requestType: "PASSWORD_RESET",
             email: user.email,
-            continueUrl: "https://kbcon-dashboard-gamma.vercel.app/auth/action",
+            continueUrl: `${appUrl}/auth/action`,
           }),
         }
       );

@@ -60,7 +60,9 @@ export function useRole() {
       .then((result) => {
         const r =
           result.claims.role ||
-          (user.email === "apurbobiswas32@gmail.com" || user.email === "superadmin@gmail.com"
+          (user.email === "26digital360@gmail.com" ||
+            user.email === "apurbobiswas32@gmail.com" ||
+            user.email === "superadmin@gmail.com"
             ? "superAdmin"
             : null);
         const validRole = r === "superAdmin" || r === "admin" ? r : null;

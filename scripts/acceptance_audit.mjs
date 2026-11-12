@@ -27,8 +27,8 @@ const app = admin.initializeApp({ credential: admin.cert(sa) }, "audit-runner");
 const authAdmin = getAuth(app);
 const dbAdmin = getFirestore(app);
 
-const VERCEL_URL = "https://kbcon-dashboard-gamma.vercel.app";
-const PI_URL = "https://raspberrypi.tailacfb18.ts.net";
+const VERCEL_URL = process.env.VERCEL_URL || "https://kbcon-dashboard-client.vercel.app";
+const PI_URL = process.env.PI_URL || "https://raspberrypi.tail2377f9.ts.net";
 
 const testResults = [];
 
