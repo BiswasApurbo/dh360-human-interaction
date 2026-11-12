@@ -255,11 +255,11 @@ class WebcamFrameSource(FrameSource):
 
         return cap
 
-    def open(self) -> None:
+    def _discover_candidate_indices(self) -> list[int]:
+        """Discover candidate camera device indices, prioritizing physical nodes."""
         candidates = [self.camera_index]
         if self.auto_discover:
             if sys.platform.startswith("linux"):
-                # Dynamically discover existing video capture nodes on Linux (e.g. /sys/class/video4linux)
                 v4l_indices: list[int] = []
                 v4l_dir = Path("/sys/class/video4linux")
                 if v4l_dir.exists():
@@ -271,7 +271,6 @@ class WebcamFrameSource(FrameSource):
                         except ValueError:
                             pass
                 if v4l_indices:
-                    # Prioritize valid physical nodes, placing camera_index first only if it exists
                     if self.camera_index in v4l_indices:
                         candidates = [self.camera_index] + [i for i in v4l_indices if i != self.camera_index]
                     else:
@@ -284,6 +283,42 @@ class WebcamFrameSource(FrameSource):
                 for idx in [0, 1, 2, 3, 4]:
                     if idx not in candidates:
                         candidates.append(idx)
+        return candidates
+
+    def _recover_device(self) -> bool:
+        """Attempt to recover from a capture error or USB device re-enumeration."""
+        old_cap = self._cap
+        self._cap = None
+        if old_cap is not None:
+            try:
+                old_cap.release()
+            except Exception:
+                pass
+
+        candidates = self._discover_candidate_indices()
+        new_cap = None
+        new_index = self.camera_index
+        for idx in candidates:
+            new_cap = self._open_device(idx)
+            if new_cap is not None:
+                new_index = idx
+                break
+
+        if new_cap is not None:
+            self.camera_index = new_index
+            self._cap = new_cap
+            self._consecutive_read_failures = 0
+            width = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            raw_fps = self._cap.get(cv2.CAP_PROP_FPS)
+            self._resolution = (width, height)
+            if raw_fps > 0:
+                self._fps = float(raw_fps)
+            return True
+        return False
+
+    def open(self) -> None:
+        candidates = self._discover_candidate_indices()
 
         cap = None
         selected_index = self.camera_index
@@ -340,19 +375,38 @@ class WebcamFrameSource(FrameSource):
                 self._consecutive_read_failures = 0
             else:
                 self._consecutive_read_failures += 1
-                time.sleep(0.01)
+                if self._consecutive_read_failures >= 3:
+                    with self._frame_lock:
+                        self._latest_image = None
+                now = time.monotonic()
+                if (
+                    self.auto_discover
+                    and self._consecutive_read_failures >= 5
+                    and (now - self._last_reopen_attempt >= 1.5)
+                ):
+                    self._last_reopen_attempt = now
+                    try:
+                        self._recover_device()
+                    except Exception:
+                        pass
+                time.sleep(0.02)
 
     def read(self) -> Frame | None:
         now = time.monotonic()
         if self._cap is None or not self._cap.isOpened():
-            if self.auto_discover and (now - self._last_reopen_attempt >= 1.0):
+            if self.auto_discover and (now - self._last_reopen_attempt >= 1.5):
                 self._last_reopen_attempt = now
                 try:
-                    self.open()
+                    self._recover_device()
                 except Exception:
                     pass
             if self._cap is None or not self._cap.isOpened():
                 return None
+
+        # Check freshness: if no frame was read in the last 0.8s, worker is stalled or camera dropped
+        if not self._read_timestamps or (now - self._read_timestamps[-1] > 0.8):
+            with self._frame_lock:
+                self._latest_image = None
 
         # Try non-blocking latest image from background worker first
         with self._frame_lock:
@@ -379,12 +433,11 @@ class WebcamFrameSource(FrameSource):
                 if (
                     self.auto_discover
                     and self._consecutive_read_failures >= 5
-                    and (now - self._last_reopen_attempt >= 1.0)
+                    and (now - self._last_reopen_attempt >= 1.5)
                 ):
                     self._last_reopen_attempt = now
                     try:
-                        self.release()
-                        self.open()
+                        self._recover_device()
                     except Exception:
                         pass
                 return None
