@@ -142,16 +142,16 @@ def get_enrollment_preview_frame(
     request: Request,
     _operator: OperatorPrincipal = _enrollment_manage,
 ) -> Response:
-    """Return the latest server camera frame as a JPEG preview for an active enrollment session."""
+    """Return the latest server camera frame as a JPEG preview for an enrollment session."""
     service = _get_service(request)
     tenant_id = request.headers.get("X-Tenant-ID")
-    _require_active_session(service, person_id, tenant_id=tenant_id)
-    frame_getter = getattr(service, "get_latest_enrollment_frame", None)
+    _require_person(service, person_id, tenant_id=tenant_id)
+    frame_getter = getattr(service, "get_latest_camera_frame", None) or getattr(service, "get_latest_enrollment_frame", None)
     frame = frame_getter() if callable(frame_getter) else None
     if frame is None or getattr(frame, "image", None) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="No preview frame available for active enrollment session",
+            detail="No preview frame available for enrollment session",
         )
     import cv2
 

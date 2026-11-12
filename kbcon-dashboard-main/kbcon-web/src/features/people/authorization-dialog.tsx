@@ -423,7 +423,7 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
             <div className="absolute top-3 left-3 flex items-center gap-1.5 rounded-xl bg-black/65 px-2.5 py-1 backdrop-blur-md pointer-events-auto border border-white/10 shadow-sm">
               <span className="size-2 rounded-full bg-emerald-400 animate-pulse" />
               <span className="text-[11px] font-semibold text-white tracking-wide">
-                LIVE CAMERA (20+ FPS)
+                LIVE CAMERA
               </span>
             </div>
           </div>

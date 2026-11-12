@@ -258,9 +258,32 @@ class WebcamFrameSource(FrameSource):
     def open(self) -> None:
         candidates = [self.camera_index]
         if self.auto_discover:
-            for idx in [0, 1, 2, 3, 4]:
-                if idx not in candidates:
-                    candidates.append(idx)
+            if sys.platform.startswith("linux"):
+                # Dynamically discover existing video capture nodes on Linux (e.g. /sys/class/video4linux)
+                v4l_indices: list[int] = []
+                v4l_dir = Path("/sys/class/video4linux")
+                if v4l_dir.exists():
+                    for entry in sorted(v4l_dir.glob("video*")):
+                        try:
+                            num = int(entry.name.replace("video", ""))
+                            if Path(f"/dev/video{num}").exists():
+                                v4l_indices.append(num)
+                        except ValueError:
+                            pass
+                if v4l_indices:
+                    # Prioritize valid physical nodes, placing camera_index first only if it exists
+                    if self.camera_index in v4l_indices:
+                        candidates = [self.camera_index] + [i for i in v4l_indices if i != self.camera_index]
+                    else:
+                        candidates = list(v4l_indices)
+                else:
+                    for idx in [0, 1, 2, 3, 4]:
+                        if idx not in candidates:
+                            candidates.append(idx)
+            else:
+                for idx in [0, 1, 2, 3, 4]:
+                    if idx not in candidates:
+                        candidates.append(idx)
 
         cap = None
         selected_index = self.camera_index
