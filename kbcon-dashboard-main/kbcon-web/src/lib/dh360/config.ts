@@ -39,7 +39,7 @@ export function getDh360Config(): Dh360Config {
   // use the verified permanent Tailscale Funnel for the physical Raspberry Pi 5.
   if (!rawUrl || rawUrl.includes("trycloudflare.com")) {
     rawUrl = isVercel
-      ? "https://raspberrypi.tailacfb18.ts.net"
+      ? "https://raspberrypi.tail2377f9.ts.net"
       : "http://127.0.0.1:8000";
   }
 

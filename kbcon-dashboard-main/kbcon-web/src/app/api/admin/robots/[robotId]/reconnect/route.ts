@@ -162,7 +162,8 @@ export async function POST(
       apiUrl.includes("localhost") ||
       apiUrl.includes("127.0.0.1") ||
       apiUrl.includes(".local") ||
-      apiUrl.includes("tailacfb18.ts.net");
+      apiUrl.includes("tailacfb18.ts.net") ||
+      apiUrl.includes("tail2377f9.ts.net");
 
     if (!isPrivateOrLocal && (apiUrl.startsWith("https://") || apiUrl.startsWith("http://"))) {
       try {
