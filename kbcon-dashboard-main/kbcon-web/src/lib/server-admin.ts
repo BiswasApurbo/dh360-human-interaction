@@ -127,6 +127,57 @@ export async function getAdminAuth(): Promise<Auth> {
   return getAuth(app);
 }
 
+const projectAppCache = new Map<string, App>();
+
+export async function getAdminAuthForProject(targetProjectId?: string): Promise<Auth> {
+  const defaultApp = await getServerAdminApp();
+  const defaultPid = defaultApp.options.projectId;
+  if (!targetProjectId || targetProjectId === defaultPid) {
+    const { getAuth } = await import("firebase-admin/auth");
+    return getAuth(defaultApp);
+  }
+
+  if (projectAppCache.has(targetProjectId)) {
+    const { getAuth } = await import("firebase-admin/auth");
+    return getAuth(projectAppCache.get(targetProjectId)!);
+  }
+
+  const { initializeApp, cert, getApps } = await import("firebase-admin/app");
+  const { getAuth } = await import("firebase-admin/auth");
+
+  const existing = getApps().find((a) => a.name === targetProjectId);
+  if (existing) {
+    projectAppCache.set(targetProjectId, existing);
+    return getAuth(existing);
+  }
+
+  let targetSa: Record<string, unknown> | null = null;
+  if (targetProjectId === "kbcon-production-dhbd360") {
+    const p = path.join(os.homedir(), ".config", "kbcon", "firebase-service-account-dhbd360.json");
+    if (fs.existsSync(p)) {
+      try {
+        targetSa = JSON.parse(fs.readFileSync(p, "utf-8"));
+      } catch {}
+    }
+  } else if (targetProjectId === "kbcon-production") {
+    const p = path.join(os.homedir(), ".config", "kbcon", "firebase-service-account.json");
+    if (fs.existsSync(p)) {
+      try {
+        targetSa = JSON.parse(fs.readFileSync(p, "utf-8"));
+      } catch {}
+    }
+  }
+
+  const newApp = initializeApp(
+    targetSa
+      ? { credential: cert(targetSa), projectId: targetProjectId }
+      : { projectId: targetProjectId },
+    targetProjectId
+  );
+  projectAppCache.set(targetProjectId, newApp);
+  return getAuth(newApp);
+}
+
 export async function getAdminFirestore(): Promise<Firestore> {
   const app = await getServerAdminApp();
   const { getFirestore } = await import("firebase-admin/firestore");

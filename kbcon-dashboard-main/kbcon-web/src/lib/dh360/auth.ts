@@ -367,9 +367,9 @@ export async function authenticateFirebaseToken(
   // ---------------------------------------------------------------------------
   if (options?.checkRevoked) {
     try {
-      const { getAdminAuth, hasServerAdminCredentials } = await import("../server-admin");
+      const { getAdminAuthForProject, hasServerAdminCredentials } = await import("../server-admin");
       if (hasServerAdminCredentials()) {
-        const adminAuth = await getAdminAuth();
+        const adminAuth = await getAdminAuthForProject(payload.aud);
         const decoded = await adminAuth.verifyIdToken(token, true); // checkRevoked = true!
         const email = (decoded.email || payload.email || "").toLowerCase();
         const effectiveRole =
