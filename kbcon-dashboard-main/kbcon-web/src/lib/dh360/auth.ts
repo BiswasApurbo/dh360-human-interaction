@@ -461,9 +461,21 @@ export async function authenticateFirebaseToken(
   }
 
   // 2. Audience and Issuer check against Google Secure Token service
-  const projectId = getExpectedProjectId();
-  const expectedIss = `https://securetoken.google.com/${projectId}`;
-  if (payload.aud !== projectId || payload.iss !== expectedIss) {
+  // Dual-project cutover bridge: accepts both target and legacy projects during migration
+  const primaryProjectId = getExpectedProjectId();
+  const acceptedProjectIds = Array.from(
+    new Set([
+      primaryProjectId,
+      "kbcon-production-dhbd360",
+      "kbcon-production",
+    ])
+  );
+
+  const matchedProjectId = acceptedProjectIds.find(
+    (pid) => payload.aud === pid && payload.iss === `https://securetoken.google.com/${pid}`
+  );
+
+  if (!matchedProjectId) {
     return {
       success: false,
       status: 401,
