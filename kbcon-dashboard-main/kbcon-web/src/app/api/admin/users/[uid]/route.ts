@@ -67,7 +67,12 @@ export async function PATCH(request: Request, context: RouteParams) {
 
     const targetUser = await adminAuth.getUser(uid);
     const targetClaims = (targetUser.customClaims as Record<string, unknown>) || {};
-    const isTargetSuper = targetClaims.role === "superAdmin" || targetUser.email === "superadmin@gmail.com";
+    const isTargetSuper =
+      targetClaims.role === "superAdmin" ||
+      targetUser.email === "digitalhealthbd360@gmail.com" ||
+      targetUser.email === "superadmin@gmail.com" ||
+      targetUser.email === "26digital360@gmail.com" ||
+      targetUser.email === "apurbobiswas32@gmail.com";
 
     // Protect Super Admin from demotion or deactivation
     if (isTargetSuper && (body.active === false || body.role === "admin")) {
@@ -213,7 +218,12 @@ export async function DELETE(request: Request, context: RouteParams) {
 
     const targetUser = await adminAuth.getUser(uid);
     const targetClaims = (targetUser.customClaims as Record<string, unknown>) || {};
-    const isTargetSuper = targetClaims.role === "superAdmin" || targetUser.email === "superadmin@gmail.com";
+    const isTargetSuper =
+      targetClaims.role === "superAdmin" ||
+      targetUser.email === "digitalhealthbd360@gmail.com" ||
+      targetUser.email === "superadmin@gmail.com" ||
+      targetUser.email === "26digital360@gmail.com" ||
+      targetUser.email === "apurbobiswas32@gmail.com";
 
     if (isTargetSuper) {
       return NextResponse.json(
