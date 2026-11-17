@@ -216,21 +216,23 @@ class WebcamFrameSource(FrameSource):
             return None
 
         # On Linux V4L2 systems, disable dynamic exposure framerate throttling to sustain full FPS
+        # and optimize sensor anti-flicker integration interval (power_line_frequency=2 unlocks 17+ FPS)
         if sys.platform.startswith("linux"):
-            try:
-                subprocess.run(
-                    [
-                        "v4l2-ctl",
-                        "-d",
-                        f"/dev/video{index}",
-                        "--set-ctrl=exposure_dynamic_framerate=0",
-                    ],
-                    check=False,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            except Exception:
-                pass
+            for ctrl_opt in ("exposure_dynamic_framerate=0", "power_line_frequency=2"):
+                try:
+                    subprocess.run(
+                        [
+                            "v4l2-ctl",
+                            "-d",
+                            f"/dev/video{index}",
+                            f"--set-ctrl={ctrl_opt}",
+                        ],
+                        check=False,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                except Exception:
+                    pass
 
         if self.prefer_mjpeg:
             cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc(*"MJPG"))
