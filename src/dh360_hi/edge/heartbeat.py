@@ -228,7 +228,10 @@ class EdgeHeartbeatClient:
         while self._running:
             try:
                 # Open fresh HTTP client session to discard broken sockets on network interruptions
-                async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(10.0, connect=5.0),
+                    follow_redirects=True,
+                ) as client:
                     while self._running:
                         if self.robot_id == "UNPROVISIONED":
                             await asyncio.sleep(self.interval_seconds)
