@@ -203,8 +203,11 @@ class WebcamFrameSource(FrameSource):
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._frame_lock = threading.Lock()
+        self._new_frame_cond = threading.Condition(self._frame_lock)
         self._device_lock = threading.Lock()
         self._latest_image: np.ndarray | None = None
+        self._latest_frame_seq: int = 0
+        self._last_delivered_seq: int = -1
 
     def _open_device(self, index: int) -> cv2.VideoCapture | None:
         cap = cv2.VideoCapture(index)
@@ -365,6 +368,9 @@ class WebcamFrameSource(FrameSource):
         self._frame_id = 0
         self._read_timestamps.clear()
         self._consecutive_read_failures = 0
+        self._latest_frame_seq = 0
+        self._last_delivered_seq = -1
+        self._latest_image = None
 
         self._stop_event.clear()
         self._thread = threading.Thread(
@@ -395,6 +401,8 @@ class WebcamFrameSource(FrameSource):
                 now = time.monotonic()
                 with self._frame_lock:
                     self._latest_image = image
+                    self._latest_frame_seq += 1
+                    self._new_frame_cond.notify_all()
                 self._read_timestamps.append(now)
                 self._consecutive_read_failures = 0
             else:
@@ -402,6 +410,7 @@ class WebcamFrameSource(FrameSource):
                 if self._consecutive_read_failures >= 3:
                     with self._frame_lock:
                         self._latest_image = None
+                        self._new_frame_cond.notify_all()
                 now = time.monotonic()
                 if (
                     self.auto_discover
@@ -415,7 +424,8 @@ class WebcamFrameSource(FrameSource):
                         pass
                 time.sleep(0.02)
 
-    def read(self) -> Frame | None:
+    def read(self, timeout: float = 0.5) -> Frame | None:
+        """Read the next fresh frame from the camera, waiting up to timeout seconds."""
         now = time.monotonic()
 
         # Check freshness: if no frame was read in the last 2.0s, worker is stalled or camera dropped
@@ -423,21 +433,16 @@ class WebcamFrameSource(FrameSource):
             with self._frame_lock:
                 self._latest_image = None
 
-        # Retrieve latest image from background worker
-        with self._frame_lock:
+        with self._new_frame_cond:
+            # Wait until a fresh frame has been captured by the background worker
+            if self._latest_frame_seq <= self._last_delivered_seq or self._latest_image is None:
+                self._new_frame_cond.wait(timeout=timeout)
+
+            if self._latest_image is None or self._latest_frame_seq <= self._last_delivered_seq:
+                return None
+
             image = self._latest_image
-
-        # If background thread hasn't pulled first frame yet, wait briefly
-        if image is None:
-            for _ in range(5):
-                time.sleep(0.01)
-                with self._frame_lock:
-                    image = self._latest_image
-                if image is not None:
-                    break
-
-        if image is None:
-            return None
+            self._last_delivered_seq = self._latest_frame_seq
 
         frame = Frame(
             image=image.copy(),
@@ -450,6 +455,8 @@ class WebcamFrameSource(FrameSource):
 
     def release(self) -> None:
         self._stop_event.set()
+        with self._new_frame_cond:
+            self._new_frame_cond.notify_all()
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=0.5)
         self._thread = None

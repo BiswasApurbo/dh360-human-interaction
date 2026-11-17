@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -98,6 +100,14 @@ def _render_auth_hud(img: Any, session: Any) -> None:
     )
 
 
+# High-efficiency preview cache to prevent redundant resizing and JPEG re-encoding
+_preview_cache_lock = threading.Lock()
+_cached_preview_jpeg: bytes | None = None
+_cached_preview_frame_id: int = -1
+_cached_preview_time: float = 0.0
+_cached_session_id: str | None = None
+
+
 @router.get("/authorization/sessions/preview")
 def get_authorization_preview_frame(
     request: Request,
@@ -117,6 +127,26 @@ def get_authorization_preview_frame(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No preview frame available",
         )
+
+    current_frame_id = getattr(frame, "frame_id", -1)
+    controller = getattr(request.app.state, "authorization_controller", None)
+    current_session = controller.get_current() if controller else None
+    curr_sess_id = getattr(current_session, "session_id", None)
+    now = time.monotonic()
+
+    global _cached_preview_jpeg, _cached_preview_frame_id, _cached_preview_time, _cached_session_id
+    with _preview_cache_lock:
+        if (
+            _cached_preview_jpeg is not None
+            and _cached_session_id == curr_sess_id
+            and (_cached_preview_frame_id == current_frame_id or (now - _cached_preview_time) < 0.05)
+        ):
+            return Response(
+                content=_cached_preview_jpeg,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+            )
+
     import cv2
 
     img = frame.image.copy()
@@ -126,8 +156,6 @@ def get_authorization_preview_frame(
         target_h = int(h * (target_w / w))
         img = cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
 
-    controller = getattr(request.app.state, "authorization_controller", None)
-    current_session = controller.get_current() if controller else None
     _render_auth_hud(img, current_session)
 
     success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
@@ -136,8 +164,16 @@ def get_authorization_preview_frame(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to encode preview frame",
         )
+
+    jpeg_bytes = encoded.tobytes()
+    with _preview_cache_lock:
+        _cached_preview_jpeg = jpeg_bytes
+        _cached_preview_frame_id = current_frame_id
+        _cached_preview_time = now
+        _cached_session_id = curr_sess_id
+
     return Response(
-        content=encoded.tobytes(),
+        content=jpeg_bytes,
         media_type="image/jpeg",
         headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
     )

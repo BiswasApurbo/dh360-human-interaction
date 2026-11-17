@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -138,6 +139,12 @@ class YuNetFaceDetector(BaseFaceDetector):
         self._top_k = int(top_k)
         self._backend_id = backend_id
         self._target_id = target_id
+        self._det_buffer: np.ndarray | None = None
+
+        # On Linux/ARM platforms, clamp OpenCV DNN thread pool to 2 threads
+        # to avoid thread oversubscription, context switching, and cache thrashing.
+        if sys.platform.startswith("linux"):
+            cv2.setNumThreads(2)
 
         self._detector: cv2.FaceDetectorYN = cv2.FaceDetectorYN.create(
             model=str(self.model_path),
@@ -204,7 +211,15 @@ class YuNetFaceDetector(BaseFaceDetector):
                 resized_h -= 1
 
             det_size = (resized_w, resized_h)
-            det_image = cv2.resize(image, det_size, interpolation=cv2.INTER_LINEAR)
+            with self._lock:
+                if (
+                    self._det_buffer is None
+                    or self._det_buffer.shape[:2] != (resized_h, resized_w)
+                    or self._det_buffer.dtype != np.uint8
+                ):
+                    self._det_buffer = np.empty((resized_h, resized_w, 3), dtype=np.uint8)
+                cv2.resize(image, det_size, dst=self._det_buffer, interpolation=cv2.INTER_LINEAR)
+                det_image = self._det_buffer
             scale_x = float(resized_w) / float(width)
             scale_y = float(resized_h) / float(height)
         else:
