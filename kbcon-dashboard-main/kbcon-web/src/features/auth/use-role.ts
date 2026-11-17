@@ -61,7 +61,6 @@ export function useRole() {
         const r =
           result.claims.role ||
           (user.email === "digitalhealthbd360@gmail.com" ||
-            user.email === "26digital360@gmail.com" ||
             user.email === "apurbobiswas32@gmail.com" ||
             user.email === "superadmin@gmail.com"
             ? "superAdmin"

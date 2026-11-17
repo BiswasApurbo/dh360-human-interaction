@@ -127,7 +127,6 @@ export async function GET(request: Request) {
       const isSuperEmail =
         email.toLowerCase() === "digitalhealthbd360@gmail.com" ||
         email.toLowerCase() === "superadmin@gmail.com" ||
-        email.toLowerCase() === "26digital360@gmail.com" ||
         email.toLowerCase() === "apurbobiswas32@gmail.com";
       const role = (claims.role || fsData.role || (isSuperEmail ? "superAdmin" : "admin")) as
         | "superAdmin"
@@ -175,7 +174,6 @@ export async function GET(request: Request) {
       const isSuperEmail =
         email.toLowerCase() === "digitalhealthbd360@gmail.com" ||
         email.toLowerCase() === "superadmin@gmail.com" ||
-        email.toLowerCase() === "26digital360@gmail.com" ||
         email.toLowerCase() === "apurbobiswas32@gmail.com";
       const role = ((fsData.role as string) || (isSuperEmail ? "superAdmin" : "admin")) as
         | "superAdmin"

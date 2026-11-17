@@ -376,7 +376,6 @@ export async function authenticateFirebaseToken(
           (decoded.role as string) ||
           payload.role ||
           (email === "digitalhealthbd360@gmail.com" ||
-            email === "26digital360@gmail.com" ||
             email === "apurbobiswas32@gmail.com" ||
             email === "superadmin@gmail.com"
             ? "superAdmin"
@@ -551,7 +550,6 @@ export async function authenticateFirebaseToken(
     const role =
       payload.role ||
       (email === "digitalhealthbd360@gmail.com" ||
-        email === "26digital360@gmail.com" ||
         email === "apurbobiswas32@gmail.com" ||
         email === "superadmin@gmail.com"
         ? "superAdmin"
