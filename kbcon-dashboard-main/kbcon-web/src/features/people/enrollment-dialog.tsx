@@ -72,11 +72,9 @@ function EnrollmentDialogContent({
   const [success, setSuccess] = useState(false);
   const [lastFeedback, setLastFeedback] = useState<string | null>(null);
 
-  const prevUrlRef = useRef<string | null>(null);
   const isSteppingRef = useRef(false);
-  const inFlightRef = useRef(false);
   const stepTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const previewTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isPausedRef = useRef(false);
   const sessionActiveRef = useRef(false);
   const isCompleteRef = useRef(false);
@@ -110,62 +108,51 @@ function EnrollmentDialogContent({
     return headers;
   }, [user]);
 
-  // Continuous active camera preview frame pull loop
-  const fetchPreviewFrame = useCallback(async () => {
-    if (!activeRef.current || inFlightRef.current || !user || authLoading) return;
-    inFlightRef.current = true;
+  // Connect to the continuous hardware-accelerated MJPEG stream (17+ FPS)
+  const connectStream = useCallback(async () => {
+    if (!activeRef.current || !user || authLoading) return;
     try {
-      const headers = await getHeaders();
-      const res = await fetch(
-        `/api/dh360/persons/${person.person_id}/enrollment/sessions/preview?_t=${Date.now()}`,
-        {
-          headers,
-          cache: "no-store",
-        }
-      );
-      if (res.ok && activeRef.current) {
-        const blob = await res.blob();
-        if (blob.size > 0 && activeRef.current) {
-          const url = URL.createObjectURL(blob);
-          const oldUrl = prevUrlRef.current;
-          prevUrlRef.current = url;
-          setPreviewUrl(url);
-          if (oldUrl) {
-            setTimeout(() => URL.revokeObjectURL(oldUrl), 200);
-          }
-        }
-      }
-    } catch {
-      // Preview stream frame temporarily unavailable
-    } finally {
-      inFlightRef.current = false;
+      const token = await user.getIdToken();
+      if (!activeRef.current) return;
+      const url = `/api/dh360/persons/${person.person_id}/enrollment/sessions/stream?token=${encodeURIComponent(token)}&_t=${Date.now()}`;
+      setPreviewUrl(url);
+    } catch (err) {
+      console.warn("[EnrollmentDialog] Failed to obtain token for stream:", err);
       if (activeRef.current) {
-        previewTimerRef.current = setTimeout(() => {
-          void fetchPreviewFrame();
-        }, 0);
+        reconnectTimerRef.current = setTimeout(() => {
+          void connectStream();
+        }, 1500);
       }
     }
-  }, [user, authLoading, person.person_id, getHeaders]);
+  }, [user, authLoading, person.person_id]);
 
-  // Start continuous preview loop on mount and clean up on unmount
+  // Reconnect stream if connection drops or network glitches
+  const handleStreamError = useCallback(() => {
+    if (!activeRef.current) return;
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+    }
+    reconnectTimerRef.current = setTimeout(() => {
+      void connectStream();
+    }, 500);
+  }, [connectStream]);
+
+  // Start continuous stream on mount and clean up on unmount
   useEffect(() => {
     activeRef.current = true;
     if (user && !authLoading) {
-      void fetchPreviewFrame();
+      void connectStream();
     }
     return () => {
       activeRef.current = false;
-      if (previewTimerRef.current) {
-        clearTimeout(previewTimerRef.current);
-      }
-      if (prevUrlRef.current) {
-        URL.revokeObjectURL(prevUrlRef.current);
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
       }
       if (stepTimerRef.current) {
         clearTimeout(stepTimerRef.current);
       }
     };
-  }, [user, authLoading, fetchPreviewFrame]);
+  }, [user, authLoading, connectStream]);
 
   // Step capture function: evaluates 1 frame on backend
   const executeStep = useCallback(async () => {
@@ -334,8 +321,8 @@ function EnrollmentDialogContent({
           setProgress(activeData);
           setSessionActive(true);
           sessionActiveRef.current = true;
-          // Trigger first preview and start auto-capture loop
-          void fetchPreviewFrame();
+          // Ensure live stream is connected and start auto-capture loop
+          void connectStream();
           scheduleNextStep(300);
         }
       } catch (err: unknown) {
@@ -344,7 +331,7 @@ function EnrollmentDialogContent({
         setLoading(false);
       }
     },
-    [getHeaders, person.person_id, person.consent_status, fetchPreviewFrame, scheduleNextStep, t]
+    [getHeaders, person.person_id, person.consent_status, connectStream, scheduleNextStep, t]
   );
 
   // Auto-start session immediately when modal opens
@@ -629,6 +616,7 @@ function EnrollmentDialogContent({
                     src={previewUrl}
                     alt="Robot camera live preview"
                     className="h-full w-full object-cover"
+                    onError={handleStreamError}
                   />
                 ) : (
                   <div className="text-center p-4">

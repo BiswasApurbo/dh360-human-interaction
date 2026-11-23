@@ -208,6 +208,10 @@ def get_enrollment_preview_frame(
         except Exception:
             pass
 
+    frame_id = getattr(frame, "frame_id", -1)
+    frame_ts = getattr(frame, "timestamp", time.monotonic())
+    frame_age_ms = max(0.0, (time.monotonic() - frame_ts) * 1000)
+
     success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
     if not success:
         raise HTTPException(
@@ -217,7 +221,12 @@ def get_enrollment_preview_frame(
     return Response(
         content=encoded.tobytes(),
         media_type="image/jpeg",
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "X-Frame-ID": str(frame_id),
+            "X-Capture-Timestamp": f"{frame_ts:.3f}",
+            "X-Frame-Age-Ms": f"{frame_age_ms:.1f}",
+        },
     )
 
 
@@ -248,12 +257,12 @@ async def stream_enrollment_preview(
                     last_frame_id = frame.frame_id
                     img = frame.image.copy()
                     h, w = img.shape[:2]
-                    if w > 640:
-                        new_w = 640
-                        new_h = int(h * (640 / w))
-                        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-                        sx = new_w / w
-                        sy = new_h / h
+                    target_w = 480
+                    if w != target_w:
+                        target_h = int(h * (target_w / w))
+                        img = cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+                        sx = target_w / w
+                        sy = target_h / h
                     else:
                         sx = 1.0
                         sy = 1.0
@@ -296,11 +305,14 @@ async def stream_enrollment_preview(
                         except Exception:
                             pass
 
-                    success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 68])
+                    success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
                     if success:
+                        frame_ts = getattr(frame, "timestamp", time.monotonic())
                         chunk = (
                             b"--frame\r\n"
-                            b"Content-Type: image/jpeg\r\n\r\n"
+                            b"Content-Type: image/jpeg\r\n"
+                            f"X-Frame-ID: {frame.frame_id}\r\n"
+                            f"X-Capture-Timestamp: {frame_ts:.3f}\r\n\r\n".encode("ascii")
                             + encoded.tobytes()
                             + b"\r\n"
                         )

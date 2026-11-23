@@ -59,10 +59,8 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const prevUrlRef = useRef<string | null>(null);
-  const isPullingRef = useRef(false);
   const activeRef = useRef(true);
-  const previewTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
   const userStoppedRef = useRef(false);
 
   const getHeaders = useCallback(async (): Promise<HeadersInit> => {
@@ -80,56 +78,48 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
     return headers;
   }, [user]);
 
-  // Continuous active camera frame pull loop
-  const fetchPreviewFrame = useCallback(async () => {
-    if (!activeRef.current || isPullingRef.current || !user || authLoading) return;
-    isPullingRef.current = true;
+  // Connect to the continuous hardware-accelerated MJPEG stream (17+ FPS)
+  const connectStream = useCallback(async () => {
+    if (!activeRef.current || !user || authLoading) return;
     try {
-      const headers = await getHeaders();
-      const res = await fetch(`/api/dh360/authorization/sessions/preview?_t=${Date.now()}`, {
-        headers,
-        cache: "no-store",
-      });
-      if (res.ok && activeRef.current) {
-        const blob = await res.blob();
-        if (blob.size > 0 && activeRef.current) {
-          const url = URL.createObjectURL(blob);
-          const oldUrl = prevUrlRef.current;
-          prevUrlRef.current = url;
-          setPreviewUrl(url);
-          if (oldUrl) {
-            setTimeout(() => URL.revokeObjectURL(oldUrl), 200);
-          }
-        }
-      }
-    } catch {
-      // preview frame temporarily unavailable
-    } finally {
-      isPullingRef.current = false;
+      const token = await user.getIdToken();
+      if (!activeRef.current) return;
+      const url = `/api/dh360/authorization/sessions/stream?token=${encodeURIComponent(token)}&_t=${Date.now()}`;
+      setPreviewUrl(url);
+    } catch (err) {
+      console.warn("[AuthorizationDialog] Failed to obtain token for stream:", err);
       if (activeRef.current) {
-        previewTimerRef.current = setTimeout(() => {
-          void fetchPreviewFrame();
-        }, 0);
+        reconnectTimerRef.current = setTimeout(() => {
+          void connectStream();
+        }, 1500);
       }
     }
-  }, [user, authLoading, getHeaders]);
+  }, [user, authLoading]);
 
-  // Start continuous preview loop on mount
+  // Reconnect stream if connection drops or network glitches
+  const handleStreamError = useCallback(() => {
+    if (!activeRef.current) return;
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+    }
+    reconnectTimerRef.current = setTimeout(() => {
+      void connectStream();
+    }, 500);
+  }, [connectStream]);
+
+  // Start continuous stream on mount
   useEffect(() => {
     activeRef.current = true;
     if (user && !authLoading) {
-      void fetchPreviewFrame();
+      void connectStream();
     }
     return () => {
       activeRef.current = false;
-      if (previewTimerRef.current) {
-        clearTimeout(previewTimerRef.current);
-      }
-      if (prevUrlRef.current) {
-        URL.revokeObjectURL(prevUrlRef.current);
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
       }
     };
-  }, [user, authLoading, fetchPreviewFrame]);
+  }, [user, authLoading, connectStream]);
 
   // Start authorization session
   const startAuthorization = useCallback(async () => {
@@ -400,6 +390,7 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
                 src={previewUrl}
                 alt="Live authorization camera stream"
                 className="h-full w-full object-cover"
+                onError={handleStreamError}
               />
             ) : (
               <div className="text-center p-4">

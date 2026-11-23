@@ -133,18 +133,26 @@ def get_authorization_preview_frame(
     current_session = controller.get_current() if controller else None
     curr_sess_id = getattr(current_session, "session_id", None)
     now = time.monotonic()
+    frame_ts = getattr(frame, "timestamp", now)
+    frame_age_ms = max(0.0, (now - frame_ts) * 1000)
 
     global _cached_preview_jpeg, _cached_preview_frame_id, _cached_preview_time, _cached_session_id
     with _preview_cache_lock:
         if (
             _cached_preview_jpeg is not None
             and _cached_session_id == curr_sess_id
-            and (_cached_preview_frame_id == current_frame_id or (now - _cached_preview_time) < 0.05)
+            and _cached_preview_frame_id == current_frame_id
         ):
             return Response(
                 content=_cached_preview_jpeg,
                 media_type="image/jpeg",
-                headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+                headers={
+                    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                    "X-Frame-ID": str(_cached_preview_frame_id),
+                    "X-Capture-Timestamp": f"{frame_ts:.3f}",
+                    "X-Frame-Age-Ms": f"{frame_age_ms:.1f}",
+                    "X-Cached": "1",
+                },
             )
 
     import cv2
@@ -175,7 +183,13 @@ def get_authorization_preview_frame(
     return Response(
         content=jpeg_bytes,
         media_type="image/jpeg",
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "X-Frame-ID": str(current_frame_id),
+            "X-Capture-Timestamp": f"{frame_ts:.3f}",
+            "X-Frame-Age-Ms": f"{frame_age_ms:.1f}",
+            "X-Cached": "0",
+        },
     )
 
 
@@ -208,17 +222,20 @@ async def stream_authorization_preview(
                     last_frame_id = frame.frame_id
                     img = frame.image.copy()
                     h, w = img.shape[:2]
-                    if w > 640:
-                        new_w = 640
-                        new_h = int(h * (640 / w))
-                        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+                    target_w = 480
+                    if w != target_w:
+                        target_h = int(h * (target_w / w))
+                        img = cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
                     current_session = controller.get_current() if controller else None
                     _render_auth_hud(img, current_session)
-                    success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 68])
+                    success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
                     if success:
+                        frame_ts = getattr(frame, "timestamp", time.monotonic())
                         chunk = (
                             b"--frame\r\n"
-                            b"Content-Type: image/jpeg\r\n\r\n"
+                            b"Content-Type: image/jpeg\r\n"
+                            f"X-Frame-ID: {frame.frame_id}\r\n"
+                            f"X-Capture-Timestamp: {frame_ts:.3f}\r\n\r\n".encode("ascii")
                             + encoded.tobytes()
                             + b"\r\n"
                         )
