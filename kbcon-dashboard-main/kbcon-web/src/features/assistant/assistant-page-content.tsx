@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import {
   AlertCircle,
   Bot,
@@ -42,6 +42,7 @@ function currentTimestamp(): number {
 
 export function AssistantPageContent() {
   const t = useTranslations("Assistant");
+  const locale = useLocale();
   const { role, loading: roleLoading } = useRole();
   const { robots } = useRobots(role);
   const [activeRobotId, setActiveRobotId] = useState<string>("");
@@ -54,8 +55,20 @@ export function AssistantPageContent() {
 
   const activeRobot = robots.find((r) => r.id === activeRobotId) ?? robots[0] ?? null;
 
-  // Language bound directly from selected robot
-  const language: AssistantLanguage = (activeRobot?.language as AssistantLanguage) || "bn";
+  // Language bound from active route locale ("en" | "bn") with fallback to selected robot
+  const language: AssistantLanguage =
+    locale === "en" || locale === "bn"
+      ? (locale as AssistantLanguage)
+      : (activeRobot?.language as AssistantLanguage) || "bn";
+
+  // Active robot operational mode: "healthcare" | "education" | "general"
+  const currentMode: "healthcare" | "education" | "general" =
+    activeRobot?.mode === "healthcare"
+      ? "healthcare"
+      : activeRobot?.mode === "education"
+      ? "education"
+      : "general";
+
   const [audioEnabled, setAudioEnabled] = useState(true);
 
   // Conversational state
@@ -691,19 +704,71 @@ export function AssistantPageContent() {
     }
   };
 
-  // Sample quick queries
+  // Sample quick queries strictly tailored to active robot configuration, mode, and authorization state
   const sampleQueries = isAuthorized
+    ? currentMode === "healthcare"
+      ? [
+          language === "bn" ? "আমার প্রোফাইলের তথ্য বলো" : "Tell me my profile details",
+          language === "bn" ? "আমার আজকের সময়সূচি কি?" : "What is my schedule today?",
+          language === "bn" ? "এই রোবটটি কী ধরনের স্বাস্থ্যসেবা সহায়তা দিতে পারে?" : "What health assistance can this robot provide?",
+          language === "bn" ? "স্বাস্থ্য সচেতনতা সম্পর্কে আমাকে কিছু বলো।" : "Teach me about preventive healthcare.",
+        ]
+      : currentMode === "education"
+      ? [
+          language === "bn" ? "আমার প্রোফাইলের তথ্য বলো" : "Tell me my profile details",
+          language === "bn" ? "আমার ক্লাসের সময়সূচি কি?" : "What is my class schedule?",
+          language === "bn" ? "আজ আমাকে একটি বিজ্ঞান বিষয় শেখাও।" : "Teach me an interesting science topic.",
+          language === "bn" ? "আমাকে একটি কুইজ দাও।" : "Give me a short educational quiz.",
+        ]
+      : [
+          language === "bn" ? "আমার প্রোফাইলের তথ্য বলো" : "Tell me my profile details",
+          language === "bn" ? "আমার সময়সূচি কি?" : "What is my schedule?",
+          language === "bn" ? "এই রোবটটি কী কী কাজ করতে পারে?" : "What capabilities does this robot have?",
+          language === "bn" ? "তোমার প্রধান বৈশিষ্ট্যগুলো কী কী?" : "What are your main features?",
+        ]
+    : currentMode === "healthcare"
     ? [
-        language === "bn" ? "আমার প্রোফাইলের তথ্য বলো" : "Tell me my profile details",
-        language === "bn" ? "আমার সময়সূচি কি?" : "What is my schedule?",
-        language === "bn" ? "তুমি কে?" : "Who are you?",
-        language === "bn" ? "মেলার বিস্তারিত বলো" : "Tell me about the Innovation Fair",
+        language === "bn"
+          ? "এই রোবটটি কী ধরনের স্বাস্থ্যসেবা সহায়তা দিতে পারে?"
+          : "What health assistance can this robot provide?",
+        language === "bn"
+          ? "স্বাস্থ্য সচেতনতা সম্পর্কে আমাকে কিছু বলো।"
+          : "Teach me about preventive healthcare.",
+        language === "bn"
+          ? "প্রাথমিক স্বাস্থ্য পরামর্শ কীভাবে পাওয়া যায়?"
+          : "What basic health information can you help explain?",
+        language === "bn"
+          ? "স্বাস্থ্য পরীক্ষা ও রিপোর্ট সম্পর্কে বুঝিয়ে বলো।"
+          : "How can I understand a health report?",
+      ]
+    : currentMode === "education"
+    ? [
+        language === "bn"
+          ? "এই রোবটটি আমাকে কী কী শেখাতে পারে?"
+          : "What can you teach me?",
+        language === "bn"
+          ? "আজ আমাকে একটি বিজ্ঞান বিষয় শেখাও।"
+          : "Teach me an interesting science topic.",
+        language === "bn"
+          ? "গণিতের একটি সমস্যা বুঝিয়ে দাও।"
+          : "Help me understand a mathematics problem.",
+        language === "bn"
+          ? "আমাকে একটি কুইজ দাও।"
+          : "Give me a short educational quiz.",
       ]
     : [
-        language === "bn" ? "তুমি কে?" : "Who are you?",
-        language === "bn" ? "বাংলাদেশ ইনোভেশন ফেয়ার ২০২৬ সম্পর্কে বলো" : "Tell me about the Bangladesh Innovation Fair 2026",
-        language === "bn" ? "রোবোটেক ভ্যালি কি কাজ করে?" : "What does Robotech Valley do?",
-        language === "bn" ? "মানুষের রক্তে কতভাগ পানি থাকে?" : "What percentage of blood is water?",
+        language === "bn"
+          ? "এই রোবটটি কী কী কাজ করতে পারে?"
+          : "What capabilities does this robot have?",
+        language === "bn"
+          ? "তোমার প্রধান বৈশিষ্ট্যগুলো কী কী?"
+          : "What are your main features?",
+        language === "bn"
+          ? "আমি কীভাবে এই রোবটের সাথে কথা বলতে পারি?"
+          : "How can I interact with this robot?",
+        language === "bn"
+          ? "তুমি আমাকে কীভাবে সহায়তা করতে পারো?"
+          : "How can you help me today?",
       ];
 
   // Render camera authorization pill badge
@@ -803,15 +868,31 @@ export function AssistantPageContent() {
                 className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-0.5 text-[11px] font-extrabold ring-1 ${
                   isAuthorized
                     ? "bg-emerald-500 text-white ring-emerald-600"
-                    : "bg-sky-600 text-white ring-sky-700"
+                    : currentMode === "healthcare"
+                    ? "bg-teal-600 text-white ring-teal-700"
+                    : currentMode === "education"
+                    ? "bg-sky-600 text-white ring-sky-700"
+                    : "bg-slate-600 text-white ring-slate-700"
                 }`}
               >
                 <Sparkles className="size-3" />
-                {isAuthorized ? t("authorizedModeBadge") : t("generalModeBadge")}
+                {isAuthorized
+                  ? t("authorizedModeBadge")
+                  : currentMode === "healthcare"
+                  ? t("healthModeBadge")
+                  : currentMode === "education"
+                  ? t("educationModeBadge")
+                  : t("generalModeBadge")}
               </span>
             </div>
             <p className="text-[11px] text-sky-800/80 line-clamp-1 sm:text-xs">
-              {isAuthorized ? t("authorizedModeDesc") : t("generalModeDesc")}
+              {isAuthorized
+                ? t("authorizedModeDesc")
+                : currentMode === "healthcare"
+                ? t("healthModeDesc")
+                : currentMode === "education"
+                ? t("educationModeDesc")
+                : t("generalModeDesc")}
             </p>
           </div>
         </div>
@@ -844,11 +925,21 @@ export function AssistantPageContent() {
                 onChange={(e) => setActiveRobotId(e.target.value)}
                 className="bg-transparent text-xs font-semibold text-sky-950 outline-none cursor-pointer"
               >
-                {robots.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name} ({r.language === "en" ? "EN" : "BN"})
-                  </option>
-                ))}
+                {robots.map((r) => {
+                  const modeLabel =
+                    r.mode === "healthcare"
+                      ? language === "bn"
+                        ? "স্বাস্থ্য"
+                        : "Health"
+                      : language === "bn"
+                      ? "শিক্ষা"
+                      : "Education";
+                  return (
+                    <option key={r.id} value={r.id}>
+                      {r.name} • {modeLabel} ({r.language === "en" ? "EN" : "BN"})
+                    </option>
+                  );
+                })}
               </select>
             </div>
           )}
@@ -888,18 +979,22 @@ export function AssistantPageContent() {
                     ? language === "bn"
                       ? `স্বাগতম, ${currentDisplayName || "ব্যবহারকারী"}!`
                       : `Welcome back, ${currentDisplayName || "User"}!`
-                    : language === "bn"
-                    ? "আসসালামু আলাইকুম! আমি কেবিসিওএন (KBCON)।"
-                    : "Hello! I am KBCON."}
+                    : currentMode === "healthcare"
+                    ? t("welcomeTitleHealth")
+                    : currentMode === "education"
+                    ? t("welcomeTitleEducation")
+                    : t("welcomeTitle")}
                 </h2>
                 <p className="mt-1 text-xs sm:text-sm text-sky-800/80 leading-relaxed">
                   {isAuthorized
                     ? language === "bn"
                       ? `স্বাগতম, ${currentDisplayName || "ব্যবহারকারী"}! আপনার ব্যক্তিগত সহকারী মোড সক্রিয়। আপনি আপনার সংরক্ষিত প্রোফাইল, বিভাগ, রুম বা সময়সূচি সম্পর্কে যেকোনো প্রশ্ন করতে পারেন।`
                       : `Welcome back, ${currentDisplayName || "User"}! Your verified personal assistant mode is active. You can ask about your registered profile, department, office room, working hours, or general questions.`
-                    : language === "bn"
-                    ? "আমি কেবিসিওএন, একটি মানবাকৃতির রোবট সহকারী। আমাদের প্রাতিষ্ঠানিক তথ্য, সুযোগ-সুবিধা বা সাধারণ জ্ঞানের যেকোনো প্রশ্ন করতে পারেন!"
-                    : "I am KBCON, an interactive humanoid robot assistant. Ask me anything about our facilities, services, academic or clinical information, or general knowledge!"}
+                    : currentMode === "healthcare"
+                    ? t("welcomeHealth")
+                    : currentMode === "education"
+                    ? t("welcomeEducation")
+                    : t("welcomeGeneral")}
                 </p>
               </div>
 
