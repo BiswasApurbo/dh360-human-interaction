@@ -75,6 +75,8 @@ function EnrollmentDialogContent({
   const isSteppingRef = useRef(false);
   const stepTimerRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const executeStepRef = useRef<(() => Promise<void>) | null>(null);
   const isPausedRef = useRef(false);
   const sessionActiveRef = useRef(false);
   const isCompleteRef = useRef(false);
@@ -148,16 +150,36 @@ function EnrollmentDialogContent({
       activeRef.current = false;
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
       }
       if (stepTimerRef.current) {
         clearTimeout(stepTimerRef.current);
+        stepTimerRef.current = null;
+      }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
       }
     };
   }, [user, authLoading, connectStream]);
 
+  // Schedule next step via stable ref callback
+  const scheduleNextStep = useCallback((delayMs: number) => {
+    if (stepTimerRef.current) {
+      clearTimeout(stepTimerRef.current);
+      stepTimerRef.current = null;
+    }
+    stepTimerRef.current = setTimeout(() => {
+      if (activeRef.current && executeStepRef.current) {
+        void executeStepRef.current();
+      }
+    }, delayMs);
+  }, []);
+
   // Step capture function: evaluates 1 frame on backend
-  const executeStep = useCallback(async () => {
+  const executeStep = useCallback(async (): Promise<void> => {
     if (
+      !activeRef.current ||
       isSteppingRef.current ||
       isPausedRef.current ||
       !sessionActiveRef.current ||
@@ -167,15 +189,23 @@ function EnrollmentDialogContent({
     }
 
     isSteppingRef.current = true;
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       const headers = await getHeaders();
+      if (!activeRef.current || controller.signal.aborted) return;
+
       const res = await fetch(
         `/api/dh360/persons/${person.person_id}/enrollment/sessions/step`,
         {
           method: "POST",
           headers,
+          signal: controller.signal,
         }
       );
+
+      if (!activeRef.current || controller.signal.aborted) return;
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
@@ -186,11 +216,12 @@ function EnrollmentDialogContent({
           return;
         }
         // Non-terminal error, schedule retry
-        scheduleNextStep(500);
+        scheduleNextStep(400);
         return;
       }
 
       const data: EnrollmentProgress = await res.json();
+      if (!activeRef.current || controller.signal.aborted) return;
       setProgress(data);
 
       const isFinished = data.is_complete || data.samples_collected >= (data.target_samples || 30);
@@ -219,7 +250,7 @@ function EnrollmentDialogContent({
         return;
       } else if (!data.face_detected) {
         setLastFeedback(t("waitingForFace"));
-        nextDelayMs = 500; // Throttle when waiting for face
+        nextDelayMs = 350; // Dynamic check when waiting for face
       } else if (data.last_rejection_reason === "wrong_direction") {
         if (data.current_direction === "right") {
           setLastFeedback(t("turnRightHint"));
@@ -228,40 +259,41 @@ function EnrollmentDialogContent({
         } else {
           setLastFeedback(t("lookFrontHint"));
         }
-        nextDelayMs = 350;
+        nextDelayMs = 220;
       } else if (data.last_rejection_reason === "duplicate_sample") {
         setLastFeedback(t("duplicateHint"));
-        nextDelayMs = 250;
+        nextDelayMs = 200;
       } else if (data.last_rejection_reason === "quality_rejected") {
         setLastFeedback(t("lightingWarning"));
-        nextDelayMs = 350;
+        nextDelayMs = 250;
       } else if (data.last_rejection_reason === "multiple_faces") {
         setLastFeedback(t("multipleFacesWarning"));
-        nextDelayMs = 500;
+        nextDelayMs = 400;
       } else {
         setLastFeedback(t("holdSteady"));
         nextDelayMs = 220;
       }
 
       scheduleNextStep(nextDelayMs);
-    } catch {
-      scheduleNextStep(600);
+    } catch (err: unknown) {
+      if ((err as Error)?.name === "AbortError") {
+        return;
+      }
+      if (activeRef.current) {
+        scheduleNextStep(500);
+      }
     } finally {
       isSteppingRef.current = false;
-    }
-  }, [getHeaders, person.person_id, t]);
-
-  const scheduleNextStep = useCallback(
-    (delayMs: number) => {
-      if (stepTimerRef.current) {
-        clearTimeout(stepTimerRef.current);
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
       }
-      stepTimerRef.current = setTimeout(() => {
-        void executeStep();
-      }, delayMs);
-    },
-    [executeStep]
-  );
+    }
+  }, [getHeaders, person.person_id, t, scheduleNextStep]);
+
+  // Keep executeStepRef in sync
+  useEffect(() => {
+    executeStepRef.current = executeStep;
+  }, [executeStep]);
 
   // Start or resume enrollment session
   const startSession = useCallback(
@@ -373,6 +405,11 @@ function EnrollmentDialogContent({
   const restartSession = useCallback(async () => {
     if (stepTimerRef.current) {
       clearTimeout(stepTimerRef.current);
+      stepTimerRef.current = null;
+    }
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
     }
     setError(null);
     setProgress(null);
@@ -389,26 +426,51 @@ function EnrollmentDialogContent({
     void startSession("replace");
   }, [getHeaders, person.person_id, startSession]);
 
-  // Cancel session
-  const cancelSession = useCallback(async () => {
+  // Instantaneous cancellation (< 10ms UI response)
+  const cancelSession = useCallback(() => {
+    // 1. Halt any further stepped execution immediately
+    activeRef.current = false;
+    sessionActiveRef.current = false;
+
+    // 2. Clear all active timers
     if (stepTimerRef.current) {
       clearTimeout(stepTimerRef.current);
+      stepTimerRef.current = null;
     }
-    try {
-      const headers = await getHeaders();
-      await fetch(
-        `/api/dh360/persons/${person.person_id}/enrollment/sessions/cancel`,
-        {
-          method: "POST",
-          headers,
-        }
-      );
-    } catch {
-      // Ignore
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
     }
+
+    // 3. Abort any in-flight /step request right away
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+
+    // 4. Detach camera stream and update local state
+    setPreviewUrl(null);
     setSessionActive(false);
-    sessionActiveRef.current = false;
+
+    // 5. Instantly close modal on the UI thread (< 10ms)
     onClose();
+
+    // 6. Asynchronously notify backend in background (fire-and-forget)
+    void (async () => {
+      try {
+        const headers = await getHeaders();
+        await fetch(
+          `/api/dh360/persons/${person.person_id}/enrollment/sessions/cancel`,
+          {
+            method: "POST",
+            headers,
+            keepalive: true,
+          }
+        );
+      } catch {
+        // Safe to ignore background cancellation error
+      }
+    })();
   }, [getHeaders, person.person_id, onClose]);
 
   // Commit session explicitly
@@ -626,13 +688,13 @@ function EnrollmentDialogContent({
               </div>
 
               {/* Live Camera Preview with Head-Up Display (HUD) */}
-              <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-slate-950 border border-sky-300/60 shadow-inner flex items-center justify-center group">
+              <div className="relative aspect-[4/3] max-h-[360px] w-full mx-auto overflow-hidden rounded-2xl bg-slate-950 border border-sky-300/60 shadow-inner flex items-center justify-center group">
                 {previewUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={previewUrl}
                     alt="Robot camera live preview"
-                    className="h-full w-full object-cover"
+                    className="h-full w-full object-contain"
                     onError={handleStreamError}
                   />
                 ) : (
@@ -643,6 +705,17 @@ function EnrollmentDialogContent({
                     </p>
                   </div>
                 )}
+
+                {/* Face Targeting Oval Guide (HUD) */}
+                <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                  <div
+                    className={`w-44 h-56 rounded-[50%] border-2 border-dashed transition-all duration-300 ${
+                      progress?.face_detected
+                        ? "border-emerald-400/60 shadow-[0_0_20px_rgba(52,211,153,0.2)]"
+                        : "border-sky-300/30"
+                    }`}
+                  />
+                </div>
 
                 {/* Top Overlay: Pose badge & pause toggle */}
                 <div className="absolute top-3 inset-x-3 flex items-center justify-between pointer-events-none">

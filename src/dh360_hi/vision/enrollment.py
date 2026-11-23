@@ -627,12 +627,11 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             self._get_active_stage_direction(s) if self._config.direction_targets else None
         )
         base_min_conf = getattr(self._quality_gate.thresholds, "min_confidence", 0.70)
-        # During RIGHT and LEFT stages, head rotation naturally reduces YuNet frontal confidence
-        # Allow detection confidence down to 0.55 during directional turns
+        # Calibrate detection confidence: 0.65 for frontal, 0.55 for directional head turns
         if active_stage is not None and active_stage != HeadDirection.FRONT:
             min_conf = max(0.55, base_min_conf - 0.20)
         else:
-            min_conf = base_min_conf
+            min_conf = min(base_min_conf, 0.65)
 
         valid_candidates: list[FaceDetection] = []
         for det in det_result.detections:
@@ -688,6 +687,16 @@ class FaceEnrollmentController(BaseFaceEnrollment):
                     and not (
                         r == FaceRejectionReason.EXCESSIVE_ROLL
                         and (q_result.metrics.roll_angle_deg or 0.0) <= 30.0
+                    )
+                ]
+            else:
+                # During FRONT stage, allow natural room lighting variations down to 0.65
+                rejection_reasons = [
+                    r
+                    for r in rejection_reasons
+                    if not (
+                        r == FaceRejectionReason.LOW_CONFIDENCE
+                        and target_detection.confidence >= 0.65
                     )
                 ]
 
@@ -789,6 +798,20 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             )
             current_dir_count = s.direction_counts.get(dir_key, 0)
 
+        # 5c. Rapid Interval Throttling (Fast-path avoidance of redundant neural inference)
+        curr_time = time.monotonic()
+        if (
+            s.last_sample_time > 0.0
+            and (curr_time - s.last_sample_time) < self._config.min_sample_interval_seconds
+        ):
+            s.last_rejection_reason = SampleRejectionReason.DUPLICATE_SAMPLE
+            s.last_rejection_details = (
+                f"Sample captured too quickly ({curr_time - s.last_sample_time:.3f}s < "
+                f"{self._config.min_sample_interval_seconds:.2f}s)"
+            )
+            s.rejection_counts[SampleRejectionReason.DUPLICATE_SAMPLE.value] += 1
+            return self._build_progress(s)
+
         # 6. Face Alignment
         align_result = self._aligner.align(frame, target_detection)
         if not align_result.is_success:
@@ -849,16 +872,6 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             return self._build_progress(s)
 
         # 8b. Sample Diversity & Intra-Person Duplicate Protection
-        curr_time = time.monotonic()
-        if (
-            s.last_sample_time > 0.0
-            and (curr_time - s.last_sample_time) < self._config.min_sample_interval_seconds
-        ):
-            s.last_rejection_reason = SampleRejectionReason.DUPLICATE_SAMPLE
-            s.last_rejection_details = "Sample captured too quickly after previous sample"
-            s.rejection_counts[SampleRejectionReason.DUPLICATE_SAMPLE.value] += 1
-            return self._build_progress(s)
-
         # Check against existing stored embeddings in ADD_SAMPLES mode
         if s.mode == EnrollmentMode.ADD_SAMPLES and s.existing_embeddings:
             for exist_vec in s.existing_embeddings:
