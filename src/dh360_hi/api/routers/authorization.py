@@ -231,14 +231,13 @@ async def stream_authorization_preview(
                     success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
                     if success:
                         frame_ts = getattr(frame, "timestamp", time.monotonic())
-                        chunk = (
-                            b"--frame\r\n"
-                            b"Content-Type: image/jpeg\r\n"
+                        header = (
+                            f"--frame\r\n"
+                            f"Content-Type: image/jpeg\r\n"
                             f"X-Frame-ID: {frame.frame_id}\r\n"
-                            f"X-Capture-Timestamp: {frame_ts:.3f}\r\n\r\n".encode("ascii")
-                            + encoded.tobytes()
-                            + b"\r\n"
-                        )
+                            f"X-Capture-Timestamp: {frame_ts:.3f}\r\n\r\n"
+                        ).encode("ascii")
+                        chunk = header + encoded.tobytes() + b"\r\n"
                         yield chunk
                 await asyncio.sleep(0.015)  # Responsive check for next captured frame (up to 30 FPS)
         except asyncio.CancelledError:
