@@ -109,8 +109,9 @@ function EnrollmentDialogContent({
   }, [user]);
 
   // Connect to the continuous hardware-accelerated MJPEG stream (17+ FPS)
-  const connectStream = useCallback(async () => {
+  const connectStream = useCallback(async (force = false) => {
     if (!activeRef.current || !user || authLoading) return;
+    if (previewUrl && !force) return;
     try {
       const token = await user.getIdToken();
       if (!activeRef.current) return;
@@ -120,11 +121,11 @@ function EnrollmentDialogContent({
       console.warn("[EnrollmentDialog] Failed to obtain token for stream:", err);
       if (activeRef.current) {
         reconnectTimerRef.current = setTimeout(() => {
-          void connectStream();
+          void connectStream(true);
         }, 1500);
       }
     }
-  }, [user, authLoading, person.person_id]);
+  }, [user, authLoading, person.person_id, previewUrl]);
 
   // Reconnect stream if connection drops or network glitches
   const handleStreamError = useCallback(() => {
@@ -133,7 +134,7 @@ function EnrollmentDialogContent({
       clearTimeout(reconnectTimerRef.current);
     }
     reconnectTimerRef.current = setTimeout(() => {
-      void connectStream();
+      void connectStream(true);
     }, 500);
   }, [connectStream]);
 

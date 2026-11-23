@@ -11,8 +11,11 @@ server-configured camera FrameSource.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Any, Literal, cast
 
+import cv2
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict
@@ -66,7 +69,7 @@ def _require_person(
     profile = service.get_person(person_id)
     if profile is None:
         raise EntityNotFoundError("person", person_id)
-    if tenant_id and getattr(profile, "tenant_id", None) != tenant_id:
+    if tenant_id and getattr(profile, "tenant_id", None) is not None and getattr(profile, "tenant_id", None) != tenant_id:
         raise EntityNotFoundError("person", person_id)
     consent = getattr(profile, "consent_status", ConsentStatus.GRANTED)
     if consent != ConsentStatus.GRANTED:
@@ -84,7 +87,7 @@ def _require_active_session(
         raise EntityNotFoundError("enrollment_session", person_id)
     if tenant_id:
         profile = service.get_person(person_id)
-        if profile is None or profile.tenant_id != tenant_id:
+        if profile is None or (getattr(profile, "tenant_id", None) is not None and profile.tenant_id != tenant_id):
             raise EntityNotFoundError("enrollment_session", person_id)
 
 
@@ -209,8 +212,8 @@ def get_enrollment_preview_frame(
             pass
 
     frame_id = getattr(frame, "frame_id", -1)
-    frame_ts = getattr(frame, "timestamp", time.monotonic())
-    frame_age_ms = max(0.0, (time.monotonic() - frame_ts) * 1000)
+    frame_ts = getattr(frame, "timestamp", time.time())
+    frame_age_ms = max(0.0, (time.time() - frame_ts) * 1000)
 
     success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
     if not success:
@@ -307,16 +310,19 @@ async def stream_enrollment_preview(
 
                     success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
                     if success:
-                        frame_ts = getattr(frame, "timestamp", time.monotonic())
+                        frame_ts = getattr(frame, "timestamp", time.time())
+                        now = time.time()
+                        frame_age_ms = max(0.0, (now - frame_ts) * 1000)
                         header = (
                             f"--frame\r\n"
                             f"Content-Type: image/jpeg\r\n"
                             f"X-Frame-ID: {frame.frame_id}\r\n"
-                            f"X-Capture-Timestamp: {frame_ts:.3f}\r\n\r\n"
+                            f"X-Capture-Timestamp: {frame_ts:.3f}\r\n"
+                            f"X-Frame-Age-Ms: {frame_age_ms:.1f}\r\n\r\n"
                         ).encode("ascii")
                         chunk = header + encoded.tobytes() + b"\r\n"
                         yield chunk
-                await asyncio.sleep(0.015)  # Responsive check for next captured frame (up to 30 FPS)
+                await asyncio.sleep(0.005)  # Responsive check for next captured frame (low-latency 5ms tick)
         except asyncio.CancelledError:
             pass
 

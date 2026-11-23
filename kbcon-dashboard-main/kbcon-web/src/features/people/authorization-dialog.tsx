@@ -79,8 +79,9 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
   }, [user]);
 
   // Connect to the continuous hardware-accelerated MJPEG stream (17+ FPS)
-  const connectStream = useCallback(async () => {
+  const connectStream = useCallback(async (force = false) => {
     if (!activeRef.current || !user || authLoading) return;
+    if (previewUrl && !force) return;
     try {
       const token = await user.getIdToken();
       if (!activeRef.current) return;
@@ -90,11 +91,11 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
       console.warn("[AuthorizationDialog] Failed to obtain token for stream:", err);
       if (activeRef.current) {
         reconnectTimerRef.current = setTimeout(() => {
-          void connectStream();
+          void connectStream(true);
         }, 1500);
       }
     }
-  }, [user, authLoading]);
+  }, [user, authLoading, previewUrl]);
 
   // Reconnect stream if connection drops or network glitches
   const handleStreamError = useCallback(() => {
@@ -103,7 +104,7 @@ function AuthorizationDialogContent({ onClose }: AuthorizationDialogContentProps
       clearTimeout(reconnectTimerRef.current);
     }
     reconnectTimerRef.current = setTimeout(() => {
-      void connectStream();
+      void connectStream(true);
     }, 500);
   }, [connectStream]);
 

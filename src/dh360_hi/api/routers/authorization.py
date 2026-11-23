@@ -132,7 +132,7 @@ def get_authorization_preview_frame(
     controller = getattr(request.app.state, "authorization_controller", None)
     current_session = controller.get_current() if controller else None
     curr_sess_id = getattr(current_session, "session_id", None)
-    now = time.monotonic()
+    now = time.time()
     frame_ts = getattr(frame, "timestamp", now)
     frame_age_ms = max(0.0, (now - frame_ts) * 1000)
 
@@ -230,16 +230,19 @@ async def stream_authorization_preview(
                     _render_auth_hud(img, current_session)
                     success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 60])
                     if success:
-                        frame_ts = getattr(frame, "timestamp", time.monotonic())
+                        frame_ts = getattr(frame, "timestamp", time.time())
+                        now = time.time()
+                        frame_age_ms = max(0.0, (now - frame_ts) * 1000)
                         header = (
                             f"--frame\r\n"
                             f"Content-Type: image/jpeg\r\n"
                             f"X-Frame-ID: {frame.frame_id}\r\n"
-                            f"X-Capture-Timestamp: {frame_ts:.3f}\r\n\r\n"
+                            f"X-Capture-Timestamp: {frame_ts:.3f}\r\n"
+                            f"X-Frame-Age-Ms: {frame_age_ms:.1f}\r\n\r\n"
                         ).encode("ascii")
                         chunk = header + encoded.tobytes() + b"\r\n"
                         yield chunk
-                await asyncio.sleep(0.015)  # Responsive check for next captured frame (up to 30 FPS)
+                await asyncio.sleep(0.005)  # Responsive check for next captured frame (low-latency 5ms tick)
         except asyncio.CancelledError:
             pass
 
