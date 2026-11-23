@@ -254,12 +254,53 @@ export async function PATCH(request: Request) {
       updates.assignedAdminName = adminName;
     }
 
-    if (body.config && typeof body.config === "object") {
-      updates.config = body.config;
+    if ("type" in body || "mode" in body) {
+      if (!isSuper) {
+        return NextResponse.json(
+          { error: "FORBIDDEN", message: "Only Super Admin can change robot type." },
+          { status: 403 }
+        );
+      }
+      const rawType = String(body.type ?? body.mode ?? "").trim().toLowerCase();
+      if (rawType === "health" || rawType === "healthcare") {
+        updates.mode = "healthcare";
+        updates.type = "Health";
+      } else if (rawType === "education") {
+        updates.mode = "education";
+        updates.type = "Education";
+      } else {
+        return NextResponse.json(
+          { error: "INVALID_ARGUMENT", message: "Robot type must be either 'Health' or 'Education'." },
+          { status: 400 }
+        );
+      }
     }
 
-    if (body.mode === "education" || body.mode === "healthcare") {
-      updates.mode = body.mode;
+    if ("language" in body) {
+      if (!isSuper) {
+        return NextResponse.json(
+          { error: "FORBIDDEN", message: "Only Super Admin can change robot language." },
+          { status: 403 }
+        );
+      }
+      const rawLang = String(body.language ?? "").trim().toLowerCase();
+      if (rawLang === "en" || rawLang === "english") {
+        updates.language = "en";
+      } else if (rawLang === "bn" || rawLang === "bangla") {
+        updates.language = "bn";
+      } else {
+        return NextResponse.json(
+          { error: "INVALID_ARGUMENT", message: "Robot language must be either 'en' or 'bn'." },
+          { status: 400 }
+        );
+      }
+      if (!updates.config && currentData.config && typeof currentData.config === "object") {
+        updates.config = { ...currentData.config, defaultLanguage: updates.language };
+      }
+    }
+
+    if (body.config && typeof body.config === "object") {
+      updates.config = { ...(updates.config as Record<string, unknown> || {}), ...body.config };
     }
 
     await robotRef.set(updates, { merge: true });
@@ -267,6 +308,186 @@ export async function PATCH(request: Request) {
   } catch (err: unknown) {
     return NextResponse.json(
       { error: "INTERNAL_ERROR", message: err instanceof Error ? err.message : "Failed to update robot." },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(request: Request) {
+  const authHeader = request.headers.get("authorization");
+  const authResult = await authenticateFirebaseToken(authHeader, { checkRevoked: true });
+
+  if (!authResult.success) {
+    return NextResponse.json(
+      { error: authResult.code, message: authResult.message },
+      { status: authResult.status }
+    );
+  }
+
+  if (authResult.principal.mustChangePassword) {
+    return NextResponse.json(
+      {
+        error: "PASSWORD_CHANGE_REQUIRED",
+        message: "Mandatory password change required before accessing administrative endpoints.",
+      },
+      { status: 403 }
+    );
+  }
+
+  // Strict backend role enforcement: Only Super Admin can delete robots
+  if (authResult.principal.role !== "superAdmin") {
+    return NextResponse.json(
+      { error: "FORBIDDEN", message: "Only Super Admin can delete robots." },
+      { status: 403 }
+    );
+  }
+
+  // Read robotId from query parameter or JSON body
+  const { searchParams } = new URL(request.url);
+  let robotId = searchParams.get("robotId") || searchParams.get("id") || "";
+
+  if (!robotId) {
+    try {
+      const body = await request.json();
+      robotId = typeof body.robotId === "string" ? body.robotId.trim() : typeof body.id === "string" ? body.id.trim() : "";
+    } catch {
+      // Body empty or not JSON, rely on query parameter
+    }
+  }
+
+  robotId = robotId.trim();
+  if (!robotId) {
+    return NextResponse.json(
+      { error: "INVALID_ARGUMENT", message: "robotId is required." },
+      { status: 400 }
+    );
+  }
+
+  if (!hasServerAdminCredentials()) {
+    try {
+      const res = await forwardAdminRequestToBackend(`/admin/robots/${encodeURIComponent(robotId)}`, "DELETE", {});
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return NextResponse.json(
+          { error: data.error || "DELETION_FAILED", message: data.message || data.detail || "Failed to delete robot." },
+          { status: res.status }
+        );
+      }
+      return NextResponse.json(data, { status: res.status });
+    } catch (err: unknown) {
+      return NextResponse.json(
+        { error: "DELETION_FAILED", message: err instanceof Error ? err.message : "Failed to delete robot." },
+        { status: 500 }
+      );
+    }
+  }
+
+  try {
+    const adminDb = await getAdminFirestore();
+    let robotRef = adminDb.collection("robots").doc(robotId);
+    let docSnap = await robotRef.get();
+
+    // Canonical resolution across case and hyphenation
+    if (!docSnap.exists) {
+      const cleanTarget = robotId.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+      const allRobots = await adminDb.collection("robots").get();
+      for (const d of allRobots.docs) {
+        if (d.id.replace(/[^a-zA-Z0-9]/g, "").toLowerCase() === cleanTarget) {
+          robotRef = d.ref;
+          docSnap = d;
+          break;
+        }
+      }
+    }
+
+    if (!docSnap.exists) {
+      return NextResponse.json(
+        { error: "NOT_FOUND", message: `Robot ${robotId} not found.` },
+        { status: 404 }
+      );
+    }
+
+    const now = new Date().toISOString();
+    const robotData = docSnap.data() || {};
+    const actualRobotId = docSnap.id;
+
+    // 1. Safely unbind associated physical device without deleting hardware record
+    const deviceId = typeof robotData.deviceId === "string" ? robotData.deviceId.trim() : "";
+    if (deviceId) {
+      try {
+        await adminDb.collection("devices").doc(deviceId).set(
+          {
+            status: "unpaired",
+            robotId: null,
+            deviceTokenHash: null,
+            updatedAt: now,
+          },
+          { merge: true }
+        );
+      } catch (devErr) {
+        console.warn(`[admin/robots DELETE] Failed unbinding device ${deviceId}:`, devErr);
+      }
+    }
+
+    // Also unbind any device where robotId matches
+    try {
+      const boundDevicesSnap = await adminDb.collection("devices").where("robotId", "==", actualRobotId).get();
+      for (const devDoc of boundDevicesSnap.docs) {
+        await devDoc.ref.set(
+          {
+            status: "unpaired",
+            robotId: null,
+            deviceTokenHash: null,
+            updatedAt: now,
+          },
+          { merge: true }
+        );
+      }
+    } catch {
+      // Ignore query errors
+    }
+
+    // 2. Safely unbind from assigned admin user's assignedRobots array
+    const assignedAdminId = typeof robotData.assignedAdminId === "string" ? robotData.assignedAdminId.trim() : "";
+    if (assignedAdminId) {
+      try {
+        const uDoc = await adminDb.collection("users").doc(assignedAdminId).get();
+        if (uDoc.exists) {
+          const uData = uDoc.data() || {};
+          const currentAssigned = Array.isArray(uData.assignedRobots) ? (uData.assignedRobots as string[]) : [];
+          const updatedAssigned = currentAssigned.filter((r) => r !== actualRobotId && r !== robotId);
+          await uDoc.ref.set({ assignedRobots: updatedAssigned, updatedAt: now }, { merge: true });
+        }
+      } catch (uErr) {
+        console.warn(`[admin/robots DELETE] Failed unbinding from admin ${assignedAdminId}:`, uErr);
+      }
+    }
+
+    // 3. Archive audit record into decommissioned_robots collection to preserve audit trail
+    try {
+      await adminDb.collection("decommissioned_robots").doc(actualRobotId).set({
+        ...robotData,
+        decommissionedAt: now,
+        decommissionedBy: authResult.principal.uid,
+        decommissionedByRole: authResult.principal.role,
+        reason: "DELETED_BY_SUPERADMIN",
+      });
+    } catch (archErr) {
+      console.warn(`[admin/robots DELETE] Failed archiving decommissioned robot ${actualRobotId}:`, archErr);
+    }
+
+    // 4. Delete robot document from active robots collection
+    // Note: Person profiles and biometric templates in persons/face_embeddings are NEVER touched
+    await robotRef.delete();
+
+    return NextResponse.json({
+      success: true,
+      message: `Robot ${actualRobotId} successfully removed from active robot inventory.`,
+      robotId: actualRobotId,
+    });
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { error: "INTERNAL_ERROR", message: err instanceof Error ? err.message : "Failed to delete robot." },
       { status: 500 }
     );
   }

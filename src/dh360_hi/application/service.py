@@ -832,7 +832,11 @@ class HumanInteractionService:
                 if not res.is_success:
                     self._release_enrollment_capture()
                     err = res.error_message or "Enrollment commit failed"
-                    if "matches existing registered person" in err or "uncertain threshold range" in err:
+                    if (
+                        "matches existing registered person" in err
+                        or "uncertain threshold range" in err
+                        or "borderline confidence" in err
+                    ):
                         raise ConflictAppError(
                             err,
                             conflict_key="biometric_identity_conflict",

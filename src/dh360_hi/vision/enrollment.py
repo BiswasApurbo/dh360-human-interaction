@@ -850,25 +850,38 @@ class FaceEnrollmentController(BaseFaceEnrollment):
         if conflict_reason == SampleRejectionReason.IDENTITY_CONFLICT:
             s.last_rejection_reason = SampleRejectionReason.IDENTITY_CONFLICT
             s.last_rejection_details = (
-                f"Face matches existing registered person '{conf_name}' "
-                f"(ID: {conf_pid}, similarity: {conf_sim:.4f} >= {self._config.identity_conflict_threshold:.2f})"
+                f"This face is already registered as '{conf_name}'."
+                if conf_name
+                else "This face is already registered under another person."
             )
             s.conflict_person_id = conf_pid
             s.conflict_display_name = conf_name
             s.conflict_similarity = conf_sim
             s.rejection_counts[SampleRejectionReason.IDENTITY_CONFLICT.value] += 1
+            logger.info(
+                "Identity conflict detected: candidate matches existing person '%s' (similarity: %.4f >= %.2f)",
+                conf_name,
+                conf_sim,
+                self._config.identity_conflict_threshold,
+            )
             return self._build_progress(s)
 
         if conflict_reason == SampleRejectionReason.UNCERTAIN_IDENTITY:
             s.last_rejection_reason = SampleRejectionReason.UNCERTAIN_IDENTITY
             s.last_rejection_details = (
-                f"Face similarity {conf_sim:.4f} with existing person '{conf_name}' "
-                f"is in uncertain threshold range [{self._config.identity_uncertain_threshold:.2f}, {self._config.identity_conflict_threshold:.2f})"
+                "Potential duplicate identity detected with borderline confidence. Enrollment has been paused for review."
             )
             s.conflict_person_id = conf_pid
             s.conflict_display_name = conf_name
             s.conflict_similarity = conf_sim
             s.rejection_counts[SampleRejectionReason.UNCERTAIN_IDENTITY.value] += 1
+            logger.info(
+                "Uncertain identity match: candidate similarity %.4f with '%s' in [%.2f, %.2f)",
+                conf_sim,
+                conf_name,
+                self._config.identity_uncertain_threshold,
+                self._config.identity_conflict_threshold,
+            )
             return self._build_progress(s)
 
         # 8b. Sample Diversity & Intra-Person Duplicate Protection
@@ -1064,10 +1077,16 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             if conflict_reason == SampleRejectionReason.IDENTITY_CONFLICT:
                 s.state = EnrollmentState.FAILED
                 err_msg = (
-                    f"Cannot commit enrollment: biometric template matches existing registered person "
-                    f"'{conf_name}' (ID: {conf_pid}, similarity: {conf_sim:.4f} >= {self._config.identity_conflict_threshold:.2f})"
+                    f"Cannot commit enrollment: biometric template matches existing registered person '{conf_name}'."
+                    if conf_name
+                    else "Cannot commit enrollment: biometric template matches an existing registered person."
                 )
-                logger.warning(err_msg)
+                logger.warning(
+                    "Commit rejected: biometric template matches existing registered person '%s' (similarity: %.4f >= %.2f)",
+                    conf_name,
+                    conf_sim,
+                    self._config.identity_conflict_threshold,
+                )
                 result = EnrollmentResult(
                     session_id=s.session_id,
                     enrollment_batch_id=s.enrollment_batch_id,
@@ -1088,10 +1107,15 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             if conflict_reason == SampleRejectionReason.UNCERTAIN_IDENTITY:
                 s.state = EnrollmentState.FAILED
                 err_msg = (
-                    f"Cannot commit enrollment: biometric template similarity {conf_sim:.4f} with "
-                    f"'{conf_name}' is in uncertain threshold range [{self._config.identity_uncertain_threshold:.2f}, {self._config.identity_conflict_threshold:.2f})"
+                    "Cannot commit enrollment: potential duplicate identity detected with borderline confidence."
                 )
-                logger.warning(err_msg)
+                logger.warning(
+                    "Commit rejected: biometric template similarity %.4f with '%s' in uncertain range [%.2f, %.2f)",
+                    conf_sim,
+                    conf_name,
+                    self._config.identity_uncertain_threshold,
+                    self._config.identity_conflict_threshold,
+                )
                 result = EnrollmentResult(
                     session_id=s.session_id,
                     enrollment_batch_id=s.enrollment_batch_id,

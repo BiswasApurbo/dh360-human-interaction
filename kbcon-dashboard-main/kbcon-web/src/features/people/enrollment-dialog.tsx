@@ -39,6 +39,9 @@ interface EnrollmentProgress {
   is_complete: boolean;
   last_rejection_reason?: string | null;
   last_rejection_details?: string | null;
+  conflict_person_id?: string | null;
+  conflict_display_name?: string | null;
+  conflict_similarity?: number | null;
 }
 
 interface EnrollmentDialogProps {
@@ -233,17 +236,15 @@ function EnrollmentDialogContent({
       // Determine real-time feedback and dynamic delay
       let nextDelayMs = 250;
       if (data.last_rejection_reason === "identity_conflict") {
-        const msg =
-          data.last_rejection_details ||
-          "Potential duplicate identity detected. This face appears to match an existing registered person. Enrollment has been paused pending identity verification.";
+        const msg = data.conflict_display_name
+          ? t("duplicateIdentityWarning", { name: data.conflict_display_name })
+          : t("duplicateIdentityGenericWarning");
         setLastFeedback(msg);
         setError(msg);
         setIsPaused(true);
         return;
       } else if (data.last_rejection_reason === "uncertain_identity") {
-        const msg =
-          data.last_rejection_details ||
-          "Potential duplicate identity detected with borderline confidence. Enrollment has been paused for review.";
+        const msg = t("uncertainIdentityWarning");
         setLastFeedback(msg);
         setError(msg);
         setIsPaused(true);
@@ -499,11 +500,25 @@ function EnrollmentDialogContent({
         onClose();
       }, 1600);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : t("enrollFailed"));
+      const errMsg = err instanceof Error ? err.message : "";
+      if (
+        errMsg.includes("duplicate") ||
+        errMsg.includes("registered as") ||
+        errMsg.includes("registered person") ||
+        errMsg.includes("conflict")
+      ) {
+        const msg = progress?.conflict_display_name
+          ? t("duplicateIdentityWarning", { name: progress.conflict_display_name })
+          : t("duplicateIdentityGenericWarning");
+        setError(msg);
+        setLastFeedback(msg);
+      } else {
+        setError(errMsg || t("enrollFailed"));
+      }
     } finally {
       setCommitting(false);
     }
-  }, [getHeaders, person.person_id, onSuccess, onClose, t]);
+  }, [getHeaders, person.person_id, onSuccess, onClose, t, progress?.conflict_display_name]);
 
   // Directional metrics
   const target = progress?.target_samples ?? 30;
@@ -632,7 +647,7 @@ function EnrollmentDialogContent({
           {error && (
             <div className="flex items-center gap-2 rounded-xl bg-red-50 p-3 text-xs font-medium text-red-700 ring-1 ring-red-200">
               <AlertCircle className="size-4 shrink-0" />
-              <span>{error}</span>
+              <span className="break-words">{error}</span>
             </div>
           )}
 

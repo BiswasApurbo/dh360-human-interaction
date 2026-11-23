@@ -4,9 +4,9 @@ import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { motion } from "motion/react";
 import { doc, onSnapshot } from "firebase/firestore";
-import { ArrowLeft, CheckCircle2, Cpu, Loader2, RefreshCw, ShieldAlert, Unlink } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Cpu, Loader2, RefreshCw, ShieldAlert, Trash2, Unlink } from "lucide-react";
 import { auth, db } from "@/lib/firebase";
-import { Link } from "@/i18n/navigation";
+import { Link, useRouter } from "@/i18n/navigation";
 import { useAuth } from "@/features/auth/use-auth";
 import { useRole } from "@/features/auth/use-role";
 import { useNow } from "@/hooks/use-now";
@@ -14,6 +14,7 @@ import { effectiveStatus } from "@/lib/robot-status";
 import { useRobots } from "./use-robots";
 import { RobotConfigForm } from "./robot-config-form";
 import { DeviceRegistry } from "./device-registry";
+import { DeleteRobotModal } from "./delete-robot-modal";
 
 const statusStyle = {
   online: "bg-emerald-100 text-emerald-700",
@@ -63,7 +64,9 @@ export function RobotDetail({ robotId }: { robotId: string }) {
     text: string;
   } | null>(null);
   const [showPairForm, setShowPairForm] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [revoking, setRevoking] = useState(false);
+  const router = useRouter();
 
   const robot = robots.find((r) => r.id === robotId) ?? null;
   const isSuper = role === "superAdmin";
@@ -223,26 +226,39 @@ export function RobotDetail({ robotId }: { robotId: string }) {
           </span>
         </div>
 
-        {canReconnect && (
-          <button
-            type="button"
-            disabled={reconnecting}
-            onClick={handleReconnect}
-            className="inline-flex h-9 items-center gap-2 rounded-xl border border-sky-300 bg-white px-3.5 text-xs font-semibold text-sky-800 shadow-sm hover:bg-sky-50 disabled:opacity-60"
-          >
-            {reconnecting ? (
-              <>
-                <Loader2 className="size-3.5 animate-spin text-sky-600" />
-                <span>Reconnecting...</span>
-              </>
-            ) : (
-              <>
-                <RefreshCw className="size-3.5 text-sky-600" />
-                <span>Reconnect</span>
-              </>
-            )}
-          </button>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {canReconnect && (
+            <button
+              type="button"
+              disabled={reconnecting}
+              onClick={handleReconnect}
+              className="inline-flex h-9 items-center gap-2 rounded-xl border border-sky-300 bg-white px-3.5 text-xs font-semibold text-sky-800 shadow-sm hover:bg-sky-50 disabled:opacity-60"
+            >
+              {reconnecting ? (
+                <>
+                  <Loader2 className="size-3.5 animate-spin text-sky-600" />
+                  <span>Reconnecting...</span>
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="size-3.5 text-sky-600" />
+                  <span>Reconnect</span>
+                </>
+              )}
+            </button>
+          )}
+
+          {isSuper && (
+            <button
+              type="button"
+              onClick={() => setShowDeleteModal(true)}
+              className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-3.5 text-xs font-semibold text-red-700 shadow-sm hover:bg-red-100 transition-colors"
+            >
+              <Trash2 className="size-3.5 text-red-600" />
+              <span>{t("deleteRobot")}</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {reconnectResult && (
@@ -282,8 +298,15 @@ export function RobotDetail({ robotId }: { robotId: string }) {
       >
         <h2 className="mb-4 text-base font-bold text-sky-900">{t("info")}</h2>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <Field label={t("type")}>{robot.type}</Field>
+          <Field label={t("type")}>
+            {robot.mode === "healthcare" || robot.type?.toLowerCase() === "health"
+              ? t("typeHealth")
+              : t("typeEducation")}
+          </Field>
           <Field label={t("mode")}>{t(robot.mode)}</Field>
+          <Field label={t("language")}>
+            {robot.language === "en" ? t("langEnFull") : t("langBnFull")}
+          </Field>
           <Field label={t("assignedTo")}>
             {robot.assignedAdminName ?? t("unassigned")}
           </Field>
@@ -360,6 +383,15 @@ export function RobotDetail({ robotId }: { robotId: string }) {
       </motion.section>
 
       <RobotConfigForm key={robot.id} robot={robot} onClose={() => {}} />
+
+      <DeleteRobotModal
+        robot={robot}
+        isOpen={showDeleteModal}
+        onClose={() => setShowDeleteModal(false)}
+        onDeleted={() => {
+          router.push("/robots");
+        }}
+      />
     </div>
   );
 }
