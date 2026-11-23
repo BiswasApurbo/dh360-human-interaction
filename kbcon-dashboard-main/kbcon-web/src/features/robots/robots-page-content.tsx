@@ -3,17 +3,18 @@
 import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { AnimatePresence, motion } from "motion/react";
-import { Check, Copy, Cpu, KeyRound, Loader2, Plus, RefreshCw } from "lucide-react";
+import { Check, Copy, Cpu, KeyRound, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { auth } from "@/lib/firebase";
 import { useAuth } from "@/features/auth/use-auth";
 import { useRole } from "@/features/auth/use-role";
 import { useAdmins } from "@/features/admins/use-admins";
-import { useRobots } from "./use-robots";
+import { useRobots, type RobotRow } from "./use-robots";
 import { CreateRobotForm } from "./create-robot-form";
 import { DeviceRegistry } from "./device-registry";
 import { effectiveStatus } from "@/lib/robot-status";
 import { useNow } from "@/hooks/use-now";
 import { RobotConfigForm } from "./robot-config-form";
+import { DeleteRobotModal } from "./delete-robot-modal";
 import { Link } from "@/i18n/navigation";
 
 const statusStyle = {
@@ -39,6 +40,7 @@ export function RobotsPageContent() {
 
   const [configId, setConfigId] = useState<string | null>(null);
   const configRobot = robots.find((r) => r.id === configId) ?? null;
+  const [deleteTarget, setDeleteTarget] = useState<RobotRow | null>(null);
   const [copied, setCopied] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [reconnectingId, setReconnectingId] = useState<string | null>(null);
@@ -248,6 +250,18 @@ export function RobotsPageContent() {
         />
       )}
 
+      {deleteTarget && (
+        <DeleteRobotModal
+          robot={deleteTarget}
+          isOpen={!!deleteTarget}
+          onClose={() => setDeleteTarget(null)}
+          onDeleted={() => {
+            setDeleteTarget(null);
+            setMessage({ ok: true, text: t("deleteRobotSuccess") });
+          }}
+        />
+      )}
+
       {message && (
         <p
           className={`rounded-lg px-3 py-2 text-sm ring-1 ${
@@ -401,13 +415,24 @@ export function RobotsPageContent() {
                       </button>
                     )}
                     {isSuper && (
-                      <button
-                        type="button"
-                        onClick={() => setConfigId(r.id)}
-                        className="inline-flex h-8 items-center rounded-lg px-3 text-xs font-semibold text-sky-800 ring-1 ring-sky-300 hover:bg-sky-50"
-                      >
-                        {t("configure")}
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setConfigId(r.id)}
+                          className="inline-flex h-8 items-center rounded-lg px-3 text-xs font-semibold text-sky-800 ring-1 ring-sky-300 hover:bg-sky-50"
+                        >
+                          {t("configure")}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeleteTarget(r)}
+                          className="inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-xs font-semibold text-rose-700 ring-1 ring-rose-300 hover:bg-rose-50"
+                          title={t("deleteRobot")}
+                        >
+                          <Trash2 className="size-3.5 text-rose-600" />
+                          <span>{t("deleteRobot")}</span>
+                        </button>
+                      </>
                     )}
                   </div>
                 </td>

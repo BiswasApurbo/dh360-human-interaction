@@ -413,11 +413,118 @@ async def patch_robot(
     if "config" in payload and isinstance(payload["config"], dict):
         updates["config"] = payload["config"]
 
-    if payload.get("mode") in ("education", "healthcare"):
-        updates["mode"] = payload["mode"]
+    if "mode" in payload or "type" in payload:
+        raw_mode = str(payload.get("mode") or payload.get("type") or "").strip().lower()
+        if raw_mode in ("healthcare", "health", "clinic", "hospital", "medical"):
+            updates["mode"] = "healthcare"
+            updates["type"] = "Health"
+        elif raw_mode in ("education", "educational", "school"):
+            updates["mode"] = "education"
+            updates["type"] = "Education"
+
+    if "language" in payload:
+        raw_lang = str(payload["language"]).strip().lower()
+        if raw_lang in ("en", "english"):
+            updates["language"] = "en"
+        elif raw_lang in ("bn", "bangla"):
+            updates["language"] = "bn"
 
     robot_ref.set(updates, merge=True)
+
+    # Invalidate/refresh local registry cache if this is the active robot
+    try:
+        from dh360_hi.backend.robot_registry import RobotRegistry
+        registry = RobotRegistry.get_instance()
+        if registry.resolve_local_robot_id() == robot_id:
+            registry.resolve_authoritative_config(robot_id)
+    except Exception:
+        pass
+
     return {"success": True, "robotId": robot_id, **updates}
+
+
+@router.delete("/admin/robots/{robot_id}")
+async def delete_robot(
+    robot_id: str,
+    _auth: OperatorPrincipal = _operator_manage,
+) -> dict[str, Any]:
+    """Delete / decommission an existing robot from active registry (Superadmin only)."""
+    db = get_firebase_firestore()
+    robot_ref = db.collection("robots").document(robot_id)
+    doc_snap = robot_ref.get()
+    if not doc_snap.exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Robot '{robot_id}' not found.",
+        )
+
+    robot_data = doc_snap.to_dict() or {}
+    now_str = datetime.now(UTC).isoformat()
+
+    # 1. Safely unbind associated hardware device if present
+    device_id = robot_data.get("deviceId")
+    if device_id:
+        try:
+            db.collection("devices").document(str(device_id)).set(
+                {
+                    "status": "unpaired",
+                    "robotId": None,
+                    "deviceTokenHash": None,
+                    "updatedAt": now_str,
+                },
+                merge=True,
+            )
+        except Exception as dev_err:
+            logger.warning("Failed unbinding device %s on robot deletion: %s", device_id, dev_err)
+
+    # 2. Unbind from assigned admin user's assignedRobots list
+    admin_id = robot_data.get("assignedAdminId")
+    if admin_id:
+        try:
+            u_doc = db.collection("users").document(str(admin_id)).get()
+            if u_doc.exists:
+                u_data = u_doc.to_dict() or {}
+                assigned = u_data.get("assignedRobots", [])
+                if robot_id in assigned:
+                    assigned = [r for r in assigned if r != robot_id]
+                    db.collection("users").document(str(admin_id)).set(
+                        {"assignedRobots": assigned, "updatedAt": now_str},
+                        merge=True,
+                    )
+        except Exception as user_err:
+            logger.warning("Failed unbinding robot from user %s: %s", admin_id, user_err)
+
+    # 3. Archive audit snapshot into decommissioned_robots collection
+    try:
+        db.collection("decommissioned_robots").document(robot_id).set(
+            {
+                **robot_data,
+                "decommissionedAt": now_str,
+                "reason": "DELETED_BY_SUPERADMIN",
+            },
+            merge=True,
+        )
+    except Exception as arch_err:
+        logger.warning("Failed archiving decommissioned robot %s: %s", robot_id, arch_err)
+
+    # 4. Remove from active robots collection
+    robot_ref.delete()
+    logger.info("Decommissioned and deleted robot '%s' from active registry", robot_id)
+
+    # 5. Invalidate local registry cache if this robot was active
+    try:
+        from dh360_hi.backend.robot_registry import RobotRegistry
+        registry = RobotRegistry.get_instance()
+        if registry.resolve_local_robot_id() == robot_id:
+            registry.resolve_authoritative_config("UNPROVISIONED")
+    except Exception:
+        pass
+
+    return {
+        "success": True,
+        "message": f"Robot '{robot_id}' deleted successfully.",
+        "robotId": robot_id,
+    }
 
 
 @router.delete("/admin/users/{uid}")
