@@ -37,6 +37,14 @@ class OperatorPrincipal:
 
     scopes: frozenset[OperatorScope]
 
+    def has_scope(self, scope: OperatorScope | str) -> bool:
+        """Check if principal possesses the specified scope."""
+        try:
+            s = OperatorScope(scope) if isinstance(scope, str) else scope
+            return s in self.scopes
+        except ValueError:
+            return False
+
 
 class OperatorSecurityError(Exception):
     """Stable transport error for operator authentication and authorization."""

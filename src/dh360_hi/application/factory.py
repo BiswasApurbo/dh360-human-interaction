@@ -46,6 +46,8 @@ def _try_build_enrollment_controller(
     embedder: BaseFaceEmbedder | None = None,
     aligner: BaseFaceAligner | None = None,
     quality_gate: BaseFaceQualityGate | None = None,
+    gallery: InMemoryGallery | None = None,
+    recognizer: BaseFaceRecognizer | None = None,
 ) -> FaceEnrollmentController | None:
     """Best-effort construction of a FaceEnrollmentController for on-demand capture.
 
@@ -94,6 +96,8 @@ def _try_build_enrollment_controller(
         embedder=emb,
         quality_gate=qg,
         config=cfg.enrollment,
+        gallery=gallery,
+        recognizer=recognizer,
     )
 
 
@@ -200,6 +204,8 @@ def create_interaction_service(
             person_service=svc,
             detector=detector,
             embedder=embedder,
+            gallery=gallery,
+            recognizer=rec,
         )
         return HumanInteractionService(
             runtime=None,
@@ -297,6 +303,8 @@ def create_interaction_service(
                 embedder=emb,
                 quality_gate=qg,
                 config=cfg.enrollment,
+                gallery=gallery,
+                recognizer=rec,
             )
 
     # 5. Frame Source & Session Supervision

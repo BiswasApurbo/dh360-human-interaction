@@ -201,7 +201,23 @@ function EnrollmentDialogContent({
 
       // Determine real-time feedback and dynamic delay
       let nextDelayMs = 250;
-      if (!data.face_detected) {
+      if (data.last_rejection_reason === "identity_conflict") {
+        const msg =
+          data.last_rejection_details ||
+          "Potential duplicate identity detected. This face appears to match an existing registered person. Enrollment has been paused pending identity verification.";
+        setLastFeedback(msg);
+        setError(msg);
+        setIsPaused(true);
+        return;
+      } else if (data.last_rejection_reason === "uncertain_identity") {
+        const msg =
+          data.last_rejection_details ||
+          "Potential duplicate identity detected with borderline confidence. Enrollment has been paused for review.";
+        setLastFeedback(msg);
+        setError(msg);
+        setIsPaused(true);
+        return;
+      } else if (!data.face_detected) {
         setLastFeedback(t("waitingForFace"));
         nextDelayMs = 500; // Throttle when waiting for face
       } else if (data.last_rejection_reason === "wrong_direction") {

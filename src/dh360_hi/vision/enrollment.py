@@ -34,6 +34,7 @@ from dh360_hi.vision.quality_gate import (
     compute_face_pitch_ratio,
     compute_yaw_offset,
 )
+from dh360_hi.vision.recognition import BaseFaceRecognizer, GalleryEntry, InMemoryGallery
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,9 @@ class SampleRejectionReason(StrEnum):
     ALIGNMENT_FAILED = "alignment_failed"
     EMBEDDING_FAILED = "embedding_failed"
     DUPLICATE_SAMPLE = "duplicate_sample"
+    IDENTITY_CONFLICT = "identity_conflict"
+    UNCERTAIN_IDENTITY = "uncertain_identity"
+    GALLERY_UNAVAILABLE = "gallery_unavailable"
     DIRECTION_QUOTA_FULL = "direction_quota_full"
     WRONG_DIRECTION = "wrong_direction"
     CONSENT_MISSING = "consent_missing"
@@ -162,6 +166,8 @@ class EnrollmentConfig:
     direction_targets: dict[str, int] = field(default_factory=default_direction_targets)
     max_attempts: int = 600
     duplicate_similarity_threshold: float = 0.95
+    identity_conflict_threshold: float = 0.65
+    identity_uncertain_threshold: float = 0.55
     min_sample_interval_seconds: float = 0.2
     timeout_seconds: float = 180.0
     model_name: str = "SFace"
@@ -186,6 +192,12 @@ class EnrollmentConfig:
             raise ValueError(msg)
         if not (0.0 < self.duplicate_similarity_threshold <= 1.0):
             msg = "duplicate_similarity_threshold must be between 0.0 and 1.0"
+            raise ValueError(msg)
+        if not (0.0 < self.identity_conflict_threshold <= 1.0):
+            msg = "identity_conflict_threshold must be between 0.0 and 1.0"
+            raise ValueError(msg)
+        if not (0.0 <= self.identity_uncertain_threshold <= self.identity_conflict_threshold):
+            msg = "identity_uncertain_threshold must be between 0.0 and identity_conflict_threshold"
             raise ValueError(msg)
 
 
@@ -220,6 +232,9 @@ class _ActiveSessionData:
     front_pitch_ratios: list[float] = field(default_factory=list)
     last_face_detected: bool = False
     last_face_bbox: tuple[float, float, float, float] | None = None
+    conflict_person_id: str | None = None
+    conflict_display_name: str | None = None
+    conflict_similarity: float | None = None
 
 
 @dataclass(frozen=True)
@@ -247,6 +262,9 @@ class EnrollmentProgress:
     direction_targets: dict[str, int] = field(default_factory=dict)
     face_detected: bool = False
     face_bbox: tuple[float, float, float, float] | None = None
+    conflict_person_id: str | None = None
+    conflict_display_name: str | None = None
+    conflict_similarity: float | None = None
 
 
 @dataclass(frozen=True)
@@ -313,6 +331,8 @@ class FaceEnrollmentController(BaseFaceEnrollment):
         embedder: BaseFaceEmbedder,
         person_service: BasePersonService,
         config: EnrollmentConfig | None = None,
+        gallery: InMemoryGallery | None = None,
+        recognizer: BaseFaceRecognizer | None = None,
     ) -> None:
         self._detector = detector
         self._quality_gate = quality_gate
@@ -320,7 +340,67 @@ class FaceEnrollmentController(BaseFaceEnrollment):
         self._embedder = embedder
         self._person_service = person_service
         self._config = config or EnrollmentConfig()
+        self._gallery = gallery
+        self._recognizer = recognizer
         self._session: _ActiveSessionData | None = None
+
+    def _get_active_gallery(self) -> InMemoryGallery:
+        """Resolve current in-memory recognition gallery or load fresh from repository."""
+        if self._recognizer is not None:
+            return self._recognizer.gallery
+        if self._gallery is not None:
+            return self._gallery
+        return self._person_service.load_recognition_gallery(
+            model_name=self._config.model_name,
+            model_version=self._config.model_version,
+            require_active=True,
+            require_consent=True,
+        )
+
+    def _evaluate_identity_match(
+        self,
+        candidate_vector: np.ndarray,
+        target_person_id: str,
+        gallery: InMemoryGallery,
+    ) -> tuple[SampleRejectionReason | None, str | None, str | None, float]:
+        """Evaluate candidate embedding against registered identities in gallery.
+
+        Returns:
+            tuple: (rejection_reason, conflict_person_id, conflict_display_name, max_similarity)
+        """
+        top_other_sim = -1.0
+        top_other_entry: GalleryEntry | None = None
+
+        for entry in gallery.list_entries():
+            if entry.person_id == target_person_id:
+                continue
+            if not entry.embeddings:
+                continue
+            if entry.model_name != self._config.model_name or entry.model_version != self._config.model_version:
+                continue
+
+            person_sim = max(compute_cosine_similarity(candidate_vector, e) for e in entry.embeddings)
+            if person_sim > top_other_sim:
+                top_other_sim = person_sim
+                top_other_entry = entry
+
+        if top_other_entry is not None:
+            if top_other_sim >= self._config.identity_conflict_threshold:
+                return (
+                    SampleRejectionReason.IDENTITY_CONFLICT,
+                    top_other_entry.person_id,
+                    top_other_entry.display_name,
+                    top_other_sim,
+                )
+            if top_other_sim >= self._config.identity_uncertain_threshold:
+                return (
+                    SampleRejectionReason.UNCERTAIN_IDENTITY,
+                    top_other_entry.person_id,
+                    top_other_entry.display_name,
+                    top_other_sim,
+                )
+
+        return (None, None, None, max(0.0, top_other_sim))
 
     @property
     def config(self) -> EnrollmentConfig:
@@ -380,6 +460,9 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             direction_targets=dict(self._config.direction_targets),
             face_detected=getattr(s, "last_face_detected", False),
             face_bbox=getattr(s, "last_face_bbox", None),
+            conflict_person_id=getattr(s, "conflict_person_id", None),
+            conflict_display_name=getattr(s, "conflict_display_name", None),
+            conflict_similarity=getattr(s, "conflict_similarity", None),
         )
 
     def start_session(
@@ -540,7 +623,17 @@ class FaceEnrollmentController(BaseFaceEnrollment):
 
         # 4. Single-Face Requirement (Dominant-Face Lock)
         # Filter low-confidence detections and deduplicate overlapping bounding boxes
-        min_conf = getattr(self._quality_gate.thresholds, "min_confidence", 0.70)
+        active_stage = (
+            self._get_active_stage_direction(s) if self._config.direction_targets else None
+        )
+        base_min_conf = getattr(self._quality_gate.thresholds, "min_confidence", 0.70)
+        # During RIGHT and LEFT stages, head rotation naturally reduces YuNet frontal confidence
+        # Allow detection confidence down to 0.55 during directional turns
+        if active_stage is not None and active_stage != HeadDirection.FRONT:
+            min_conf = max(0.55, base_min_conf - 0.20)
+        else:
+            min_conf = base_min_conf
+
         valid_candidates: list[FaceDetection] = []
         for det in det_result.detections:
             if det.confidence < min_conf:
@@ -583,10 +676,19 @@ class FaceEnrollmentController(BaseFaceEnrollment):
         # During guided directional enrollment (RIGHT, LEFT), head yaw
         # is the requested physical posture, not a frontality defect.
         if self._config.direction_targets:
-            active_stage = self._get_active_stage_direction(s)
             if active_stage is not None and active_stage != HeadDirection.FRONT:
                 rejection_reasons = [
-                    r for r in rejection_reasons if r != FaceRejectionReason.EXCESSIVE_YAW
+                    r
+                    for r in rejection_reasons
+                    if r != FaceRejectionReason.EXCESSIVE_YAW
+                    and not (
+                        r == FaceRejectionReason.LOW_CONFIDENCE
+                        and target_detection.confidence >= 0.55
+                    )
+                    and not (
+                        r == FaceRejectionReason.EXCESSIVE_ROLL
+                        and (q_result.metrics.roll_angle_deg or 0.0) <= 30.0
+                    )
                 ]
 
         if len(rejection_reasons) > 0:
@@ -710,7 +812,43 @@ class FaceEnrollmentController(BaseFaceEnrollment):
 
         candidate_vector = normalize_l2(emb_result.embedding)
 
-        # 8. Sample Diversity & Duplicate Protection
+        # 8a. Cross-Identity Duplicate Protection (Check against all other registered persons)
+        try:
+            gallery = self._get_active_gallery()
+            conflict_reason, conf_pid, conf_name, conf_sim = self._evaluate_identity_match(
+                candidate_vector, s.person_id, gallery
+            )
+        except Exception as exc:
+            s.last_rejection_reason = SampleRejectionReason.GALLERY_UNAVAILABLE
+            s.last_rejection_details = f"Duplicate identity verification unavailable: {exc}"
+            s.rejection_counts[SampleRejectionReason.GALLERY_UNAVAILABLE.value] += 1
+            return self._build_progress(s)
+
+        if conflict_reason == SampleRejectionReason.IDENTITY_CONFLICT:
+            s.last_rejection_reason = SampleRejectionReason.IDENTITY_CONFLICT
+            s.last_rejection_details = (
+                f"Face matches existing registered person '{conf_name}' "
+                f"(ID: {conf_pid}, similarity: {conf_sim:.4f} >= {self._config.identity_conflict_threshold:.2f})"
+            )
+            s.conflict_person_id = conf_pid
+            s.conflict_display_name = conf_name
+            s.conflict_similarity = conf_sim
+            s.rejection_counts[SampleRejectionReason.IDENTITY_CONFLICT.value] += 1
+            return self._build_progress(s)
+
+        if conflict_reason == SampleRejectionReason.UNCERTAIN_IDENTITY:
+            s.last_rejection_reason = SampleRejectionReason.UNCERTAIN_IDENTITY
+            s.last_rejection_details = (
+                f"Face similarity {conf_sim:.4f} with existing person '{conf_name}' "
+                f"is in uncertain threshold range [{self._config.identity_uncertain_threshold:.2f}, {self._config.identity_conflict_threshold:.2f})"
+            )
+            s.conflict_person_id = conf_pid
+            s.conflict_display_name = conf_name
+            s.conflict_similarity = conf_sim
+            s.rejection_counts[SampleRejectionReason.UNCERTAIN_IDENTITY.value] += 1
+            return self._build_progress(s)
+
+        # 8b. Sample Diversity & Intra-Person Duplicate Protection
         curr_time = time.monotonic()
         if (
             s.last_sample_time > 0.0
@@ -877,7 +1015,88 @@ class FaceEnrollmentController(BaseFaceEnrollment):
             self._session = None
             return result
 
-        # 2 & 3. Transactional Persistence via PersonService (repository not accessed directly)
+        # 2. Mandatory Final Transactional Barrier: Duplicate Check against fresh gallery / database
+        try:
+            fresh_gallery = self._person_service.load_recognition_gallery(
+                model_name=self._config.model_name,
+                model_version=self._config.model_version,
+                require_active=True,
+                require_consent=True,
+            )
+        except Exception as exc:
+            s.state = EnrollmentState.FAILED
+            err_msg = f"Cannot commit enrollment: duplicate detection gallery unavailable ({exc})"
+            logger.error(err_msg)
+            result = EnrollmentResult(
+                session_id=s.session_id,
+                enrollment_batch_id=s.enrollment_batch_id,
+                person_id=s.person_id,
+                display_name=s.display_name,
+                mode=s.mode,
+                is_success=False,
+                state=EnrollmentState.FAILED,
+                samples_enrolled=0,
+                persisted_embedding_ids=[],
+                total_attempts=s.attempts,
+                error_message=err_msg,
+                rejection_counts=dict(s.rejection_counts),
+            )
+            self._session = None
+            return result
+
+        for sample in s.samples:
+            conflict_reason, conf_pid, conf_name, conf_sim = self._evaluate_identity_match(
+                sample.embedding, s.person_id, fresh_gallery
+            )
+            if conflict_reason == SampleRejectionReason.IDENTITY_CONFLICT:
+                s.state = EnrollmentState.FAILED
+                err_msg = (
+                    f"Cannot commit enrollment: biometric template matches existing registered person "
+                    f"'{conf_name}' (ID: {conf_pid}, similarity: {conf_sim:.4f} >= {self._config.identity_conflict_threshold:.2f})"
+                )
+                logger.warning(err_msg)
+                result = EnrollmentResult(
+                    session_id=s.session_id,
+                    enrollment_batch_id=s.enrollment_batch_id,
+                    person_id=s.person_id,
+                    display_name=s.display_name,
+                    mode=s.mode,
+                    is_success=False,
+                    state=EnrollmentState.FAILED,
+                    samples_enrolled=0,
+                    persisted_embedding_ids=[],
+                    total_attempts=s.attempts,
+                    error_message=err_msg,
+                    rejection_counts=dict(s.rejection_counts),
+                )
+                self._session = None
+                return result
+
+            if conflict_reason == SampleRejectionReason.UNCERTAIN_IDENTITY:
+                s.state = EnrollmentState.FAILED
+                err_msg = (
+                    f"Cannot commit enrollment: biometric template similarity {conf_sim:.4f} with "
+                    f"'{conf_name}' is in uncertain threshold range [{self._config.identity_uncertain_threshold:.2f}, {self._config.identity_conflict_threshold:.2f})"
+                )
+                logger.warning(err_msg)
+                result = EnrollmentResult(
+                    session_id=s.session_id,
+                    enrollment_batch_id=s.enrollment_batch_id,
+                    person_id=s.person_id,
+                    display_name=s.display_name,
+                    mode=s.mode,
+                    is_success=False,
+                    state=EnrollmentState.FAILED,
+                    samples_enrolled=0,
+                    persisted_embedding_ids=[],
+                    total_attempts=s.attempts,
+                    error_message=err_msg,
+                    rejection_counts=dict(s.rejection_counts),
+                )
+                self._session = None
+                return result
+
+        # 3. Transactional Persistence via PersonService (repository not accessed directly)
         embeddings = [sample.embedding for sample in s.samples]
         quality_scores: list[float | None] = [sample.quality_score for sample in s.samples]
         try:

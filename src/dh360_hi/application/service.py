@@ -829,9 +829,21 @@ class HumanInteractionService:
                         "Enrollment commit outcome is uncertain; runtime remains paused",
                     ) from exc
 
+                if not res.is_success:
+                    self._release_enrollment_capture()
+                    err = res.error_message or "Enrollment commit failed"
+                    if "matches existing registered person" in err or "uncertain threshold range" in err:
+                        raise ConflictAppError(
+                            err,
+                            conflict_key="biometric_identity_conflict",
+                            details={"error": err},
+                        )
+                    if "duplicate detection gallery unavailable" in err:
+                        raise ServiceUnavailableError("biometric_gallery", err)
+                    return EnrollmentResultDTO.from_result(res)
+
                 mutation_started = True
-                if res.is_success:
-                    self._synchronize_person_mutation(res.person_id, deleted=False)
+                self._synchronize_person_mutation(res.person_id, deleted=False)
                 self._release_enrollment_capture()
                 return EnrollmentResultDTO.from_result(res)
         except Exception as exc:

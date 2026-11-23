@@ -348,7 +348,22 @@ def step_enrollment_session(
     tenant_id = request.headers.get("X-Tenant-ID")
     _require_active_session(service, person_id, tenant_id=tenant_id)
     progress = service.step_enrollment()
-    return progress.to_dict()
+    resp = progress.to_dict()
+
+    # Redact sensitive conflict identity details if operator lacks PERSONS_READ scope
+    if not _operator.has_scope(OperatorScope.PERSONS_READ):
+        if resp.get("conflict_person_id") or resp.get("last_rejection_reason") in (
+            "identity_conflict",
+            "uncertain_identity",
+        ):
+            resp["conflict_person_id"] = None
+            resp["conflict_display_name"] = None
+            resp["conflict_similarity"] = None
+            resp["last_rejection_details"] = (
+                "Potential duplicate identity detected. This face appears to match an existing "
+                "registered person. Enrollment has been paused pending identity verification."
+            )
+    return resp
 
 
 @router.post("/{person_id}/enrollment/sessions/commit")
@@ -361,8 +376,15 @@ def commit_enrollment_session(
     service = _get_service(request)
     tenant_id = request.headers.get("X-Tenant-ID")
     _require_active_session(service, person_id, tenant_id=tenant_id)
-    result = service.commit_enrollment()
-    return result.to_dict()
+    try:
+        result = service.commit_enrollment()
+    except ConflictAppError as exc:
+        if not _operator.has_scope(OperatorScope.PERSONS_READ):
+            raise ConflictAppError(
+                "Potential duplicate identity detected. This face appears to match an existing "
+                "registered person. Enrollment has been blocked pending identity verification."
+            ) from exc
+        raise
     return result.to_dict()
 
 

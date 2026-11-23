@@ -516,6 +516,9 @@ class EnrollmentProgressDTO:
     direction_targets: dict[str, int] = field(default_factory=dict)
     face_detected: bool = False
     face_bbox: tuple[float, float, float, float] | None = None
+    conflict_person_id: str | None = None
+    conflict_display_name: str | None = None
+    conflict_similarity: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert DTO to a JSON-serializable dictionary."""
@@ -552,6 +555,9 @@ class EnrollmentProgressDTO:
             direction_targets=dict(getattr(progress, "direction_targets", {})),
             face_detected=getattr(progress, "face_detected", False),
             face_bbox=getattr(progress, "face_bbox", None),
+            conflict_person_id=getattr(progress, "conflict_person_id", None),
+            conflict_display_name=getattr(progress, "conflict_display_name", None),
+            conflict_similarity=getattr(progress, "conflict_similarity", None),
         )
 
 
